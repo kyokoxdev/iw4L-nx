@@ -670,6 +670,7 @@ dependencies = [
 [[package]]
 name = "bevy_asset"
 version = "0.19.0"
+source = "git+https://github.com/kyokoxdev/iw4l-nx-crate-patches?rev=dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b#dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b"
 dependencies = [
  "async-broadcast",
  "async-channel",
@@ -2321,8 +2322,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8942da362c0f0d895d7cac616263f2f9424edc5687364dfd1d25ef7eba506d7"
+source = "git+https://github.com/kyokoxdev/iw4l-nx-crate-patches?rev=dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b#dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b"
 dependencies = [
  "alsa",
  "coreaudio-rs",
@@ -3274,6 +3274,7 @@ dependencies = [
  "math_iw4",
  "movement_iw4",
  "net",
+ "platform_nx",
  "playerstate_iw4",
  "sim",
  "weapon_iw4",
@@ -3840,6 +3841,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 [[package]]
 name = "memmap2"
 version = "0.9.11"
+source = "git+https://github.com/kyokoxdev/iw4l-nx-crate-patches?rev=dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b#dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b"
 dependencies = [
  "libc",
 ]
