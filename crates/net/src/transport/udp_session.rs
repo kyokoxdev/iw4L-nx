@@ -65,6 +65,7 @@ impl RelayMailbox {
 
     // The control reader is the sole producer. Keep the capacity wait in its
     // select loop so cancellation and local commands still run under pressure.
+    #[cfg(not(target_os = "horizon"))] // Only the QUIC session waits on it.
     pub(crate) async fn wait_control_inbound_capacity(&self) {
         loop {
             let drained = self.control_inbound_drained.notified();

@@ -195,6 +195,39 @@ fn run_export_gltf(games: asset_transport::GamesRoot, artifacts: PathBuf, zone_a
     diag::announce_stdout(&summary.report_line());
 }
 
+/// Switch display smoke test for SD cards without game files: the same
+/// plugin set and runner as a real launch, drawing only a cycling clear color.
+#[cfg(target_os = "horizon")]
+pub fn run_nx_smoke() {
+    fn cycle(time: Res<Time>, mut clear: ResMut<ClearColor>, mut frames: Local<u32>) {
+        let secs = time.elapsed_secs();
+        clear.0 = Color::hsl((secs * 60.0) % 360.0, 0.6, 0.4);
+        *frames += 1;
+        if *frames % 300 == 0 {
+            diag::info!(Launch, "smoke: {} frames, {:.1} fps", *frames, *frames as f32 / secs);
+        }
+    }
+    let mut app = App::new();
+    app.add_plugins(crate::plugins::default_plugins_with_quiet_log(
+        WindowPlugin {
+            primary_window: Some(Window {
+                title: "iw4l".into(),
+                resolution: (1280, 720).into(),
+                ..default()
+            }),
+            ..default()
+        },
+    ))
+    .add_systems(Startup, |mut commands: Commands| {
+        commands.spawn(Camera2d);
+    })
+    .add_systems(Update, cycle);
+    platform_nx::breadcrumb("smoke: app.run");
+    let exit = app.run();
+    platform_nx::breadcrumb(&format!("smoke: exit {exit:?}"));
+    diag::info!(Launch, "smoke: exit {exit:?}");
+}
+
 fn run_menu(games: asset_transport::GamesRoot, artifacts: PathBuf) {
     start_perf(None, "menu");
     let ui_games = asset_game::ui_games_root(&games).unwrap_or_else(|error| {
@@ -452,8 +485,9 @@ fn run_map(
     app.insert_resource(master_intent);
     let dedicated = config.role == Role::Dedicated;
     if dedicated {
-        app.insert_resource(bevy::winit::WinitSettings::continuous())
-            .insert_resource(frame::Headless);
+        #[cfg(not(target_os = "horizon"))]
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+        app.insert_resource(frame::Headless);
     }
     app.add_plugins(crate::plugins::default_plugins_with_quiet_log(
         WindowPlugin {

@@ -1,3 +1,7 @@
+// Horizon (Switch) is offline-only: the QUIC session code below is not built
+// there, so helpers reached only from it are unused.
+#![cfg_attr(target_os = "horizon", allow(dead_code, unused_imports))]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
@@ -18,8 +22,11 @@ use master_protocol::{
     decode_stream_payload, encode_relay, encode_relay_stream, encode_stream_frame,
     stream_frame_len,
 };
+#[cfg(not(target_os = "horizon"))]
 use quinn::crypto::rustls::QuicClientConfig;
+#[cfg(not(target_os = "horizon"))]
 use rustls::pki_types::CertificateDer;
+#[cfg(not(target_os = "horizon"))]
 use rustls_platform_verifier::ConfigVerifierExt;
 use tokio_util::sync::CancellationToken;
 
@@ -197,6 +204,7 @@ impl TransportFault {
         }
     }
 
+#[cfg(not(target_os = "horizon"))]
     fn with_connection(
         operation: &'static str,
         role: &'static str,
@@ -1024,6 +1032,22 @@ fn apply_master_menu_action(
     }
 }
 
+#[cfg(target_os = "horizon")]
+const ONLINE_UNAVAILABLE: &str = "online play is not available on Nintendo Switch";
+
+#[cfg(target_os = "horizon")]
+fn browser_worker(
+    _target: MasterTarget,
+    state: Arc<Mutex<MasterBrowserSnapshot>>,
+    _refresh: Arc<AtomicU64>,
+    _cancel: CancellationToken,
+) {
+    let mut current = state.lock().expect("master browser state poisoned");
+    current.loading = false;
+    current.error = Some(ONLINE_UNAVAILABLE.to_owned());
+}
+
+#[cfg(not(target_os = "horizon"))]
 fn browser_worker(
     target: MasterTarget,
     state: Arc<Mutex<MasterBrowserSnapshot>>,
@@ -1566,12 +1590,19 @@ fn execute_host_match_effects(
     }
 }
 
+#[cfg(target_os = "horizon")]
+fn session_worker(_kind: SessionKind, ctx: WorkerCtx) -> std::result::Result<(), TransportFault> {
+    Err(TransportFault::new("connect", ctx.role, ONLINE_UNAVAILABLE))
+}
+
+#[cfg(not(target_os = "horizon"))]
 fn session_worker(kind: SessionKind, ctx: WorkerCtx) -> std::result::Result<(), TransportFault> {
     let runtime = blocking_runtime()
         .map_err(|error| TransportFault::new("runtime", ctx.role, error.to_string()))?;
     runtime.block_on(session_main(kind, ctx))
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn session_main(
     kind: SessionKind,
     ctx: WorkerCtx,
@@ -2834,6 +2865,7 @@ fn pump_local_queues(
     Ok(())
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn bootstrap_egress(
     connection: quinn::Connection,
     mut jobs: tokio::sync::mpsc::Receiver<(frame::MatchKey, MemberId, Vec<u8>)>,
@@ -2881,6 +2913,7 @@ async fn bootstrap_egress(
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn datagram_ingress(
     connection: quinn::Connection,
     mailbox: RelayMailbox,
@@ -2940,6 +2973,7 @@ async fn datagram_ingress(
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn uni_ingress(
     connection: quinn::Connection,
     bootstrap: Arc<BootstrapLane>,
@@ -3013,6 +3047,7 @@ async fn uni_ingress(
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn gameplay_egress(
     connection: quinn::Connection,
     mailbox: RelayMailbox,
@@ -3061,6 +3096,7 @@ async fn gameplay_egress(
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn send_bootstrap_stream(
     connection: &quinn::Connection,
     member_id: MemberId,
@@ -3101,6 +3137,7 @@ async fn send_bootstrap_stream(
     Ok(())
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn read_owned_frame(
     mut recv: quinn::RecvStream,
 ) -> (quinn::RecvStream, Result<ControlFrame>) {
@@ -3108,6 +3145,7 @@ async fn read_owned_frame(
     (recv, frame)
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn read_frame(recv: &mut quinn::RecvStream) -> Result<ControlFrame> {
     let mut header = [0_u8; 4];
     recv.read_exact(&mut header).await?;
@@ -3117,6 +3155,7 @@ async fn read_frame(recv: &mut quinn::RecvStream) -> Result<ControlFrame> {
     Ok(decode_stream_payload(&body)?)
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn write_frame(send: &mut quinn::SendStream, frame: &ControlFrame) -> Result<()> {
     send.write_all(&encode_stream_frame(frame)?).await?;
     Ok(())
@@ -3138,6 +3177,7 @@ async fn io_timeout<T>(
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 async fn connect(
     target: &MasterTarget,
     cancel: &CancellationToken,
@@ -3212,6 +3252,7 @@ async fn connect(
     Ok((endpoint, connection))
 }
 
+#[cfg(not(target_os = "horizon"))]
 fn load_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let mut reader = BufReader::new(File::open(path)?);
     let certs: Vec<_> = rustls_pemfile::certs(&mut reader).collect::<std::io::Result<_>>()?;

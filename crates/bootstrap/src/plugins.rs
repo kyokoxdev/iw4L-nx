@@ -30,6 +30,7 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
         RuntimeRole::Client => NetPlugin::client(),
         RuntimeRole::Replay => NetPlugin::replay(),
     };
+    #[cfg(not(target_os = "horizon"))]
     if crate::bench::enabled() {
         // Unfocused benchmarks must not inherit the window runner's 60 Hz sleep.
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -95,12 +96,16 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
         primary.desired_maximum_frame_latency = core::num::NonZeroU32::new(frame_latency());
     }
     let mut wgpu = WgpuSettings::default();
-    wgpu.features |= WgpuFeatures::TEXTURE_FORMAT_16BIT_NORM
-        | WgpuFeatures::TEXTURE_COMPRESSION_BC
-        | WgpuFeatures::POLYGON_MODE_LINE
-        | WgpuFeatures::TEXTURE_BINDING_ARRAY
-        | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
-        | WgpuFeatures::PARTIALLY_BOUND_BINDING_ARRAY;
+    wgpu.features |= WgpuFeatures::TEXTURE_COMPRESSION_BC | WgpuFeatures::POLYGON_MODE_LINE;
+    // Switch GL (Mesa nouveau) has no norm16 or binding arrays; the bound-slot
+    // render path (M3) replaces bindless there.
+    #[cfg(not(target_os = "horizon"))]
+    {
+        wgpu.features |= WgpuFeatures::TEXTURE_FORMAT_16BIT_NORM
+            | WgpuFeatures::TEXTURE_BINDING_ARRAY
+            | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+            | WgpuFeatures::PARTIALLY_BOUND_BINDING_ARRAY;
+    }
     let plugins = DefaultPlugins
         .set(window)
         .set(LogPlugin {
@@ -112,6 +117,8 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
             render_creation: RenderCreation::Automatic(Box::new(wgpu)),
             ..default()
         });
+    #[cfg(target_os = "horizon")]
+    let plugins = plugins.add_after::<WindowPlugin>(platform_nx::NxPlugin);
     if pipelined_rendering() {
         plugins
     } else {

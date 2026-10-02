@@ -18,5 +18,10 @@ diag.workspace = true
 asset_transport.workspace = true
 bootstrap = { path = "../bootstrap" }
 
+# Pins the libc that build-std's std uses to the patched fork (root Cargo.toml).
+[target.'cfg(target_os = "horizon")'.dependencies]
+libc = "=0.2.189"
+platform_nx.workspace = true
+
 [lints]
 workspace = true

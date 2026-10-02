@@ -45,6 +45,14 @@ perf.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 
+# Desktop windowing/input. Horizon has no winit/gilrs backend; platform_nx
+# supplies the runner and pad input there.
+[target.'cfg(not(target_os = "horizon"))'.dependencies]
+bevy = { workspace = true, features = ["bevy_winit", "bevy_gilrs", "x11", "wayland", "system_clipboard"] }
+
+[target.'cfg(target_os = "horizon")'.dependencies]
+platform_nx.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 

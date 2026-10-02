@@ -65,7 +65,12 @@ fn default_games_root() -> Result<PathBuf, String> {
         })
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "horizon")]
+fn default_games_root() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("sdmc:/switch/iw4l/games"))
+}
+
+#[cfg(not(any(windows, target_os = "horizon")))]
 fn default_games_root() -> Result<PathBuf, String> {
     Err("IW4L_GAMES is not set — copy .env.example to .env and set the games root".to_owned())
 }

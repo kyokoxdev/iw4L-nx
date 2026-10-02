@@ -23,13 +23,18 @@ hud_iw4.workspace = true
 perf.workspace = true
 bevy.workspace = true
 master_protocol.workspace = true
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+zstd = { version = "0.13", default-features = false }
+
+# Master server QUIC transport. Horizon (Switch) is offline-only: no mio/ring
+# backend there, so the master bridge reports "online unavailable" instead.
+[target.'cfg(not(target_os = "horizon"))'.dependencies]
 quinn = { version = "0.11.11", default-features = false, features = ["platform-verifier", "runtime-tokio", "rustls-ring"] }
 rustls = { version = "0.23.31", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.2.0"
 rustls-platform-verifier = "0.7.0"
-tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
-zstd = { version = "0.13", default-features = false }
+tokio = { version = "1.47", features = ["net"] }
 
 [lints]
 workspace = true

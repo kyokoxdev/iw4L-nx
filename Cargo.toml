@@ -3,6 +3,26 @@
 # Remove when a crates.io release includes quinn-rs/quinn#2806.
 [patch.crates-io]
 quinn-proto = { git = "https://github.com/quinn-rs/quinn", rev = "f650e0f213b01ea7bebd60023e5df7df65e5c2bd" }
+# Nintendo Switch (target_os = "horizon"). Fork changes are cfg-gated to
+# horizon, so other targets build the same code as the crates.io release.
+# libc: upstream horizon bindings are 3DS (32-bit) layouts. The patch only
+# reaches build-std's libc because launcher depends on `libc = "=0.2.189"`.
+libc = { git = "https://github.com/kyokoxdev/libc", rev = "90345107c821d02f17face49295cc4b362176338" }
+# wgpu: static EGL + NWindow surface for the GL backend. The whole family is
+# patched or wgpu-types duplicates.
+wgpu = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-core = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-hal = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-types = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-naga-bridge = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-core-deps-apple = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "19c1d9077b1302d615b37634281770b283542d22" }
+# bevy_asset: horizon takes the Windows file reader (async-io/rustix have no
+# Horizon backend).
+bevy_asset = { path = "/home/yuki/iw4l-nx/crate-patches/bevy_asset" }
+# memmap2 (via fontique): horizon has no mmap, use the stub backend.
+memmap2 = { path = "/home/yuki/iw4l-nx/crate-patches/memmap2" }
 
 [workspace]
 resolver = "3"
@@ -50,6 +70,7 @@ members = [
     "crates/net",
     "crates/iw4l-master",
     "crates/perf",
+    "crates/platform_nx",
     "crates/playerstate_iw4",
     "crates/render",
     "crates/render_anim",
@@ -78,7 +99,6 @@ license = "Apache-2.0"
 [workspace.dependencies]
 bevy = { version = "0.19", default-features = false, features = [
     "bevy_window",
-    "bevy_winit",
     "bevy_ui",
     "bevy_ui_render",
     "bevy_text",
@@ -89,13 +109,10 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_sprite_render",
     "bevy_asset",
     "bevy_audio",
-    "bevy_gilrs",
     "multi_threaded",
-    "x11",
-    "wayland",
     "png",
-    "system_clipboard",
     "bevy_ui_widgets",
+    "bevy_clipboard",
     "ui_picking",
 ] }
 bevy_ecs = "0.19"
@@ -149,6 +166,7 @@ master_protocol = { path = "crates/master_protocol" }
 movement_iw4 = { path = "crates/movement_iw4" }
 net = { path = "crates/net" }
 perf = { path = "crates/perf" }
+platform_nx = { path = "crates/platform_nx" }
 playerstate_iw4 = { path = "crates/playerstate_iw4" }
 render = { path = "crates/render" }
 render_anim = { path = "crates/render_anim" }

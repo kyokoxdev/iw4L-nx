@@ -109,6 +109,8 @@ pub fn parse_launch_args(mut args: impl Iterator<Item = String>) -> Result<Launc
         Some(other) => Err(format!(
             "unknown launch args starting with `{other}` — expected: map <zone> | serve <zone> | menu | play <demo> [--cmds '<script>'] | export-gltf <zone>"
         )),
+        // hbmenu passes no arguments.
+        None if cfg!(target_os = "horizon") => Ok(LaunchMode::Menu),
         None => Err(USAGE.into()),
     }
 }
