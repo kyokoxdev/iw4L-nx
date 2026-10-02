@@ -24,5 +24,8 @@ sim = { path = "../sim" }
 math_iw4.workspace = true
 gamemode_iw4.workspace = true
 
+[target.'cfg(target_os = "horizon")'.dependencies]
+platform_nx.workspace = true
+
 [lints]
 workspace = true

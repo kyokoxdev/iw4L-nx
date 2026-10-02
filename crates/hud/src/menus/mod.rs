@@ -597,6 +597,30 @@ fn handle_input(
         return;
     }
     if let Some(mut edit) = runner.menus.editing.take() {
+        // No keys on a pad: the system keyboard edits the whole field and
+        // confirms it in one step.
+        #[cfg(target_os = "horizon")]
+        let pressed = &{
+            let masked = runner
+                .catalog
+                .get(&edit.menu)
+                .and_then(|def| def.items.get(edit.item))
+                .and_then(|item| item.edit_field.as_ref())
+                .is_some_and(|field| field.masked);
+            let current: String = edit.buffer.iter().collect();
+            let Some(text) = platform_nx::swkbd::prompt(&current, edit.max_chars, masked) else {
+                return;
+            };
+            edit.buffer = text
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(edit.max_chars)
+                .collect();
+            Pressed {
+                enter: true,
+                ..default()
+            }
+        };
         if pressed.escape {
             return;
         }

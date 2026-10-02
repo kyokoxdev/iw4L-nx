@@ -8,6 +8,7 @@ game. Keep them this short: nobody opens a long file twice.
 | [`BUILD.md`](BUILD.md) | system packages per distro (Fedora / Debian / Arch), macOS, what the Windows cross build needs | before your first build |
 | [`RUN.md`](RUN.md) | running (`make map`, `--cmds`), controls frozen until `Playing`, `force_match_start`, sync-by-default, the verb list and the traps | before your first live run |
 | [`WINDOWS.md`](WINDOWS.md) | portable `iw4launcher.exe`: `.env`, shortcuts into CoD, writable `iw4l-artifacts/` | building and running on Windows |
+| [`SWITCH.md`](SWITCH.md) | Switch homebrew: devkitPro, `switch/build.sh`, `.nro` packaging, the crate forks, SD card layout, `boot.txt` | building or running on a Switch |
 | [`DEPLOY.md`](DEPLOY.md) | `make release` / `publish` / `deploy`: the play profile, hashed `.zst`, master by SHA, provision kept separate | shipping a release, "why is the player on an old version" |
 | [`DUO.md`](DUO.md) | `make duo`: two windows, fresh lobby ID, per-client console commands | reproducing multiplayer bugs locally |
 | [`MASTER.md`](MASTER.md) | your own master over ssh from the machine with the clone: `cargo xtask master install`, a self-signed certificate with no domain, what to hand players | standing up a relay for yourself or your friends |
