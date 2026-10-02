@@ -2182,6 +2182,7 @@ dependencies = [
  "master_protocol",
  "net",
  "perf",
+ "platform_nx",
  "render",
  "render_frontend",
  "render_fx",

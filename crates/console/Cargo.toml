@@ -30,5 +30,8 @@ hud = { path = "../hud" }
 entity_iw4.workspace = true
 perf.workspace = true
 
+[target.'cfg(target_os = "horizon")'.dependencies]
+platform_nx.workspace = true
+
 [lints]
 workspace = true

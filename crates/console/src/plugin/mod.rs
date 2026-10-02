@@ -1156,9 +1156,23 @@ fn handle_console_input(
     mut focus: ResMut<InputFocus>,
     prompt: Option<Res<ConsolePrompt>>,
     mut editables: Query<&mut EditableText, With<ConsoleInputText>>,
+    #[cfg(target_os = "horizon")] pads: (Query<&bevy::input::gamepad::Gamepad>, Res<frame::ActivePad>),
 ) {
     let prompt_entity = prompt.map(|p| p.0);
-    if keys.just_pressed(KeyCode::Backquote) {
+    let toggle = keys.just_pressed(KeyCode::Backquote);
+    // Switch has no backquote key: clicking both sticks toggles, A types a
+    // line on the system keyboard, B closes.
+    #[cfg(target_os = "horizon")]
+    let pad = pads.1.0.and_then(|entity| pads.0.get(entity).ok());
+    #[cfg(target_os = "horizon")]
+    let toggle = toggle
+        || pad.is_some_and(|pad| {
+            use bevy::input::gamepad::GamepadButton::{LeftThumb, RightThumb};
+            pad.pressed(LeftThumb)
+                && pad.pressed(RightThumb)
+                && (pad.just_pressed(LeftThumb) || pad.just_pressed(RightThumb))
+        });
+    if toggle {
         state.open = !state.open;
         if let Some(entity) = prompt_entity
             && let Ok(mut editable) = editables.get_mut(entity)
@@ -1239,6 +1253,11 @@ fn handle_console_input(
             _ => {}
         }
     }
+    #[cfg(target_os = "horizon")]
+    let pad_type = pad.is_some_and(|pad| {
+        want_close |= pad.just_pressed(bevy::input::gamepad::GamepadButton::East);
+        pad.just_pressed(bevy::input::gamepad::GamepadButton::South)
+    });
 
     if want_close {
         state.open = false;
@@ -1311,6 +1330,17 @@ fn handle_console_input(
             write_widget_from_editor(&mut editable, &state.editor);
             apply_prompt_edits(&mut editable, &mut font_cx, &mut layout_cx, &mut clipboard);
             sync_editor_from_widget(&mut state.editor, &editable);
+        }
+    }
+
+    #[cfg(target_os = "horizon")]
+    if pad_type {
+        match platform_nx::swkbd::prompt(&state.editor.line, 4096, false) {
+            Some(line) => {
+                set_editor_line(&mut state.editor, &line);
+                want_submit = true;
+            }
+            None => return,
         }
     }
 
