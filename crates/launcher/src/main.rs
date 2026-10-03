@@ -18,6 +18,7 @@ fn main() {
         let _ = std::fs::create_dir_all("sdmc:/switch/iw4l");
         let _ = std::fs::remove_file("sdmc:/switch/iw4l/boot.txt");
         platform_nx::breadcrumb("main");
+        platform_nx::boot_env();
         std::panic::set_hook(Box::new(|info| {
             platform_nx::breadcrumb(&format!("panic: {info}"));
             diag::exit_launch_error(&format!("panic: {info}"))

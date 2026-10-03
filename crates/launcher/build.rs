@@ -9,5 +9,9 @@ fn main() {
         for lib in ["SDL2", "EGL", "glapi", "drm_nouveau", "stdc++", "nx"] {
             println!("cargo::rustc-link-arg-bins=-l{lib}");
         }
+        // platform_nx::tls: libnx has 12 pthread keys, serve more.
+        for f in ["key_create", "key_delete", "setspecific", "getspecific"] {
+            println!("cargo::rustc-link-arg-bins=-Wl,--wrap=pthread_{f}");
+        }
     }
 }

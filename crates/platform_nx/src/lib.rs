@@ -8,6 +8,240 @@ pub mod swkbd;
 
 unsafe extern "C" {
     fn randomGet(buf: *mut c_void, len: usize);
+    fn socketInitialize(config: *const c_void) -> u32;
+    fn nxlinkConnectToHost(redir_stdout: bool, redir_stderr: bool) -> c_int;
+    static __nxlink_host: u32;
+    fn svcGetInfo(out: *mut u64, id0: u32, handle: u32, id1: u64) -> u32;
+    fn appletGetAppletType() -> u32;
+    fn __libnx_exit(code: c_int) -> !;
+    static __code_start: u8;
+    static __rodata_start: u8;
+}
+
+// libnx calls this before main. Only an `nxlink -s` launch needs the BSD
+// driver (stdout/stderr -> host); the socket buffers come out of a tight heap,
+// and nothing else on Horizon opens sockets.
+#[unsafe(no_mangle)]
+extern "C" fn userAppInit() {
+    // SAFETY: plain FFI; __nxlink_host is set by the loader before this runs.
+    unsafe {
+        if __nxlink_host != 0 && socketInitialize(core::ptr::null()) == 0 {
+            nxlinkConnectToHost(true, true);
+        }
+    }
+}
+
+static IN_EXIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+// Native abort() (Mesa, libdrm_nouveau, libstdc++) otherwise returns to hbmenu
+// silently. Log the caller; resolve with
+//   addr2line -f -e iw4l.elf $(printf %x $((0x<link abort> + <ret> - <abort>)))
+// where <link abort> is `aarch64-none-elf-nm iw4l.elf | grep ' T abort'`.
+#[unsafe(no_mangle)]
+extern "C" fn abort() -> ! {
+    let lr: usize;
+    // SAFETY: reads the link register before any call clobbers it.
+    unsafe { core::arch::asm!("mov {}, x30", out(reg) lr) };
+    if !IN_EXIT.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        breadcrumb(&format!(
+            "abort: ret={lr:#x} abort={:#x} {} {}",
+            abort as usize,
+            mem_line(),
+            stack_trace()
+        ));
+    }
+    unsafe { __libnx_exit(134) }
+}
+
+// Replaces libsysbase's `_exit` (same libnx exit) so every exit leaves a line.
+#[unsafe(no_mangle)]
+extern "C" fn _exit(code: c_int) -> ! {
+    if !IN_EXIT.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        breadcrumb(&format!("_exit: code={code} {}", mem_line()));
+    }
+    unsafe { __libnx_exit(code) }
+}
+
+/// Code addresses in the next 2 KiB of stack, as offsets from the load base:
+/// `addr2line -f -e iw4l.elf <offset>`. Release builds keep no frame pointers,
+/// so this is a conservative scan, not an unwind: expect some stale entries.
+// ponytail: boot-debug only, drop once boot is stable.
+fn stack_trace() -> String {
+    let sp: usize;
+    // SAFETY: reads the stack pointer.
+    unsafe { core::arch::asm!("mov {}, sp", out(reg) sp) };
+    // SAFETY: linker-provided section markers; only their addresses are used.
+    let (lo, hi) = unsafe {
+        (
+            core::ptr::addr_of!(__code_start) as usize,
+            core::ptr::addr_of!(__rodata_start) as usize,
+        )
+    };
+    let mut out = format!("base={lo:#x} bt=");
+    let mut found = 0;
+    for i in 0..256 {
+        // SAFETY: the frames above the current sp are mapped stack.
+        let word = unsafe { core::ptr::read_volatile((sp + i * 8) as *const usize) };
+        if (lo..hi).contains(&word) && word % 4 == 0 {
+            out.push_str(&format!("{:x} ", word - lo));
+            found += 1;
+            if found == 24 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+// libnx hands out 12 pthread keys per process (`threadTlsAlloc`); std, tracing,
+// SDL, Mesa and bevy want more, and std aborts with "out of TLS keys". The
+// `--wrap=pthread_key_*` hooks (launcher/build.rs) serve unlimited keys from
+// one real libnx key whose per-thread value is a heap table of KEYS slots.
+mod tls {
+    use core::{
+        ffi::{c_int, c_uint, c_void},
+        sync::atomic::{AtomicU8, AtomicUsize, Ordering::*},
+    };
+
+    const KEYS: usize = 512;
+    type Dtor = Option<unsafe extern "C" fn(*mut c_void)>;
+
+    unsafe extern "C" {
+        fn __real_pthread_key_create(key: *mut c_uint, dtor: Dtor) -> c_int;
+        fn __real_pthread_setspecific(key: c_uint, value: *const c_void) -> c_int;
+        fn __real_pthread_getspecific(key: c_uint) -> *mut c_void;
+        fn calloc(n: usize, size: usize) -> *mut c_void;
+        fn free(ptr: *mut c_void);
+    }
+
+    // 0 free, 1 taken; DTORS[i] is the key's destructor (0 = none).
+    static USED: [AtomicU8; KEYS] = [const { AtomicU8::new(0) }; KEYS];
+    static DTORS: [AtomicUsize; KEYS] = [const { AtomicUsize::new(0) }; KEYS];
+    // 0 = not made, 1 = being made, 2 = ready.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    static REAL: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn in_use() -> usize {
+        USED.iter().filter(|u| u.load(Relaxed) != 0).count()
+    }
+
+    fn real_key() -> c_uint {
+        if STATE.compare_exchange(0, 1, AcqRel, Acquire).is_ok() {
+            let mut key = 0;
+            // SAFETY: plain FFI into an out-parameter.
+            let rc = unsafe { __real_pthread_key_create(&mut key, Some(thread_exit)) };
+            assert_eq!(rc, 0, "no libnx TLS slot left for the key table");
+            REAL.store(key as usize, Relaxed);
+            STATE.store(2, Release);
+        }
+        while STATE.load(Acquire) != 2 {
+            core::hint::spin_loop();
+        }
+        REAL.load(Relaxed) as c_uint
+    }
+
+    /// This thread's value table; allocated on first use when `make`.
+    fn table(make: bool) -> *mut *mut c_void {
+        let real = real_key();
+        // SAFETY: plain FFI on our own key.
+        let mut t = unsafe { __real_pthread_getspecific(real) }.cast::<*mut c_void>();
+        if t.is_null() && make {
+            // SAFETY: calloc'd table, owned by this thread until `thread_exit`.
+            t = unsafe { calloc(KEYS, size_of::<*mut c_void>()) }.cast();
+            if !t.is_null() {
+                unsafe { __real_pthread_setspecific(real, t.cast()) };
+            }
+        }
+        t
+    }
+
+    // POSIX order: up to four rounds, since a destructor may set values again.
+    unsafe extern "C" fn thread_exit(table: *mut c_void) {
+        let t = table.cast::<*mut c_void>();
+        for _ in 0..4 {
+            for i in 0..KEYS {
+                // SAFETY: `t` has KEYS entries and belongs to the exiting thread.
+                let value = unsafe { t.add(i).replace(core::ptr::null_mut()) };
+                let dtor = DTORS[i].load(Relaxed);
+                if !value.is_null() && dtor != 0 {
+                    // SAFETY: stored from a `Dtor` in `create`.
+                    unsafe { core::mem::transmute::<usize, unsafe extern "C" fn(*mut c_void)>(dtor)(value) };
+                }
+            }
+        }
+        // SAFETY: allocated with calloc in `table`.
+        unsafe { free(table) };
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_pthread_key_create(key: *mut c_uint, dtor: Dtor) -> c_int {
+        if key.is_null() {
+            return 22; // EINVAL
+        }
+        for i in 0..KEYS {
+            if USED[i].compare_exchange(0, 1, AcqRel, Relaxed).is_ok() {
+                DTORS[i].store(dtor.map_or(0, |d| d as usize), Relaxed);
+                // SAFETY: caller's out-parameter.
+                unsafe { *key = i as c_uint };
+                return 0;
+            }
+        }
+        11 // EAGAIN, as POSIX says for PTHREAD_KEYS_MAX
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_pthread_key_delete(key: c_uint) -> c_int {
+        match USED.get(key as usize) {
+            Some(u) if u.swap(0, AcqRel) != 0 => {
+                DTORS[key as usize].store(0, Relaxed);
+                0
+            }
+            _ => 22,
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_pthread_setspecific(key: c_uint, value: *const c_void) -> c_int {
+        let t = table(true);
+        if t.is_null() {
+            return 12; // ENOMEM
+        }
+        if key as usize >= KEYS {
+            return 22;
+        }
+        // SAFETY: in range of this thread's table.
+        unsafe { *t.add(key as usize) = value.cast_mut() };
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_pthread_getspecific(key: c_uint) -> *mut c_void {
+        let t = table(false);
+        if t.is_null() || key as usize >= KEYS {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: in range of this thread's table.
+        unsafe { *t.add(key as usize) }
+    }
+}
+
+/// Process memory in use / available; `svcGetInfo` on the current process.
+fn mem_line() -> String {
+    const CUR_PROCESS: u32 = 0xFFFF_8001;
+    let (mut total, mut used) = (0u64, 0u64);
+    // SAFETY: plain FFI into out-parameters.
+    unsafe {
+        svcGetInfo(&mut total, 6, CUR_PROCESS, 0);
+        svcGetInfo(&mut used, 7, CUR_PROCESS, 0);
+    }
+    format!("mem={}/{}MB tls_keys={}", used >> 20, total >> 20, tls::in_use())
+}
+
+/// Launch context: applet type (0 = title takeover) and memory budget.
+pub fn boot_env() {
+    // SAFETY: plain FFI; applet services are up by `main`.
+    let applet = unsafe { appletGetAppletType() };
+    breadcrumb(&format!("env: applet_type={applet} {}", mem_line()));
 }
 
 // newlib declares sysconf but libnx does not implement it. std asks for the
@@ -71,6 +305,8 @@ pub fn breadcrumb(line: &str) {
         .open("sdmc:/switch/iw4l/boot.txt")
     {
         let _ = writeln!(file, "{line}");
+        // A kernel panic resets the console before FAT flushes a closed file.
+        let _ = file.sync_all();
     }
 }
 
