@@ -50,6 +50,46 @@ pub enum WgpuBindingKind {
     SamplerArray {
         count: u32,
     },
+
+    Texture {
+        dimension: SamplerTextureDimension,
+    },
+    Sampler,
+}
+
+/// Group 1 binds one texture and sampler per sampler register
+/// (`d3d9_sm3::bound_slot_bindings`) instead of the bindless table: GL has no
+/// binding arrays. On for Horizon; `IW4L_BOUND_SLOTS=1` forces it elsewhere.
+// ponytail: cfg + env, not adapter features; pick from the adapter once PC GL needs it unset.
+pub fn bound_slots() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(target_os = "horizon") || std::env::var("IW4L_BOUND_SLOTS").is_ok_and(|v| v == "1")
+    })
+}
+
+fn bound_slot_bind_entries(abi: &PassProgramAbi) -> impl Iterator<Item = WgpuBindLayoutEntry> {
+    let entry = |binding: u32, kind| WgpuBindLayoutEntry {
+        group: u8::try_from(d3d9_sm3::TEXTURE_TABLE_GROUP).expect("group 1"),
+        binding: u16::try_from(binding).expect("slot binding fits u16"),
+        visibility: WgpuShaderVisibility::VertexFragment,
+        kind,
+        register_packed: None,
+    };
+    (0u32..)
+        .zip(&abi.samplers)
+        .flat_map(move |(ordinal, slot)| {
+            let (texture, sampler) = d3d9_sm3::bound_slot_bindings(ordinal);
+            [
+                entry(
+                    texture,
+                    WgpuBindingKind::Texture {
+                        dimension: slot.dimension,
+                    },
+                ),
+                entry(sampler, WgpuBindingKind::Sampler),
+            ]
+        })
 }
 
 pub const TEXTURE_TABLE_2D_CAPACITY: u32 = 8192;
@@ -196,7 +236,11 @@ pub fn derive_wgpu_pass_layout(
         register_packed: None,
     });
 
-    bind_entries.extend(texture_table_bind_entries());
+    if bound_slots() {
+        bind_entries.extend(bound_slot_bind_entries(abi));
+    } else {
+        bind_entries.extend(texture_table_bind_entries());
+    }
 
     Ok(WgpuPassLayout {
         vertex_buffers,

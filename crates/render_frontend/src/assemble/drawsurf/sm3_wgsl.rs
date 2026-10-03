@@ -88,6 +88,7 @@ pub fn pass_lowering_abi(abi: &PassProgramAbi) -> PassLoweringAbi {
             })
             .collect(),
         alpha_tests: MATERIAL_ALPHA_TESTS.to_vec(),
+        bound_slots: super::gpu_contract::bound_slots(),
     }
 }
 

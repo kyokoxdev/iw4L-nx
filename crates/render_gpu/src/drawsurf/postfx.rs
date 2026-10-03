@@ -673,7 +673,7 @@ fn draw_postfx(
     }
     let active = extracted.frame.dof.active();
     let graded = extracted.frame.grading != [0.0, 1.0, 0.0, 1.0];
-    let prepare = || -> Result<Vec<Vec<u8>>, PostFxSubmitRefusal> {
+    let prepare = || -> Result<Vec<(Vec<u8>, Vec<u32>)>, PostFxSubmitRefusal> {
         if target.main_texture_format() != TextureFormat::Rgba8Unorm {
             return Err(PostFxSubmitRefusal::TargetFormat(
                 target.main_texture_format(),
@@ -787,7 +787,7 @@ fn draw_postfx(
                     d3d9_sm3::texture_slot_word(index as u16, u16::from(lane.index == 15));
             }
             bytes.extend_from_slice(bytemuck::cast_slice(&slots));
-            uploads.push(bytes);
+            uploads.push((bytes, slots));
         }
         Ok(uploads)
     };
@@ -831,7 +831,7 @@ fn draw_postfx(
             extracted.frame.grading,
         );
     }
-    for ((ready, step), bytes) in gpu.prepared.iter().zip(&gpu.steps).zip(&uploads) {
+    for ((ready, step), (bytes, slots)) in gpu.prepared.iter().zip(&gpu.steps).zip(&uploads) {
         let size = if matches!(
             step.target,
             Image::Output | Image::Graded | Image::ScreenBlur | Image::ScreenPing
@@ -872,6 +872,7 @@ fn draw_postfx(
                     &ready.sampler,
                     gpu.depth_sampler.as_ref().expect("prepared"),
                 ],
+                &slots[..ready.film.port.module().sampler_count],
             )
         });
         let destination = if step.target == Image::Output {

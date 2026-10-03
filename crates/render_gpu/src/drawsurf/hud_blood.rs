@@ -184,6 +184,12 @@ impl BloodPortGpu {
                 "iw4_blood_textures",
                 &[&color.texture_view, &mask.texture_view],
                 &[&color.sampler, &mask.sampler],
+                &self
+                    .blood
+                    .texture_slots
+                    .iter()
+                    .map(|&slot| d3d9_sm3::texture_slot_word(u16::from(slot), u16::from(slot)))
+                    .collect::<Vec<_>>(),
             );
             self.textures = Some((key, group));
         }

@@ -60,4 +60,8 @@ pub struct PassLoweringAbi {
     pub samplers: Vec<SamplerSlot>,
 
     pub alpha_tests: Vec<AlphaTest>,
+
+    /// One texture and one sampler binding per entry of `samplers`
+    /// (`bound_slot_bindings`) instead of the bindless texture table.
+    pub bound_slots: bool,
 }

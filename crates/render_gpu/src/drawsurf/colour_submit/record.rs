@@ -388,10 +388,10 @@ pub(super) fn draw_exact_colour(
         let has_late_scene = prepared.iter().any(|draw| draw.after_scene_resolve);
         let table_layout =
             texture_table_layout(pipeline.as_ref()).expect("ports are non-empty above");
-        let table_binds = texture_table
-            .0
-            .each_mut()
-            .map(|table| &table.binds(&device, &registry, table_layout).scene);
+        let table_binds = texture_table.0.each_mut().map(|table| {
+            (!super::super::bound_slots())
+                .then(|| &table.binds(&device, &registry, table_layout).scene)
+        });
 
         let diagnostics = context.diagnostic_recorder();
         let diagnostics = diagnostics.as_deref();

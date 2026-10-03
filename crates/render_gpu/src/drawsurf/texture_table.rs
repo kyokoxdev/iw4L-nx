@@ -8,8 +8,8 @@ use super::gpu_resources::{DecodedSampler, UploadedTextureBind, UploadedTextureI
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    BindGroup, BindGroupEntry, BindGroupLayoutDescriptor, BindingResource, Extent3d, Sampler,
-    SamplerDescriptor, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+    BindGroup, BindGroupEntry, BindGroupLayoutDescriptor, BindingResource, BindingType, Extent3d,
+    Sampler, SamplerDescriptor, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     TextureView, TextureViewDescriptor, TextureViewDimension, TextureViewId, WgpuSampler,
     WgpuTextureView,
 };
@@ -85,6 +85,8 @@ pub(super) struct ExactTextureTable {
     sampler_index: HashMap<SamplerKey, u16>,
     placeholders: Option<Placeholders>,
     binds: Option<TextureTableBinds>,
+    /// `bound_slots` groups by (slot words, group-1 layout, sun shadow masked).
+    slot_groups: HashMap<(Box<[u32]>, BindGroupLayoutDescriptor, bool), BindGroup>,
 
     pub rebuild_n: u32,
 }
@@ -123,6 +125,7 @@ impl ExactTextureTable {
         self.samplers.clear();
         self.sampler_index.clear();
         self.binds = None;
+        self.slot_groups.clear();
     }
 
     pub fn slot_word(
@@ -175,6 +178,62 @@ impl ExactTextureTable {
         Ok(d3d9_sm3::texture_slot_word(texture, sampler))
     }
 
+    /// Group 1 for `bound_slots` pipelines: binding pair `i` of `layout` takes
+    /// the view and sampler of `slots[i]` (words from `slot_word`).
+    /// `mask_sun_shadow` swaps the sun shadow map for a placeholder, as the
+    /// `sun_caster` table does, so casters never read the target they render.
+    pub fn slot_bind_group(
+        &mut self,
+        device: &RenderDevice,
+        registry: &super::exact_pipeline::ExactPipelineRegistry,
+        layout: &BindGroupLayoutDescriptor,
+        slots: &[u32],
+        mask_sun_shadow: bool,
+    ) -> BindGroup {
+        let key = (Box::from(slots), layout.clone(), mask_sun_shadow);
+        if let Some(group) = self.slot_groups.get(&key) {
+            return group.clone();
+        }
+        self.ensure_placeholders(device);
+        let placeholder_2d = &self.views[0][0];
+        let entries: Vec<BindGroupEntry> = layout
+            .entries
+            .chunks_exact(2)
+            .zip(slots)
+            .flat_map(|(pair, &word)| {
+                let lane = match pair[0].ty {
+                    BindingType::Texture { view_dimension, .. } => match view_dimension {
+                        TextureViewDimension::Cube => 1,
+                        TextureViewDimension::D3 => 2,
+                        _ => 0,
+                    },
+                    _ => unreachable!("bound slot layouts pair a texture with a sampler"),
+                };
+                let texture = (word & 0xffff) as u16;
+                let view =
+                    if mask_sun_shadow && lane == 0 && self.sun_shadow_indices.contains(&texture) {
+                        placeholder_2d
+                    } else {
+                        &self.views[lane][usize::from(texture)]
+                    };
+                [
+                    BindGroupEntry {
+                        binding: pair[0].binding,
+                        resource: BindingResource::TextureView(&**view),
+                    },
+                    BindGroupEntry {
+                        binding: pair[1].binding,
+                        resource: BindingResource::Sampler(&*self.samplers[(word >> 16) as usize]),
+                    },
+                ]
+            })
+            .collect();
+        let bgl = registry.bind_group_layout(device, layout);
+        let group = device.create_bind_group("iw4_bound_slots", &bgl, &entries);
+        self.slot_groups.insert(key, group.clone());
+        group
+    }
+
     pub fn census(&self) -> (usize, usize, usize, usize) {
         let n = |lane: &Vec<TextureView>| lane.len().saturating_sub(1);
         (
@@ -219,7 +278,29 @@ impl ExactTextureTable {
         label: &'static str,
         views: &[&TextureView],
         samplers: &[&Sampler],
+        slots: &[u32],
     ) -> BindGroup {
+        if super::bound_slots() {
+            let entries: Vec<BindGroupEntry> = (0u32..)
+                .zip(slots)
+                .flat_map(|(ordinal, &word)| {
+                    let (texture, sampler) = d3d9_sm3::bound_slot_bindings(ordinal);
+                    [
+                        BindGroupEntry {
+                            binding: texture,
+                            resource: BindingResource::TextureView(
+                                &**views[(word & 0xffff) as usize],
+                            ),
+                        },
+                        BindGroupEntry {
+                            binding: sampler,
+                            resource: BindingResource::Sampler(&**samplers[(word >> 16) as usize]),
+                        },
+                    ]
+                })
+                .collect();
+            return device.create_bind_group(label, bgl, &entries);
+        }
         let views: Vec<&WgpuTextureView> = views.iter().map(|v| &***v).collect();
         let samplers: Vec<&WgpuSampler> = samplers.iter().map(|v| &***v).collect();
         self.ensure_placeholders(device);

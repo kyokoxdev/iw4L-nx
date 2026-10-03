@@ -5,6 +5,12 @@ platform layer is `crates/platform_nx`: libnx link, Bevy runner, SDL2 gamepads
 in place of gilrs, focus from `appletGetFocusState`, system keyboard (`swkbd`)
 for menu edit fields and the console. Audio is cpal's `horizon` host over SDL2.
 
+GL has no binding arrays, so material passes bind **bound slots**: group 1
+holds one texture and one sampler per sampler register
+(`d3d9_sm3::bound_slot_bindings`), built per draw from the same texture table
+the bindless path indexes. On for Horizon; `IW4L_BOUND_SLOTS=1` forces it on a
+desktop build to compare against bindless on the same backend.
+
 Needs devkitPro (`devkitA64`, `libnx`, `switch-sdl2`, `switch-mesa`) in
 `~/devkitpro`, and nightly Rust with `rust-src` (build-std).
 
