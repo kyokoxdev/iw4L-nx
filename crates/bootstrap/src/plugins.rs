@@ -111,6 +111,15 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
         .set(LogPlugin {
             filter: "warn,iw4l=info".into(),
             level: bevy::log::Level::WARN,
+            #[cfg(target_os = "horizon")]
+            fmt_layer: |_| {
+                Some(Box::new(
+                    bevy::log::tracing_subscriber::fmt::Layer::default()
+                        .with_ansi(false)
+                        .without_time()
+                        .with_writer(|| platform_nx::BootLog),
+                ))
+            },
             ..default()
         })
         .set(BevyRenderPlugin {

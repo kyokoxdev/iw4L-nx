@@ -310,6 +310,20 @@ pub fn breadcrumb(line: &str) {
     }
 }
 
+/// `io::Write` into `boot.txt`, for Bevy's log layer: stderr reaches nothing.
+pub struct BootLog;
+
+impl std::io::Write for BootLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        breadcrumb(String::from_utf8_lossy(buf).trim_end());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 mod window {
     use core::{ffi::c_void, ptr::NonNull};
 
@@ -396,6 +410,40 @@ mod window {
         world.write_message(WindowFocused { window: entity, focused });
     }
 
+    /// What the GL backend offers on switch-mesa; sizes the bound-slot render path.
+    // ponytail: boot-debug only, drop once the render path is settled.
+    fn gpu_caps(app: &mut App) {
+        use bevy::render::{RenderApp, renderer::RenderAdapter};
+        let Some(adapter) = app
+            .get_sub_app(RenderApp)
+            .and_then(|render| render.world().get_resource::<RenderAdapter>())
+        else {
+            return;
+        };
+        let (info, l) = (adapter.get_info(), adapter.limits());
+        crate::breadcrumb(&format!(
+            "gpu: {} / {} / {:?}\ngpu features: {:?}\ngpu downlevel: {:?}\n\
+             gpu limits: sampled_tex/stage={} samplers/stage={} storage_buf/stage={} \
+             storage_buf_size={} uniform_buf/stage={} uniform_buf_size={} bind_groups={} \
+             tex2d={} immediates={} vertex_attrs={}",
+            info.name,
+            info.driver_info,
+            info.backend,
+            adapter.features(),
+            adapter.get_downlevel_capabilities().flags,
+            l.max_sampled_textures_per_shader_stage,
+            l.max_samplers_per_shader_stage,
+            l.max_storage_buffers_per_shader_stage,
+            l.max_storage_buffer_binding_size,
+            l.max_uniform_buffers_per_shader_stage,
+            l.max_uniform_buffer_binding_size,
+            l.max_bind_groups,
+            l.max_texture_dimension_2d,
+            l.max_immediate_size,
+            l.max_vertex_attributes,
+        ));
+    }
+
     fn run(mut app: App) -> AppExit {
         if app.plugins_state() != PluginsState::Cleaned {
             while app.plugins_state() == PluginsState::Adding {
@@ -405,6 +453,7 @@ mod window {
             app.cleanup();
         }
         crate::breadcrumb("runner: plugins finished");
+        gpu_caps(&mut app);
         let mut frames = 0u64;
         let mut focused = true;
         // appletMainLoop turns false when the user closes the app from HOME.

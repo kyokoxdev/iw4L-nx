@@ -17,7 +17,8 @@ elf2nro target/nx/aarch64-nintendo-switch-newlib/play/iw4l.elf iw4l.nro --nacp=i
 `switch/build.sh` copies the toolchain's `library/` into
 `target/nx-std-src/` once per nightly, so std links the libc fork too. Forked
 crates come through `[patch.crates-io]` in `Cargo.toml`: `libc`, the `wgpu`
-family (static EGL, `NWindow` surface), and
+family (static EGL, `NWindow` surface, shader sRGB present: switch-mesa's
+EGL has no sRGB surfaces), and
 [`iw4l-nx-crate-patches`](https://github.com/kyokoxdev/iw4l-nx-crate-patches)
 for `bevy_asset`, `memmap2` and `cpal`. Each fork change is cfg-gated, so
 desktop builds compile crates.io code.
@@ -30,7 +31,8 @@ iw4l.nro
 .env                 optional, same keys as desktop
 games/MW2/zone/...   MW2 Multiplayer files; `IW4L_GAMES` overrides
 iw4l-artifacts/      writable state, cache, logs
-boot.txt             breadcrumbs from main to the first frames, rewritten per launch
+boot.txt             breadcrumbs from main to the first frames, Bevy/wgpu warnings,
+                     native aborts and exits; rewritten per launch
 ```
 
 Console: click both sticks to toggle it; while open, A types a line on the
