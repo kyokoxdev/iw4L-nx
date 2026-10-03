@@ -330,15 +330,18 @@ struct ExactColourPortGpu {
 struct ExactColourBindingCache {
     generation: MaterialGenerationId,
     views_revision: u64,
-    textures: [HashMap<BoundTextureKey, Arc<[u32]>>; 4],
+    textures: [HashMap<BoundTextureKey, BoundTextures>; 4],
 }
 
 #[derive(Resource, Default)]
 struct ExactShadowBindingCache {
     generation: MaterialGenerationId,
     views_revision: u64,
-    textures: HashMap<BoundTextureKey, Arc<[u32]>>,
+    textures: HashMap<BoundTextureKey, BoundTextures>,
 }
+
+/// Slot words, and their group-1 bind group under `bound_slots`.
+type BoundTextures = (Arc<[u32]>, Option<BindGroup>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct BoundTextureKey {
@@ -2272,18 +2275,16 @@ impl ExactPrepare<'_> {
             }
             PrepareTextureTables::Shadow { slots, table } => (&mut **slots, &mut **table),
         };
-        let slots = if let Some(slots) = texture_slots.get(&key) {
+        if let Some((slots, group)) = texture_slots.get(&key) {
             self.cost.tex_bind_hit_n = self.cost.tex_bind_hit_n.saturating_add(1);
-            Arc::clone(slots)
-        } else {
-            self.cost.tex_bind_miss_n = self.cost.tex_bind_miss_n.saturating_add(1);
-            let slots = resolve(table)?;
-            texture_slots.insert(key, Arc::clone(&slots));
-            slots
-        };
+            return Ok((Arc::clone(slots), group.clone()));
+        }
+        self.cost.tex_bind_miss_n = self.cost.tex_bind_miss_n.saturating_add(1);
+        let slots = resolve(table)?;
         let group = super::bound_slots().then(|| {
             table.slot_bind_group(device, registry, &port_gpu.textures_layout, &slots, shadow)
         });
+        texture_slots.insert(key, (Arc::clone(&slots), group.clone()));
         Ok((slots, group))
     }
 }
@@ -2316,14 +2317,14 @@ struct PrepareCost {
 
 #[derive(Default)]
 struct SceneTextureState {
-    slots: [HashMap<BoundTextureKey, Arc<[u32]>>; 4],
+    slots: [HashMap<BoundTextureKey, BoundTextures>; 4],
     tables: [ExactTextureTable; 4],
 }
 
 enum PrepareTextureTables<'a> {
     SceneShared(&'a std::sync::Mutex<SceneTextureState>),
     Shadow {
-        slots: &'a mut HashMap<BoundTextureKey, Arc<[u32]>>,
+        slots: &'a mut HashMap<BoundTextureKey, BoundTextures>,
         table: &'a mut ExactTextureTable,
     },
 }
