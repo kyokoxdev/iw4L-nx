@@ -413,11 +413,9 @@ mod window {
     /// What the GL backend offers on switch-mesa; sizes the bound-slot render path.
     // ponytail: boot-debug only, drop once the render path is settled.
     fn gpu_caps(app: &mut App) {
-        use bevy::render::{RenderApp, renderer::RenderAdapter};
-        let Some(adapter) = app
-            .get_sub_app(RenderApp)
-            .and_then(|render| render.world().get_resource::<RenderAdapter>())
-        else {
+        use bevy::render::renderer::RenderAdapter;
+        let Some(adapter) = app.world().get_resource::<RenderAdapter>() else {
+            crate::breadcrumb("gpu: no RenderAdapter");
             return;
         };
         let (info, l) = (adapter.get_info(), adapter.limits());
