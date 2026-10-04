@@ -167,8 +167,13 @@ fn queue_match_clips(
     };
     let mut set = MatchRequests::default();
     let mut aliases = 0usize;
-    for weapon in 1..=weapons.0.len() as u32 {
-        aliases += request_weapon_aliases(clips, &bank.0, &weapons.0, weapon, &mut set);
+    // Switch: PCM for every weapon's sounds (1194 weapons, ~1750 clips) does
+    // not fit the ~3 GB heap; weapon clips prepare on first play instead.
+    // ponytail: first shot of each weapon is late; prepare per-loadout if it shows.
+    if !cfg!(target_os = "horizon") {
+        for weapon in 1..=weapons.0.len() as u32 {
+            aliases += request_weapon_aliases(clips, &bank.0, &weapons.0, weapon, &mut set);
+        }
     }
     for alias in movement_prepare_names() {
         aliases += 1;

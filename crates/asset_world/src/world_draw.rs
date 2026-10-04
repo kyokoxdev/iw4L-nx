@@ -1218,7 +1218,7 @@ fn decode_lightmap_images(
         TextureDimension::D2,
         secondary_rgba,
         TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        LIGHTMAP_USAGE,
     );
     secondary_image.sampler = ImageSampler::linear();
     let mut ambient_image = Image::new(
@@ -1230,7 +1230,7 @@ fn decode_lightmap_images(
         TextureDimension::D2,
         ambient_rgba,
         TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        LIGHTMAP_USAGE,
     );
     ambient_image.sampler = ImageSampler::linear();
     let mut directional_image = Image::new(
@@ -1242,7 +1242,7 @@ fn decode_lightmap_images(
         TextureDimension::D2,
         directional_rgba,
         TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        LIGHTMAP_USAGE,
     );
     directional_image.sampler = ImageSampler::linear();
     let ambient_source_name = image
@@ -1284,7 +1284,7 @@ fn decode_lightmap_images(
         TextureDimension::D2,
         mask_source.to_vec(),
         TextureFormat::R8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        LIGHTMAP_USAGE,
     );
     primary_image.sampler = ImageSampler::linear();
     let sun_mask_image = primary_image.clone();
@@ -1306,6 +1306,14 @@ fn decode_lightmap_images(
         sun_mask_size: primary_size,
     })
 }
+
+/// Lightmap pages are only sampled on the GPU. Switch drops the CPU copy at
+/// upload: the ~3 GB heap also backs GPU memory, so a kept copy costs twice.
+#[cfg(target_os = "horizon")]
+const LIGHTMAP_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
+#[cfg(not(target_os = "horizon"))]
+const LIGHTMAP_USAGE: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
 
 pub(crate) fn secondary_page_payloads(
     source: &[u8],

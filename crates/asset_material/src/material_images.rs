@@ -1128,7 +1128,12 @@ pub fn decode_reflection_probe_cubemap(source: &AuthoredImage) -> Result<Image, 
         },
         TextureDimension::D2,
         TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        // Switch: GPU-only, like the skybox cube; the heap also backs GPU memory.
+        if cfg!(target_os = "horizon") {
+            RenderAssetUsages::RENDER_WORLD
+        } else {
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
+        },
     );
     image.texture_descriptor.mip_level_count = levels;
     image.texture_view_descriptor = Some(TextureViewDescriptor {

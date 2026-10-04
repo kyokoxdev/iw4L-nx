@@ -102,6 +102,14 @@ fn blood_material_binding(catalog: &MenuCatalog) -> Result<BloodMaterialBinding,
     })
 }
 
+/// Switch keeps HUD textures on the GPU only: the heap also backs GPU memory,
+/// and the CPU copies of every menu and HUD image cost ~70 MB.
+#[cfg(target_os = "horizon")]
+const HUD_IMAGE_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
+#[cfg(not(target_os = "horizon"))]
+const HUD_IMAGE_USAGE: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
+
 fn make_image(
     width: u32,
     height: u32,
@@ -118,7 +126,7 @@ fn make_image(
         TextureDimension::D2,
         rgba,
         sampling.texture_format(),
-        RenderAssetUsages::default(),
+        HUD_IMAGE_USAGE,
     );
     if let Some(state) = sampler {
         image.sampler = ImageSampler::Descriptor(asset_material::sampler_from_iw4(state, 1, false));

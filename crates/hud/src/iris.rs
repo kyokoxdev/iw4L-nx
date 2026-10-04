@@ -372,11 +372,14 @@ fn fill_for_overlay(
     fill.source = Some(image_name.to_owned());
     fill.handle = None;
     fill.rgba = None;
-    let (width, height, data) = {
+    let rgba = {
         let image = images.get(overlay)?;
-        (image.width(), image.height(), image.data.clone()?)
+        match &image.data {
+            Some(data) => overlay_frame_texel(image.width(), image.height(), data)?,
+            // GPU-only HUD image (Switch): scope overlay frames are black.
+            None => [0, 0, 0, 255],
+        }
     };
-    let rgba = overlay_frame_texel(width, height, &data)?;
     let handle = fill_handle(rgba, images);
     fill.handle = Some(handle.clone());
     fill.rgba = Some(rgba);

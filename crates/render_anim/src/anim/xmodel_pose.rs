@@ -93,7 +93,7 @@ fn blend_skel_vertices_inner<const DECODED: bool>(
     let mut positions = DECODED.then(|| skel.positions(0..skel.vertex_count())).unwrap_or_default();
     let mut normals = DECODED.then(|| skel.normals(0..skel.vertex_count())).unwrap_or_default();
     let mut posed_packed =
-        Some(skel.packed_vertices.clone());
+        Some(skel.packed_vertices.to_vec());
     let max_bone = skel
         .vert_skin
         .iter()
@@ -102,7 +102,7 @@ fn blend_skel_vertices_inner<const DECODED: bool>(
         .flat_map(|(skin, _)| {
             std::iter::once(skin.bones[0]).chain(
                 (1..4)
-                    .filter(|&extra| skin.weights[extra] > 0.0)
+                    .filter(|&extra| skin.weights()[extra] > 0.0)
                     .map(|extra| skin.bones[extra]),
             )
         })
@@ -135,7 +135,7 @@ fn blend_skel_vertices_inner<const DECODED: bool>(
                 let mut extras = [(primary_esi, 0u16); 3];
                 let mut extra_n = 0usize;
                 for extra in 1..4 {
-                    if skin.weights[extra] <= 0.0 {
+                    if skin.weights()[extra] <= 0.0 {
                         continue;
                     }
                     extras[extra_n] = (
@@ -154,7 +154,7 @@ fn blend_skel_vertices_inner<const DECODED: bool>(
                     *primary,
                 )
             };
-        if posed_position == Vec3::ZERO && skin.weights[0] == 0.0 {
+        if posed_position == Vec3::ZERO && skin.weights()[0] == 0.0 {
             posed_position = p;
             posed_normal = n;
         }
@@ -249,7 +249,7 @@ pub(crate) fn meshes_from_blended(
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, skel.uvs(0..skel.vertex_count()));
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, skel.colors(0..skel.vertex_count()));
-        mesh.insert_indices(Indices::U32(skel.indices.clone()));
+        mesh.insert_indices(Indices::U32(skel.indices.to_vec()));
         return Some(vec![PosedModelSurface {
             surface_index: 0,
             mesh,
@@ -379,7 +379,7 @@ pub fn build_skin_layout(
         return Some(SkinLayout {
             surfaces: Vec::new(),
             dest_vertex_n: skel.packed_vertices.len(),
-            indices: skel.indices.clone(),
+            indices: skel.indices.to_vec(),
         });
     }
     if skel.surface_index_ranges.len() != surface_count {
@@ -458,7 +458,7 @@ pub fn skin_packed_into(
         .flat_map(|(skin, _)| {
             std::iter::once(skin.bones[0]).chain(
                 (1..4)
-                    .filter(|&extra| skin.weights[extra] > 0.0)
+                    .filter(|&extra| skin.weights()[extra] > 0.0)
                     .map(|extra| skin.bones[extra]),
             )
         })
@@ -494,7 +494,7 @@ pub fn skin_packed_into(
                 let mut extras = [(primary_esi, 0u16); 3];
                 let mut extra_n = 0usize;
                 for extra in 1..4 {
-                    if skin.weights[extra] <= 0.0 {
+                    if skin.weights()[extra] <= 0.0 {
                         continue;
                     }
                     extras[extra_n] = (
@@ -512,7 +512,7 @@ pub fn skin_packed_into(
                     *primary,
                 )
             };
-            let posed_position = if posed_position == Vec3::ZERO && skin.weights[0] == 0.0 {
+            let posed_position = if posed_position == Vec3::ZERO && skin.weights()[0] == 0.0 {
                 p
             } else {
                 posed_position
@@ -545,7 +545,7 @@ pub fn smodel_surfaces_from_blended(
         return Some(vec![PosedSmodelSurface {
             surface_index: 0,
             vert_n: vertex_n,
-            indices: skel.indices.clone(),
+            indices: skel.indices.to_vec(),
             packed_vertices: posed_packed.unwrap_or_default(),
         }]);
     }

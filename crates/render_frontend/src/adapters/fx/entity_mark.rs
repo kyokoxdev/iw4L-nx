@@ -261,7 +261,7 @@ fn stage(
             let global = bone_base + bone;
             if !ids.iter().all(|&i| {
                 skel.vert_skin.get(i).is_some_and(|w| {
-                    w.bones[0] as usize == bone && w.weights == [1.0, 0.0, 0.0, 0.0]
+                    w.bones[0] as usize == bone && w.weights() == [1.0, 0.0, 0.0, 0.0]
                 })
             }) {
                 state.unsupported_triangles += 1;

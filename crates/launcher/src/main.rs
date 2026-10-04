@@ -16,9 +16,10 @@ static PROCESS_ALLOCATOR: diag::ProcessCountingAllocator = diag::ProcessCounting
 #[global_allocator]
 static PROCESS_ALLOCATOR: NxAllocator = NxAllocator;
 
-/// Counting allocator that also keeps the last `RING` allocations of 1 MB or
-/// more, with the code addresses on the caller's stack, in static memory. The
-/// alloc-failure hook dumps them to boot.txt: the heap is full by then, so the
+/// Counting allocator that also keeps the live allocations of 1 MB or more
+/// (up to `RING`), with the code addresses on the caller's stack, in static
+/// memory. A free clears its slot, so the alloc-failure hook dumps what holds
+/// the heap at the failure to boot.txt: the heap is full by then, so the
 /// record itself must never need it.
 // ponytail: OOM hunt only; drop once the menu fits.
 #[cfg(target_os = "horizon")]
@@ -33,29 +34,48 @@ mod big_allocs {
     const PCS: usize = 12;
 
     struct Slot {
+        ptr: AtomicUsize,
         size: AtomicUsize,
         pcs: [AtomicUsize; PCS],
     }
 
     static SLOTS: [Slot; RING] = [const {
         Slot {
+            ptr: AtomicUsize::new(0),
             size: AtomicUsize::new(0),
             pcs: [const { AtomicUsize::new(0) }; PCS],
         }
     }; RING];
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-    pub fn record(size: usize) {
+    pub fn record(ptr: *mut u8, size: usize) {
+        if ptr.is_null() {
+            return;
+        }
         let mut pcs = [0usize; PCS];
         let n = platform_nx::code_words(&mut pcs);
         let slot = &SLOTS[NEXT.fetch_add(1, Relaxed) % RING];
+        slot.ptr.store(ptr as usize, Relaxed);
         slot.size.store(size, Relaxed);
         for (to, pc) in slot.pcs.iter().zip(pcs.iter().take(n)) {
             to.store(*pc, Relaxed);
         }
     }
 
-    /// Oldest first: `big <bytes> <offset>...`, offsets for addr2line.
+    // ponytail: linear scan per big free; big allocs are a few thousand per load.
+    pub fn forget(ptr: *mut u8) {
+        let ptr = ptr as usize;
+        for slot in &SLOTS {
+            if slot.ptr.load(Relaxed) == ptr {
+                slot.size.store(0, Relaxed);
+                slot.ptr.store(0, Relaxed);
+                return;
+            }
+        }
+    }
+
+    /// Live allocations, oldest first: `big <bytes> <offset>...`, offsets
+    /// for addr2line.
     pub fn dump() {
         use std::fmt::Write as _;
         // 4096 lines of ~150 bytes; static so a full heap cannot stop the dump.
@@ -73,9 +93,17 @@ mod big_allocs {
         }
         let total = NEXT.load(Relaxed);
         let mut out = Cursor(0);
-        let _ = writeln!(out, "big allocs: {total} >= 1MB, last {} follow", total.min(RING));
+        let live: usize = SLOTS.iter().map(|slot| slot.size.load(Relaxed)).sum();
+        let _ = writeln!(
+            out,
+            "big allocs: {total} >= 1MB made; live ones follow ({}MB, ring {RING})",
+            live >> 20
+        );
         for i in total.saturating_sub(RING)..total {
             let slot = &SLOTS[i % RING];
+            if slot.size.load(Relaxed) == 0 {
+                continue;
+            }
             let _ = write!(out, "big {}", slot.size.load(Relaxed));
             for pc in &slot.pcs {
                 let _ = write!(out, " {:x}", pc.load(Relaxed));
@@ -90,32 +118,37 @@ mod big_allocs {
 
 #[cfg(target_os = "horizon")]
 impl NxAllocator {
-    fn note(size: usize) {
+    fn note(ptr: *mut u8, size: usize) -> *mut u8 {
         if size >= big_allocs::MIN {
-            big_allocs::record(size);
+            big_allocs::record(ptr, size);
         }
+        ptr
     }
 }
 
 #[cfg(target_os = "horizon")]
 unsafe impl std::alloc::GlobalAlloc for NxAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        Self::note(layout.size());
-        unsafe { diag::ProcessCountingAllocator.alloc(layout) }
+        Self::note(unsafe { diag::ProcessCountingAllocator.alloc(layout) }, layout.size())
     }
 
     unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
-        Self::note(layout.size());
-        unsafe { diag::ProcessCountingAllocator.alloc_zeroed(layout) }
+        Self::note(unsafe { diag::ProcessCountingAllocator.alloc_zeroed(layout) }, layout.size())
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        if layout.size() >= big_allocs::MIN {
+            big_allocs::forget(ptr);
+        }
         unsafe { diag::ProcessCountingAllocator.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
-        Self::note(new_size);
-        unsafe { diag::ProcessCountingAllocator.realloc(ptr, layout, new_size) }
+        let new = unsafe { diag::ProcessCountingAllocator.realloc(ptr, layout, new_size) };
+        if !new.is_null() && layout.size() >= big_allocs::MIN {
+            big_allocs::forget(ptr);
+        }
+        Self::note(new, new_size)
     }
 }
 

@@ -59,7 +59,7 @@ pub struct ModelSkel {
     pub tag_weapon: Option<usize>,
 
     pub pose: Option<ModelPoseSrc>,
-    pub indices: Vec<u32>,
+    pub indices: std::sync::Arc<[u32]>,
 
     pub surface_materials: Vec<Option<crate::WalkLocalMaterialIndex>>,
 
@@ -73,11 +73,11 @@ pub struct ModelSkel {
 
     pub surface_vert_list_count: Vec<Option<u32>>,
 
-    pub vert_skin: Vec<VertSkin>,
+    pub vert_skin: std::sync::Arc<[VertSkin]>,
     pub rigid_verts: usize,
     pub blend_verts: usize,
 
-    pub packed_vertices: Vec<[u8; sz::GFX_PACKED_VERTEX]>,
+    pub packed_vertices: std::sync::Arc<[[u8; sz::GFX_PACKED_VERTEX]]>,
 
     pub radius: Option<f32>,
 
@@ -216,10 +216,26 @@ pub type FpvSkel = ModelSkel;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VertSkin {
-    pub bones: [u16; 4],
-    pub weights: [f32; 4],
+    /// XModel bone counts are a byte in every format read here.
+    pub bones: [u8; 4],
 
+    /// Raw blend weights of influences 1..4; influence 0 takes the rest.
     pub weight_u16: [u16; 4],
+}
+
+impl VertSkin {
+    /// Float weights, derived on read: storing them too cost 16 bytes per
+    /// vertex across every captured model.
+    pub fn weights(&self) -> [f32; 4] {
+        let mut weights = [0.0; 4];
+        let mut remaining = dpvs_iw4::SKIN_BLEND_WEIGHT_ONE as f32;
+        for extra in 1..4 {
+            weights[extra] = dpvs_iw4::skin_blend_weight(self.weight_u16[extra]);
+            remaining -= weights[extra];
+        }
+        weights[0] = remaining;
+        weights
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -397,6 +413,50 @@ fn capture_model_skel_iw4(
     let pose = capture_pose_src(stream, &geometry, &bone_name_strs, &bones, num_child);
     let bone_collision = capture_bone_collision(stream, geometry, geometry.num_bones);
 
+    // A camo variant points every LOD at another model's XModelSurfs: share
+    // that model's vertex buffers instead of copying them per variant.
+    if let Some(source) = shared.and_then(|shared| whole_alias_source(stream, &geometry, shared))
+        && !source.vert_skin.iter().any(|skin| {
+            skin.bones.iter().zip(skin.weights()).any(|(bone, weight)| {
+                weight != 0.0 && usize::from(*bone) >= geometry.num_bones
+            })
+        })
+    {
+        let mut surface_materials = Vec::with_capacity(source.surface_vertex_ranges.len());
+        for lod in 0..4 {
+            for offset in 0..usize::from(geometry.lod_numsurfs[lod]) {
+                let handle_slot = usize::from(geometry.lod_surf_index[lod]) + offset;
+                surface_materials.push(geometry.material_handles.and_then(|handles| {
+                    materials?.material_index(handles.at(handle_slot * stream.pointer_bytes()))
+                }));
+            }
+        }
+        return Some(ModelSkel {
+            name,
+            bones,
+            bone_collision,
+            bone_names: bone_name_strs,
+            tag_view,
+            tag_weapon,
+            pose,
+            surface_materials,
+            radius: geometry.radius,
+            bounds: valid_bounds(&geometry),
+            contents: Some(geometry.contents),
+            coll_lod: geometry.coll_lod,
+            coll_surfs: capture_coll_surfs(stream, geometry),
+            movement_brushes: Vec::new(),
+            lod: Some(crate::ModelLodSelector::Iw4 {
+                lod_start: geometry.lod_start,
+                num_lods: geometry.num_lods,
+                lod_dist: geometry.lod_dist,
+            }),
+            lod_smc: Some(geometry.lod_smc),
+            lod_part_bits: Some(geometry.lod_part_bits),
+            ..(*source).clone()
+        });
+    }
+
     let mut indices = Vec::new();
     let mut surface_materials = Vec::new();
     let mut surface_vertex_ranges = Vec::new();
@@ -432,7 +492,7 @@ fn capture_model_skel_iw4(
                 let (v, vn) = source.surface_vertex_ranges[n];
                 let (ix, ixn) = source.surface_index_ranges[n];
                 if source.vert_skin[v..v + vn].iter().any(|skin| {
-                    skin.bones.iter().zip(skin.weights).any(|(bone, weight)| {
+                    skin.bones.iter().zip(skin.weights()).any(|(bone, weight)| {
                         weight != 0.0 && usize::from(*bone) >= geometry.num_bones
                     })
                 }) {
@@ -442,7 +502,7 @@ fn capture_model_skel_iw4(
                 let index_start = indices.len();
                 packed_vertices.extend_from_slice(&source.packed_vertices[v..v + vn]);
                 for skin in &source.vert_skin[v..v + vn] {
-                    if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
+                    if skin.weights()[1] == 0.0 && skin.weights()[0] == 1.0 {
                         rigid_verts += 1;
                     } else {
                         blend_verts += 1;
@@ -507,7 +567,7 @@ fn capture_model_skel_iw4(
                 let vertex = vertices.at(vertex_index * sz::GFX_PACKED_VERTEX);
                 packed_vertices.push(copy_packed_vertex_iw4(stream, vertex)?);
                 let skin = surface_skins[vertex_index];
-                if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
+                if skin.weights()[1] == 0.0 && skin.weights()[0] == 1.0 {
                     rigid_verts += 1;
                 } else {
                     blend_verts += 1;
@@ -551,27 +611,19 @@ fn capture_model_skel_iw4(
         tag_view,
         tag_weapon,
         pose,
-        indices,
+        indices: indices.into(),
         surface_materials,
         surface_vertex_ranges,
         surface_index_ranges,
         surface_part_bits,
         surface_deformed,
         surface_vert_list_count,
-        vert_skin,
+        vert_skin: vert_skin.into(),
         rigid_verts,
         blend_verts,
-        packed_vertices,
+        packed_vertices: packed_vertices.into(),
         radius: geometry.radius,
-        bounds: match (geometry.bounds_mid, geometry.bounds_half) {
-            (Some(mid), Some(half))
-                if mid.iter().all(|v| v.is_finite())
-                    && half.iter().all(|v| v.is_finite() && *v >= 0.0) =>
-            {
-                Some((mid, half))
-            }
-            _ => None,
-        },
+        bounds: valid_bounds(&geometry),
         contents: Some(geometry.contents),
         coll_lod: geometry.coll_lod,
         coll_surfs: capture_coll_surfs(stream, geometry),
@@ -585,6 +637,57 @@ fn capture_model_skel_iw4(
         lod_part_bits: Some(geometry.lod_part_bits),
         lod_surf_span,
     })
+}
+
+fn valid_bounds(geometry: &XModelGeometry) -> Option<([f32; 3], [f32; 3])> {
+    match (geometry.bounds_mid, geometry.bounds_half) {
+        (Some(mid), Some(half))
+            if mid.iter().all(|v| v.is_finite())
+                && half.iter().all(|v| v.is_finite() && *v >= 0.0) =>
+        {
+            Some((mid, half))
+        }
+        _ => None,
+    }
+}
+
+/// The one model whose surfaces this model reuses at every LOD, laid out so
+/// its buffers are exactly what the copying path would build.
+fn whole_alias_source(
+    stream: &ZoneStream<'_>,
+    geometry: &XModelGeometry,
+    shared: &SharedXModelSurfaces,
+) -> Option<std::sync::Arc<ModelSkel>> {
+    let mut source: Option<&std::sync::Arc<ModelSkel>> = None;
+    let mut start = 0usize;
+    for lod in 0..4 {
+        let count = usize::from(geometry.lod_numsurfs[lod]);
+        if count == 0 {
+            continue;
+        }
+        if geometry.lod_xsurfaces[lod].is_some() {
+            return None;
+        }
+        let name = stream
+            .cstr(geometry.lod_surface_names[lod]?)
+            .ok()?
+            .trim_start_matches(',');
+        let (skel, source_lod) = shared.0.get(name)?;
+        if *source_lod != lod || source.is_some_and(|s| !std::sync::Arc::ptr_eq(s, skel)) {
+            return None;
+        }
+        let (first, n) = skel.lod_surf_span[lod];
+        if usize::from(first) != start || usize::from(n) != count {
+            return None;
+        }
+        start += count;
+        source = Some(skel);
+    }
+    let source = source?;
+    let unused_source_lod = (0..4).any(|lod| {
+        geometry.lod_numsurfs[lod] == 0 && source.lod_surf_span[lod].1 != 0
+    });
+    (!unused_source_lod && start == source.surface_vertex_ranges.len()).then(|| source.clone())
 }
 
 fn capture_bone_collision(
@@ -801,12 +904,12 @@ fn decode_surface_skin(
     num_bones: usize,
 ) -> Option<Vec<VertSkin>> {
     let mut skins = vec![VertSkin::default(); vertex_count];
-    let bone_at = |raw: u16| -> Option<u16> {
+    let bone_at = |raw: u16| -> Option<u8> {
         if raw % BONE_STRIDE != 0 {
             return None;
         }
         let bone = raw / BONE_STRIDE;
-        ((bone as usize) < num_bones).then_some(bone)
+        u8::try_from(bone).ok().filter(|_| (bone as usize) < num_bones)
     };
 
     if vert_list_count > 0 {
@@ -824,7 +927,6 @@ fn decode_surface_skin(
                     }
                     skins[vertex] = VertSkin {
                         bones: [bone, 0, 0, 0],
-                        weights: [1.0, 0.0, 0.0, 0.0],
                         ..Default::default()
                     };
                     vertex += 1;
@@ -856,7 +958,6 @@ fn decode_surface_skin(
             for skin in &mut skins {
                 *skin = VertSkin {
                     bones: [0, 0, 0, 0],
-                    weights: [1.0, 0.0, 0.0, 0.0],
                     ..Default::default()
                 };
             }
@@ -880,18 +981,13 @@ fn decode_surface_skin(
             let mut skin = VertSkin::default();
             let b0 = stream.u16_at(blend_ptr, start * 2).ok()?;
             skin.bones[0] = bone_at(b0)?;
-            let mut remaining = dpvs_iw4::SKIN_BLEND_WEIGHT_ONE as f32;
             for extra in 1..influences {
                 let off = start + 1 + (extra - 1) * 2;
                 let b = stream.u16_at(blend_ptr, off * 2).ok()?;
                 let raw = stream.u16_at(blend_ptr, off * 2 + 2).ok()?;
-                let w = dpvs_iw4::skin_blend_weight(raw);
                 skin.bones[extra] = bone_at(b)?;
-                skin.weights[extra] = w;
                 skin.weight_u16[extra] = raw;
-                remaining -= w;
             }
-            skin.weights[0] = remaining;
             if vertex >= vertex_count {
                 return None;
             }
@@ -1053,7 +1149,7 @@ fn capture_model_skel_t5(
             let vertex = vertices.at(vertex_index * GFX_PACKED_VERTEX);
             packed_vertices.push(copy_packed_vertex_t5(stream, vertex)?);
             let skin = surface_skins[vertex_index];
-            if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
+            if skin.weights()[1] == 0.0 && skin.weights()[0] == 1.0 {
                 rigid_verts += 1;
             } else {
                 blend_verts += 1;
@@ -1090,17 +1186,17 @@ fn capture_model_skel_t5(
         tag_view,
         tag_weapon,
         pose,
-        indices,
+        indices: indices.into(),
         surface_materials,
         surface_vertex_ranges,
         surface_index_ranges,
         surface_part_bits,
         surface_deformed,
         surface_vert_list_count,
-        vert_skin,
+        vert_skin: vert_skin.into(),
         rigid_verts,
         blend_verts,
-        packed_vertices,
+        packed_vertices: packed_vertices.into(),
         radius: geometry.radius,
         bounds: None,
         contents: Some(geometry.contents),
@@ -1363,12 +1459,12 @@ fn decode_surface_skin_t5(
     rigid_stride: usize,
 ) -> Option<Vec<VertSkin>> {
     let mut skins = vec![VertSkin::default(); vertex_count];
-    let bone_at = |raw: u16| -> Option<u16> {
+    let bone_at = |raw: u16| -> Option<u8> {
         if raw % BONE_STRIDE != 0 {
             return None;
         }
         let bone = raw / BONE_STRIDE;
-        ((bone as usize) < num_bones).then_some(bone)
+        u8::try_from(bone).ok().filter(|_| (bone as usize) < num_bones)
     };
 
     if vert_list_count > 0 {
@@ -1386,7 +1482,6 @@ fn decode_surface_skin_t5(
                     }
                     skins[vertex] = VertSkin {
                         bones: [bone, 0, 0, 0],
-                        weights: [1.0, 0.0, 0.0, 0.0],
                         ..Default::default()
                     };
                     vertex += 1;
@@ -1411,7 +1506,6 @@ fn decode_surface_skin_t5(
             for skin in &mut skins {
                 *skin = VertSkin {
                     bones: [0, 0, 0, 0],
-                    weights: [1.0, 0.0, 0.0, 0.0],
                     ..Default::default()
                 };
             }
@@ -1435,18 +1529,13 @@ fn decode_surface_skin_t5(
             let mut skin = VertSkin::default();
             let b0 = stream.u16_at(blend_ptr, start * 2).ok()?;
             skin.bones[0] = bone_at(b0)?;
-            let mut remaining = 1.0f32;
             for extra in 1..influences {
                 let off = start + 1 + (extra - 1) * 2;
                 let b = stream.u16_at(blend_ptr, off * 2).ok()?;
                 let raw = stream.u16_at(blend_ptr, off * 2 + 2).ok()?;
-                let w = dpvs_iw4::skin_blend_weight(raw);
                 skin.bones[extra] = bone_at(b)?;
-                skin.weights[extra] = w;
                 skin.weight_u16[extra] = raw;
-                remaining -= w;
             }
-            skin.weights[0] = remaining;
             if vertex >= vertex_count {
                 return None;
             }
@@ -1592,7 +1681,7 @@ fn capture_model_skel_iw5(
             || source.vert_skin.iter().any(|skin| {
                 skin.bones
                     .iter()
-                    .zip(skin.weights)
+                    .zip(skin.weights())
                     .any(|(bone, weight)| weight != 0.0 && usize::from(*bone) >= geometry.num_bones)
             })
         {
@@ -1673,7 +1762,7 @@ fn capture_model_skel_iw5(
             let vertex = vertices.at(vertex_index * iw5sz::GFX_PACKED_VERTEX);
             packed_vertices.push(copy_packed_vertex_iw5(stream, vertex)?);
             let skin = surface_skins[vertex_index];
-            if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
+            if skin.weights()[1] == 0.0 && skin.weights()[0] == 1.0 {
                 rigid_verts += 1;
             } else {
                 blend_verts += 1;
@@ -1700,17 +1789,17 @@ fn capture_model_skel_iw5(
         tag_view,
         tag_weapon,
         pose,
-        indices,
+        indices: indices.into(),
         surface_materials,
         surface_vertex_ranges,
         surface_index_ranges,
         surface_part_bits,
         surface_deformed,
         surface_vert_list_count,
-        vert_skin,
+        vert_skin: vert_skin.into(),
         rigid_verts,
         blend_verts,
-        packed_vertices,
+        packed_vertices: packed_vertices.into(),
         radius: geometry.radius,
         bounds: None,
         contents: None,
@@ -1848,12 +1937,12 @@ fn decode_surface_skin_iw5(
     use fastfile_iw5::size as iw5sz;
 
     let mut skins = vec![VertSkin::default(); vertex_count];
-    let bone_at = |raw: u16| -> Option<u16> {
+    let bone_at = |raw: u16| -> Option<u8> {
         if raw % BONE_STRIDE != 0 {
             return None;
         }
         let bone = raw / BONE_STRIDE;
-        ((bone as usize) < num_bones).then_some(bone)
+        u8::try_from(bone).ok().filter(|_| (bone as usize) < num_bones)
     };
 
     let mut rigid_assigned = 0usize;
@@ -1874,7 +1963,6 @@ fn decode_surface_skin_iw5(
                     }
                     skins[vertex] = VertSkin {
                         bones: [bone, 0, 0, 0],
-                        weights: [1.0, 0.0, 0.0, 0.0],
                         ..Default::default()
                     };
                     vertex += 1;
@@ -1910,7 +1998,6 @@ fn decode_surface_skin_iw5(
             for skin in &mut skins {
                 *skin = VertSkin {
                     bones: [0, 0, 0, 0],
-                    weights: [1.0, 0.0, 0.0, 0.0],
                     ..Default::default()
                 };
             }
@@ -1934,18 +2021,13 @@ fn decode_surface_skin_iw5(
             let mut skin = VertSkin::default();
             let b0 = stream.u16_at(blend_ptr, start * 2).ok()?;
             skin.bones[0] = bone_at(b0)?;
-            let mut remaining = 1.0f32;
             for extra in 1..influences {
                 let off = start + 1 + (extra - 1) * 2;
                 let b = stream.u16_at(blend_ptr, off * 2).ok()?;
                 let raw = stream.u16_at(blend_ptr, off * 2 + 2).ok()?;
-                let w = dpvs_iw4::skin_blend_weight(raw);
                 skin.bones[extra] = bone_at(b)?;
-                skin.weights[extra] = w;
                 skin.weight_u16[extra] = raw;
-                remaining -= w;
             }
-            skin.weights[0] = remaining;
             if vertex >= vertex_count {
                 return None;
             }
@@ -1962,6 +2044,25 @@ fn decode_surface_skin_iw5(
 #[cfg(test)]
 mod packed_decode_tests {
     use super::*;
+
+    #[test]
+    fn vert_skin_weights_match_capture_math() {
+        let rigid = VertSkin::default();
+        assert_eq!(rigid.weights(), [1.0, 0.0, 0.0, 0.0]);
+        let raws = [0u16, 0x4000, 0x2000, 0x1000];
+        let skin = VertSkin { bones: [1, 2, 3, 4], weight_u16: raws };
+        // Capture subtracted each extra from one in order; reads must agree bit for bit.
+        let mut remaining = dpvs_iw4::SKIN_BLEND_WEIGHT_ONE as f32;
+        let mut expected = [0.0; 4];
+        for extra in 1..4 {
+            expected[extra] = dpvs_iw4::skin_blend_weight(raws[extra]);
+            remaining -= expected[extra];
+        }
+        expected[0] = remaining;
+        assert_eq!(skin.weights(), expected);
+        assert!(skin.weights()[1] > 0.0 && skin.weights()[0] < 1.0);
+        assert_eq!(std::mem::size_of::<VertSkin>(), 12);
+    }
 
     #[test]
     fn packed_vertex_decodes_at_iw4_offsets() {

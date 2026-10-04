@@ -130,6 +130,11 @@ impl CommonSet {
     }
 
     pub(super) fn retain(&self, batch: &asset_material::material_images::DecodedImageBatch) -> u64 {
+        // Switch: the heap backs GPU memory too, so holding uploaded FPV
+        // pixels for the next map (~170MB) double-counts them; decode again.
+        if cfg!(target_os = "horizon") {
+            return 0;
+        }
         self.retained
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
