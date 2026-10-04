@@ -13,6 +13,7 @@ unsafe extern "C" {
     static __nxlink_host: u32;
     fn svcGetInfo(out: *mut u64, id0: u32, handle: u32, id1: u64) -> u32;
     fn appletGetAppletType() -> u32;
+    fn appletSetMediaPlaybackState(state: bool) -> u32;
     fn __libnx_exit(code: c_int) -> !;
     static __code_start: u8;
     static __rodata_start: u8;
@@ -43,6 +44,15 @@ pub fn heap_mb() -> (usize, usize, usize) {
     // SAFETY: plain FFI; libnx sets the heap bounds before main.
     let (info, size) = unsafe { (mallinfo(), fake_heap_end as usize - fake_heap_start as usize) };
     (info.uordblks >> 20, info.arena >> 20, size >> 20)
+}
+
+/// Blocks screen dimming and auto-sleep while `on` (any applet type).
+pub fn stay_awake(on: bool) {
+    // SAFETY: plain FFI; applet service is up before main.
+    let rc = unsafe { appletSetMediaPlaybackState(on) };
+    if rc != 0 {
+        breadcrumb(&format!("stay_awake({on}): rc={rc:#x}"));
+    }
 }
 
 pub fn heap_line() -> String {

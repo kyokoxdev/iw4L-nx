@@ -44,6 +44,13 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
         .add_plugins(ReplayPlugin)
         .add_plugins(RenderPlugin)
         .add_plugins(SessionPlugin);
+    // Map loads run minutes on Switch with no input; keep the console awake.
+    #[cfg(target_os = "horizon")]
+    app.add_systems(Last, |screen: Option<Res<frame::AppScreen>>| {
+        if let Some(screen) = screen.filter(|screen| screen.is_changed()) {
+            platform_nx::stay_awake(*screen == frame::AppScreen::Loading);
+        }
+    });
 
     app.edit_schedule(Update, |schedule| {
         schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());

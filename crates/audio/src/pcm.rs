@@ -60,7 +60,7 @@ impl LiveGain {
 
 #[derive(Asset, TypePath, Clone)]
 pub struct PcmAudio {
-    samples: Arc<[f32]>,
+    samples: Arc<[i16]>,
     channels: u16,
     sample_rate: u32,
     live_pan: Option<LivePan>,
@@ -88,7 +88,7 @@ impl LoopingPcmPlayback {
 
 impl PcmAudio {
     pub(crate) fn from_prepared(
-        samples: Arc<[f32]>,
+        samples: Arc<[i16]>,
         channels: u16,
         sample_rate: u32,
     ) -> Option<Self> {
@@ -105,7 +105,7 @@ impl PcmAudio {
         })
     }
 
-    pub(crate) fn samples(&self) -> &Arc<[f32]> {
+    pub(crate) fn samples(&self) -> &Arc<[i16]> {
         &self.samples
     }
 
@@ -195,7 +195,7 @@ impl LoopingPcmAudio {
 }
 
 pub struct PcmDecoder {
-    samples: Arc<[f32]>,
+    samples: Arc<[i16]>,
 
     pos: usize,
     src_channels: u16,
@@ -207,6 +207,11 @@ pub struct PcmDecoder {
     looping: bool,
 }
 
+/// Clips are held as 16-bit, half the memory of `f32`; the mixer gets `f32`.
+fn unit(sample: i16) -> f32 {
+    f32::from(sample) / 32768.0
+}
+
 impl PcmDecoder {
     fn next_sample(&mut self) -> Option<f32> {
         if let Some(right) = self.pending_right.take() {
@@ -216,14 +221,14 @@ impl PcmDecoder {
             return None;
         }
         let Some(live) = &self.live else {
-            let sample = self.samples[self.pos];
+            let sample = unit(self.samples[self.pos]);
             self.pos += 1;
             return Some(sample);
         };
         let (gain_l, gain_r) = live.get();
         let ch = self.src_channels.max(1) as usize;
-        let left = *self.samples.get(self.pos)?;
-        let right = self.samples.get(self.pos + 1).copied().unwrap_or(left);
+        let left = unit(*self.samples.get(self.pos)?);
+        let right = self.samples.get(self.pos + 1).map_or(left, |&s| unit(s));
         self.pos += ch;
         self.pending_right = Some(right * gain_r);
         Some(left * gain_l)
@@ -346,7 +351,7 @@ pub fn decode_audio_bytes(bytes: &[u8]) -> Option<PcmAudio> {
         .make(&track.codec_params, &DecoderOptions::default())
         .ok()?;
 
-    let mut samples: Vec<f32> = Vec::new();
+    let mut samples: Vec<i16> = Vec::new();
     let mut channels: u16 = 0;
     loop {
         let packet = match format.next_packet() {
@@ -362,7 +367,7 @@ pub fn decode_audio_bytes(bytes: &[u8]) -> Option<PcmAudio> {
             Err(_) => continue,
         };
         channels = channels.max(decoded.spec().channels.count() as u16);
-        let mut interleaved = SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
+        let mut interleaved = SampleBuffer::<i16>::new(decoded.capacity() as u64, *decoded.spec());
         interleaved.copy_interleaved_ref(decoded);
         samples.extend_from_slice(interleaved.samples());
     }

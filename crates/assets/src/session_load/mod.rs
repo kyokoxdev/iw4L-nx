@@ -51,6 +51,11 @@ pub fn publish_process_cpus(cpus: Vec<usize>) {
 }
 
 pub fn load_workers() -> usize {
+    // Horizon: std reports no CPU count, which left one worker. The
+    // application owns three cores; the main thread keeps one.
+    if cfg!(target_os = "horizon") {
+        return 2;
+    }
     PROCESS_CPUS
         .get()
         .map(Vec::len)

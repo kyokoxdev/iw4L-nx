@@ -1255,8 +1255,8 @@ fn handle_console_input(
     }
     #[cfg(target_os = "horizon")]
     let pad_type = pad.is_some_and(|pad| {
-        want_close |= pad.just_pressed(bevy::input::gamepad::GamepadButton::East);
-        pad.just_pressed(bevy::input::gamepad::GamepadButton::South)
+        want_close |= pad.just_pressed(crate::gamepad::MENU_BACK);
+        pad.just_pressed(crate::gamepad::MENU_CONFIRM)
     });
 
     if want_close {

@@ -82,7 +82,7 @@ pub(crate) enum ClipError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedPcm {
-    samples: Arc<[f32]>,
+    samples: Arc<[i16]>,
     channels: u16,
     sample_rate: u32,
 }
@@ -454,7 +454,7 @@ impl ClipStore {
                 .and_then(|source| cache.ready(self.common_profile_id, &source))
         }) {
             self.reused_clips += 1;
-            self.reused_bytes += (pcm.samples.len() * size_of::<f32>()) as u64;
+            self.reused_bytes += (pcm.samples.len() * size_of::<i16>()) as u64;
             self.outcomes
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -710,7 +710,7 @@ fn note_outcome(path: ClipPath, result: Result<&PreparedPcm, &ClipError>) {
         Ok(prepared) => {
             PREPARED[slot].fetch_add(1, Ordering::Relaxed);
             SAMPLE_BYTES[slot].fetch_add(
-                (prepared.samples.len() * size_of::<f32>()) as u64,
+                (prepared.samples.len() * size_of::<i16>()) as u64,
                 Ordering::Relaxed,
             );
         }
@@ -851,7 +851,7 @@ fn prepare_loaded(sound: &asset_audio::LoadedSoundPcm) -> Result<PreparedPcm, Cl
     pcm_from_bytes(bits, bytes, sound.channels(), sound.rate)
 }
 
-/// Encoded samples as the mixer wants them: interleaved `f32`, a whole number
+/// Encoded samples as the mixer wants them: interleaved 16-bit, a whole number
 /// of frames, and never empty — a clip with no samples is a failed decode and
 /// not a silent clip.
 fn pcm_from_bytes(
@@ -860,22 +860,28 @@ fn pcm_from_bytes(
     channels: i32,
     rate: u32,
 ) -> Result<PreparedPcm, ClipError> {
-    let mut samples: Vec<f32> = match bits {
-        8 => bytes.iter().map(|&b| (b as f32 - 128.0) / 128.0).collect(),
+    let lanes = channels.max(1) as usize;
+    let whole = |n: usize| n / lanes * lanes;
+    // Collected straight into the `Arc`: one allocation, no Vec to copy from.
+    let samples: Arc<[i16]> = match bits {
+        8 => bytes
+            .iter()
+            .take(whole(bytes.len()))
+            .map(|&b| (i16::from(b) - 128) << 8)
+            .collect(),
         16 => bytes
             .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+            .take(whole(bytes.len() / 2))
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect(),
         _ => return Err(ClipError::Decode),
     };
-    let lanes = channels.max(1) as usize;
-    samples.truncate(samples.len() / lanes * lanes);
     if samples.is_empty() {
         return Err(ClipError::Decode);
     }
     let channels = u16::try_from(channels.max(1)).map_err(|_| ClipError::Decode)?;
     Ok(PreparedPcm {
-        samples: samples.into(),
+        samples,
         channels,
         sample_rate: rate.max(1),
     })
@@ -957,4 +963,21 @@ pub(crate) fn alias_for_clip<'a>(
         None
     }
     find(bank, namespace, alias, key, 0, &mut HashSet::new())
+}
+
+#[cfg(test)]
+mod pcm_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn pcm_from_bytes_keeps_whole_frames_as_i16() {
+        // Stereo 16-bit with a dangling half frame.
+        let bytes = [0x00, 0x80, 0xff, 0x7f, 0x01, 0x00];
+        let pcm = pcm_from_bytes(16, &bytes, 2, 22_050).unwrap();
+        assert_eq!(&*pcm.samples, &[i16::MIN, i16::MAX]);
+        // 8-bit unsigned: 128 is silence, 0 is full negative.
+        let pcm = pcm_from_bytes(8, &[128, 0, 255], 1, 22_050).unwrap();
+        assert_eq!(&*pcm.samples, &[0, i16::MIN, 127 << 8]);
+        assert!(pcm_from_bytes(16, &[0x00], 1, 22_050).is_err());
+    }
 }

@@ -5,7 +5,7 @@ pub mod wgsl_dump;
 pub use alloc_count::{
     ProcessAllocationStats, ProcessCountingAllocator, counting_enabled,
     process_allocation_saturated, process_allocation_slots_used, process_allocations,
-    process_live_heap_bytes, release_freed_heap,
+    process_live_heap_bytes, release_freed_heap, thread_net_alloc_bytes,
 };
 
 use std::{
@@ -281,7 +281,12 @@ fn emit_raw(
     if lvl <= state.file_threshold
         && let Some(file) = state.file.as_mut()
     {
-        let _ = writeln!(file, "{text}");
+        // Switch has no traces file; the elapsed ms is what places a slow stage.
+        if cfg!(target_os = "horizon") {
+            let _ = writeln!(file, "{:>8} {text}", now_ms(state.started));
+        } else {
+            let _ = writeln!(file, "{text}");
+        }
         let _ = file.flush();
     }
     if let Some(file) = state.traces.as_mut() {

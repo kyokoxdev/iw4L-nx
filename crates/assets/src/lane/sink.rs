@@ -149,6 +149,68 @@ use asset_model::{BodyMeshBuild, FpvMeshBuild, SoldierKit, WorldWeaponBuild, sol
 use asset_transport::StageHandle;
 use asset_world::{ModelKind, build_xmodel_mesh, model_kind};
 
+/// Heap each asset type left live on the walk thread: which capture holds the
+/// memory after the zone itself is freed. `walk` spans are top-level and
+/// inclusive of nested assets; `loaded`/`xanim`/`fx` spans are the sink's own
+/// capture work for every asset, nested ones included.
+// ponytail: OOM hunt on Switch; drop once common_mp + map fit.
+pub(crate) struct HeapSpan {
+    kind: &'static str,
+    ty: AssetType,
+    before: Option<i64>,
+}
+
+type HeapRows = HashMap<(&'static str, AssetType), (u32, i64)>;
+
+thread_local! {
+    static HEAP_ROWS: std::cell::RefCell<HeapRows> = Default::default();
+}
+
+impl HeapSpan {
+    pub fn enter(kind: &'static str, ty: AssetType) -> Self {
+        Self { kind, ty, before: diag::thread_net_alloc_bytes() }
+    }
+
+    /// One line per span kind, biggest types first; clears the tally.
+    pub fn drain_lines(label: &str) -> Vec<String> {
+        let rows = HEAP_ROWS.with(|rows| std::mem::take(&mut *rows.borrow_mut()));
+        let mut kinds: Vec<&str> = rows.keys().map(|(kind, _)| *kind).collect();
+        kinds.sort();
+        kinds.dedup();
+        kinds
+            .into_iter()
+            .map(|kind| {
+                let mut sorted: Vec<_> = rows.iter().filter(|((k, _), _)| *k == kind).collect();
+                sorted.sort_by_key(|(_, (_, bytes))| std::cmp::Reverse(*bytes));
+                let total: i64 = sorted.iter().map(|(_, (_, b))| b).sum();
+                let top: Vec<String> = sorted
+                    .iter()
+                    .take(12)
+                    .map(|((_, ty), (n, b))| format!("{ty:?} n={n} {:.1}MiB", *b as f64 / 1048576.0))
+                    .collect();
+                format!(
+                    "{label} heap by asset type [{kind}]: total={:.1}MiB {}",
+                    total as f64 / 1048576.0,
+                    top.join("; ")
+                )
+            })
+            .collect()
+    }
+}
+
+impl Drop for HeapSpan {
+    fn drop(&mut self) {
+        if let (Some(before), Some(after)) = (self.before, diag::thread_net_alloc_bytes()) {
+            HEAP_ROWS.with(|rows| {
+                let mut rows = rows.borrow_mut();
+                let row = rows.entry((self.kind, self.ty)).or_default();
+                row.0 += 1;
+                row.1 += after - before;
+            });
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ZoneWalkSink {
     pub scripts: crate::ScriptSources,
@@ -1109,7 +1171,9 @@ impl AssetSink for ZoneWalkSink {
         ty: AssetType,
         slot: Ptr,
     ) -> fastfile_iw4::Result<()> {
+        let span = HeapSpan::enter("walk", ty);
         let loaded = load_asset_at_observed(s, ty, slot, self)?;
+        drop(span);
         if ty == AssetType::LightDef {
             self.light_def_table += 1;
             if loaded {
@@ -1332,7 +1396,9 @@ impl AssetSink for CommonWalkSink {
         ty: AssetType,
         slot: Ptr,
     ) -> fastfile_iw4::Result<()> {
+        let span = HeapSpan::enter("walk", ty);
         let loaded = load_asset_at_observed(s, ty, slot, self)?;
+        drop(span);
         if ty == AssetType::LightDef {
             self.light_def_table += 1;
             if loaded {
@@ -1352,6 +1418,7 @@ impl AssetLinkSink for CommonWalkSink {
         slot: Ptr,
         insert_slot: Option<Ptr>,
     ) -> fastfile_iw4::Result<()> {
+        let _span = HeapSpan::enter("loaded", ty);
         if let Some(sound) = self.sound.as_mut() {
             sound.iw4_loaded(stream, ty, slot, insert_slot);
         }
@@ -1384,16 +1451,18 @@ impl AssetLinkSink for CommonWalkSink {
                 });
                 if let asset_world::MapXModelSceneAsset::Iw4(skel) = &asset {
                     self.shared_surfaces.retain(stream, geometry, skel.clone());
+                    // One capture serves every catalog: re-capturing per
+                    // catalog held each common_mp mesh three times.
+                    self.fpv_meshes.capture_shared(skel, &self.materials);
+                    self.world_weapons.capture_shared(skel, &self.materials);
+                    self.projectile_meshes
+                        .capture_unclassified_shared(skel, &self.materials);
+                    self.fx_models.capture_shared(skel, &self.materials);
                 }
                 self.scene_models
                     .insert(asset_world::MapXModelAssetKey(name.to_owned()), asset);
             }
-            self.fpv_meshes.capture(stream, &self.materials);
-            self.world_weapons.capture(stream, &self.materials);
-            self.projectile_meshes
-                .capture_unclassified(stream, &self.materials);
             self.models.capture(stream);
-            self.fx_models.capture(stream, &self.materials);
         }
         Ok(())
     }
@@ -1426,6 +1495,7 @@ impl AssetLinkSink for CommonWalkSink {
         s: &ZoneStream<'_>,
         geometry: XAnimPartsGeometry,
     ) -> fastfile_iw4::Result<()> {
+        let _span = HeapSpan::enter("xanim", AssetType::XAnimParts);
         self.xanims.capture_xanim(s, geometry)
     }
 
@@ -1480,6 +1550,7 @@ impl AssetLinkSink for CommonWalkSink {
         s: &ZoneStream<'_>,
         geometry: FxEffectDefGeometry,
     ) -> fastfile_iw4::Result<()> {
+        let _span = HeapSpan::enter("fx", AssetType::Fx);
         self.fx
             .capture(s, geometry, &self.materials, &self.xmodel_names)
     }

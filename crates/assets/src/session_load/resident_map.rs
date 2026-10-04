@@ -81,7 +81,13 @@ pub async fn load_prepared_match(
     let MatchLoadOutcome::Ready(mut prepared) = outcome else {
         return outcome;
     };
-    if let (Some(zone), Some(common)) = (stamp, common) {
+    // Switch: a resident copy and the common set it pins don't fit the heap
+    // beside the match. They also share every decoded image, so the world
+    // upload would copy each texture instead of moving it.
+    if cfg!(target_os = "horizon") {
+        drop(common);
+        forget_common();
+    } else if let (Some(zone), Some(common)) = (stamp, common) {
         let keeping = std::time::Instant::now();
         let resident = prepared.clone();
         prepared.report.push(format!(

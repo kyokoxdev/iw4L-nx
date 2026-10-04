@@ -85,7 +85,9 @@ pub fn counting_enabled() -> bool {
         0 => false,
         1 => true,
         _ => {
-            let on = env_key_present(b"IW4L_COUNTING_ALLOC\0");
+            // Horizon has no environment; the OOM hunt needs the counts there.
+            // ponytail: always on for Switch; gate once the heap fits.
+            let on = cfg!(target_os = "horizon") || env_key_present(b"IW4L_COUNTING_ALLOC\0");
             STATE.store(u8::from(on), Ordering::Relaxed);
             on
         }
@@ -175,6 +177,16 @@ pub fn process_live_heap_bytes() -> Option<u64> {
             .process_allocation_bytes
             .saturating_sub(stats.process_deallocation_bytes),
     )
+}
+
+/// Bytes this thread allocated minus bytes it freed, so far. A span's delta
+/// is what that span left live, less what it freed of other threads' memory.
+pub fn thread_net_alloc_bytes() -> Option<i64> {
+    if !counting_enabled() {
+        return None;
+    }
+    let s = slot();
+    Some(s.alloc_bytes.load(Ordering::Relaxed) as i64 - s.dealloc_bytes.load(Ordering::Relaxed) as i64)
 }
 
 pub fn process_allocation_slots_used() -> usize {

@@ -236,15 +236,40 @@ fn build_port(
             (shader.clone(), Some(shader))
         }
     };
-    let pipelines = plans
+    let pipelines: Vec<_> = plans
         .into_iter()
         .map(|(slot, plan)| (slot, build_pipeline(device, &shader, &plan)))
         .collect();
+    note_built(created.is_some(), pipelines.len());
     PortBuild {
         module,
         created,
         pipelines,
     }
+}
+
+/// Native heap cost of GL programs on Switch: one line per 100 pipelines, so
+/// the heap delta between lines is what Mesa keeps per pipeline.
+// ponytail: boot-debug only, drop once the Switch load fits the heap.
+fn note_built(module: bool, pipelines: usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static MODULES: AtomicUsize = AtomicUsize::new(0);
+    static PIPELINES: AtomicUsize = AtomicUsize::new(0);
+    let modules = MODULES.fetch_add(usize::from(module), Ordering::Relaxed) + usize::from(module);
+    let before = PIPELINES.fetch_add(pipelines, Ordering::Relaxed);
+    let after = before + pipelines;
+    if before / 100 == after / 100 {
+        return;
+    }
+    #[cfg(target_os = "horizon")]
+    let heap = platform_nx::heap_line();
+    #[cfg(not(target_os = "horizon"))]
+    let heap = "";
+    let rust = diag::process_live_heap_bytes().unwrap_or(0) >> 20;
+    diag::info!(
+        World,
+        "exact pipelines built: pipelines={after} modules={modules} {heap} rust={rust}MB"
+    );
 }
 
 fn build_pipeline(

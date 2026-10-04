@@ -5223,6 +5223,7 @@ dependencies = [
  "hud_iw4",
  "lighting_iw4",
  "perf",
+ "platform_nx",
  "render_backend",
  "render_frame",
  "render_material",

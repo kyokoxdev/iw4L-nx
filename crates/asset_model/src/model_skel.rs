@@ -59,10 +59,6 @@ pub struct ModelSkel {
     pub tag_weapon: Option<usize>,
 
     pub pose: Option<ModelPoseSrc>,
-    pub positions: Vec<[f32; 3]>,
-    pub normals: Vec<[f32; 3]>,
-    pub colors: Vec<[f32; 4]>,
-    pub uvs: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
 
     pub surface_materials: Vec<Option<crate::WalkLocalMaterialIndex>>,
@@ -104,7 +100,67 @@ pub struct ModelSkel {
     pub lod_surf_span: [(u16, u16); 4],
 }
 
+type PackedVertex = [u8; sz::GFX_PACKED_VERTEX];
+
+fn packed_word(v: &PackedVertex, offset: usize) -> u32 {
+    u32::from_le_bytes([v[offset], v[offset + 1], v[offset + 2], v[offset + 3]])
+}
+
+fn packed_position(v: &PackedVertex) -> [f32; 3] {
+    [0, 4, 8].map(|o| f32::from_bits(packed_word(v, o)))
+}
+
+fn packed_normal(v: &PackedVertex) -> [f32; 3] {
+    normalize_or_up(unpack_unit_vec(packed_word(v, 24)))
+}
+
+fn packed_color(v: &PackedVertex) -> [f32; 4] {
+    unpack_color(packed_word(v, 16))
+}
+
+fn packed_uv(v: &PackedVertex) -> [f32; 2] {
+    unpack_packed_tex_coords(packed_word(v, 20))
+}
+
+/// Vertex attributes are decoded from `packed_vertices` on read: holding them
+/// expanded as well cost 48 more bytes per vertex, ~430 MiB over common_mp.
 impl ModelSkel {
+    pub fn vertex_count(&self) -> usize {
+        self.packed_vertices.len()
+    }
+
+    pub fn position(&self, i: usize) -> [f32; 3] {
+        packed_position(&self.packed_vertices[i])
+    }
+
+    pub fn normal(&self, i: usize) -> [f32; 3] {
+        packed_normal(&self.packed_vertices[i])
+    }
+
+    pub fn color(&self, i: usize) -> [f32; 4] {
+        packed_color(&self.packed_vertices[i])
+    }
+
+    pub fn uv(&self, i: usize) -> [f32; 2] {
+        packed_uv(&self.packed_vertices[i])
+    }
+
+    pub fn positions(&self, range: core::ops::Range<usize>) -> Vec<[f32; 3]> {
+        range.map(|i| self.position(i)).collect()
+    }
+
+    pub fn normals(&self, range: core::ops::Range<usize>) -> Vec<[f32; 3]> {
+        range.map(|i| self.normal(i)).collect()
+    }
+
+    pub fn colors(&self, range: core::ops::Range<usize>) -> Vec<[f32; 4]> {
+        range.map(|i| self.color(i)).collect()
+    }
+
+    pub fn uvs(&self, range: core::ops::Range<usize>) -> Vec<[f32; 2]> {
+        range.map(|i| self.uv(i)).collect()
+    }
+
     pub fn retained_capability(&self) -> Option<xmodel_runtime::RetainedModelCapability> {
         Some(xmodel_runtime::RetainedModelCapability {
             key: self.name.clone(),
@@ -341,10 +397,6 @@ fn capture_model_skel_iw4(
     let pose = capture_pose_src(stream, &geometry, &bone_name_strs, &bones, num_child);
     let bone_collision = capture_bone_collision(stream, geometry, geometry.num_bones);
 
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colors = Vec::new();
-    let mut uvs = Vec::new();
     let mut indices = Vec::new();
     let mut surface_materials = Vec::new();
     let mut surface_vertex_ranges = Vec::new();
@@ -386,12 +438,8 @@ fn capture_model_skel_iw4(
                 }) {
                     return None;
                 }
-                let base = positions.len();
+                let base = packed_vertices.len();
                 let index_start = indices.len();
-                positions.extend_from_slice(&source.positions[v..v + vn]);
-                normals.extend_from_slice(&source.normals[v..v + vn]);
-                colors.extend_from_slice(&source.colors[v..v + vn]);
-                uvs.extend_from_slice(&source.uvs[v..v + vn]);
                 packed_vertices.extend_from_slice(&source.packed_vertices[v..v + vn]);
                 for skin in &source.vert_skin[v..v + vn] {
                     if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
@@ -445,7 +493,7 @@ fn capture_model_skel_iw4(
                 _ => return None,
             };
 
-            let base = positions.len();
+            let base = packed_vertices.len();
             let index_start = indices.len();
             let surface_skins = decode_surface_skin(
                 stream,
@@ -458,16 +506,6 @@ fn capture_model_skel_iw4(
             for vertex_index in 0..vertex_count {
                 let vertex = vertices.at(vertex_index * sz::GFX_PACKED_VERTEX);
                 packed_vertices.push(copy_packed_vertex_iw4(stream, vertex)?);
-                positions.push([
-                    stream.f32_at(vertex, 0).ok()?,
-                    stream.f32_at(vertex, 4).ok()?,
-                    stream.f32_at(vertex, 8).ok()?,
-                ]);
-                colors.push(unpack_color(stream.u32_at(vertex, 16).ok()?));
-                uvs.push(unpack_packed_tex_coords(stream.u32_at(vertex, 20).ok()?));
-                normals.push(normalize_or_up(unpack_unit_vec(
-                    stream.u32_at(vertex, 24).ok()?,
-                )));
                 let skin = surface_skins[vertex_index];
                 if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
                     rigid_verts += 1;
@@ -513,10 +551,6 @@ fn capture_model_skel_iw4(
         tag_view,
         tag_weapon,
         pose,
-        positions,
-        normals,
-        colors,
-        uvs,
         indices,
         surface_materials,
         surface_vertex_ranges,
@@ -969,10 +1003,6 @@ fn capture_model_skel_t5(
     let num_child = geometry.num_bones.saturating_sub(geometry.num_root_bones);
     let pose = capture_pose_src_t5(stream, &geometry, &bone_name_strs, &bones, num_child);
 
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colors = Vec::new();
-    let mut uvs = Vec::new();
     let mut indices = Vec::new();
     let mut surface_materials = Vec::with_capacity(geometry.surface_count);
     let mut surface_vertex_ranges = Vec::with_capacity(geometry.surface_count);
@@ -1008,7 +1038,7 @@ fn capture_model_skel_t5(
                 .ok()?;
         }
 
-        let base = positions.len();
+        let base = packed_vertices.len();
         let index_start = indices.len();
         let surface_skins = decode_surface_skin_t5(
             stream,
@@ -1022,16 +1052,6 @@ fn capture_model_skel_t5(
         for vertex_index in 0..vertex_count {
             let vertex = vertices.at(vertex_index * GFX_PACKED_VERTEX);
             packed_vertices.push(copy_packed_vertex_t5(stream, vertex)?);
-            positions.push([
-                stream.f32_at(vertex, 0).ok()?,
-                stream.f32_at(vertex, 4).ok()?,
-                stream.f32_at(vertex, 8).ok()?,
-            ]);
-            normals.push(normalize_or_up(unpack_unit_vec(
-                stream.u32_at(vertex, 24).ok()?,
-            )));
-            colors.push(unpack_color(stream.u32_at(vertex, 16).ok()?));
-            uvs.push(unpack_packed_tex_coords(stream.u32_at(vertex, 20).ok()?));
             let skin = surface_skins[vertex_index];
             if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
                 rigid_verts += 1;
@@ -1070,10 +1090,6 @@ fn capture_model_skel_t5(
         tag_view,
         tag_weapon,
         pose,
-        positions,
-        normals,
-        colors,
-        uvs,
         indices,
         surface_materials,
         surface_vertex_ranges,
@@ -1596,10 +1612,6 @@ fn capture_model_skel_iw5(
         });
     };
 
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colors = Vec::new();
-    let mut uvs = Vec::new();
     let mut indices = Vec::new();
     let mut packed_vertices = Vec::new();
     let mut surface_materials = Vec::with_capacity(geometry.surface_count);
@@ -1647,7 +1659,7 @@ fn capture_model_skel_iw5(
             _ => return None,
         };
 
-        let base = positions.len();
+        let base = packed_vertices.len();
         let index_start = indices.len();
         let surface_skins = decode_surface_skin_iw5(
             stream,
@@ -1659,17 +1671,7 @@ fn capture_model_skel_iw5(
 
         for vertex_index in 0..vertex_count {
             let vertex = vertices.at(vertex_index * iw5sz::GFX_PACKED_VERTEX);
-            positions.push([
-                stream.f32_at(vertex, 0).ok()?,
-                stream.f32_at(vertex, 4).ok()?,
-                stream.f32_at(vertex, 8).ok()?,
-            ]);
             packed_vertices.push(copy_packed_vertex_iw5(stream, vertex)?);
-            normals.push(normalize_or_up(unpack_unit_vec(
-                stream.u32_at(vertex, 24).ok()?,
-            )));
-            colors.push(unpack_color(stream.u32_at(vertex, 16).ok()?));
-            uvs.push(unpack_packed_tex_coords(stream.u32_at(vertex, 20).ok()?));
             let skin = surface_skins[vertex_index];
             if skin.weights[1] == 0.0 && skin.weights[0] == 1.0 {
                 rigid_verts += 1;
@@ -1698,10 +1700,6 @@ fn capture_model_skel_iw5(
         tag_view,
         tag_weapon,
         pose,
-        positions,
-        normals,
-        colors,
-        uvs,
         indices,
         surface_materials,
         surface_vertex_ranges,
@@ -1959,4 +1957,24 @@ fn decode_surface_skin_iw5(
         return None;
     }
     Some(skins)
+}
+
+#[cfg(test)]
+mod packed_decode_tests {
+    use super::*;
+
+    #[test]
+    fn packed_vertex_decodes_at_iw4_offsets() {
+        let mut v: PackedVertex = [0; sz::GFX_PACKED_VERTEX];
+        for (i, f) in [1.5f32, -2.0, 1024.25].iter().enumerate() {
+            v[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
+        }
+        v[16..20].copy_from_slice(&0x8040_20ffu32.to_le_bytes());
+        v[20..24].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        v[24..28].copy_from_slice(&0x7f7f_ff7fu32.to_le_bytes());
+        assert_eq!(packed_position(&v), [1.5, -2.0, 1024.25]);
+        assert_eq!(packed_color(&v), unpack_color(0x8040_20ff));
+        assert_eq!(packed_uv(&v), unpack_packed_tex_coords(0x1234_5678));
+        assert_eq!(packed_normal(&v), normalize_or_up(unpack_unit_vec(0x7f7f_ff7f)));
+    }
 }

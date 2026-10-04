@@ -132,6 +132,7 @@ impl ZoneLane for Iw4Lane {
             .sound
             .take()
             .map(|sound| sound.finish(walked.as_ref().map(|_| ()).map_err(|e| e.to_string())));
+        report.extend(super::sink::HeapSpan::drain_lines("map"));
         match &walked {
             Ok(_) => report.push(format!("zone walk: complete, {} assets", sink.walked)),
             Err(e) => report.push(format!(
@@ -796,6 +797,7 @@ impl ZoneLane for Iw4Lane {
         }
         let mut report = sink.models.report("common_mp");
         report.splice(0..0, report_arenas.drain(..));
+        report.extend(super::sink::HeapSpan::drain_lines("common_mp"));
         if let Err(error) = walk {
             report.push(format!(
                 "common_mp model walk: stopped after {} assets — {error}",

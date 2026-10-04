@@ -207,7 +207,13 @@ fn spawn_heap_sampler() {
                 let (used, ..) = platform_nx::heap_mb();
                 if used.abs_diff(last) >= 64 {
                     last = used;
-                    let line = format!("t={}ms {}", start.elapsed().as_millis(), platform_nx::heap_line());
+                    // The rest of `used` is C: Mesa, GL buffers and textures.
+                    let rust = diag::process_live_heap_bytes().unwrap_or(0) >> 20;
+                    let line = format!(
+                        "t={}ms {} rust={rust}MB",
+                        start.elapsed().as_millis(),
+                        platform_nx::heap_line()
+                    );
                     platform_nx::breadcrumb(&line);
                     diag::info!(Launch, "{line}");
                 }

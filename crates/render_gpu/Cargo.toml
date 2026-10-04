@@ -27,5 +27,8 @@ render_frame.workspace = true
 render_material.workspace = true
 bevy.workspace = true
 
+[target.'cfg(target_os = "horizon")'.dependencies]
+platform_nx.workspace = true
+
 [lints]
 workspace = true

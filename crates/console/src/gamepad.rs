@@ -175,6 +175,18 @@ pub(crate) fn track_active_pad(
     };
 }
 
+/// Menu confirm/back. Pads map by position, so on Switch the right face
+/// button (labelled A) is East; Nintendo's convention confirms with it.
+/// Gameplay binds stay positional.
+#[cfg(target_os = "horizon")]
+pub(crate) const MENU_CONFIRM: GamepadButton = GamepadButton::East;
+#[cfg(target_os = "horizon")]
+pub(crate) const MENU_BACK: GamepadButton = GamepadButton::South;
+#[cfg(not(target_os = "horizon"))]
+pub(crate) const MENU_CONFIRM: GamepadButton = GamepadButton::South;
+#[cfg(not(target_os = "horizon"))]
+pub(crate) const MENU_BACK: GamepadButton = GamepadButton::East;
+
 const REPEAT_DELAY: f32 = 0.4;
 const REPEAT_EVERY: f32 = 0.12;
 
@@ -212,10 +224,10 @@ pub(crate) fn drive_menus_with_pad(
         *repeat = None;
         return;
     }
-    if pad.just_pressed(GamepadButton::South) {
+    if pad.just_pressed(MENU_CONFIRM) {
         requests.write(UiMenuRequest::Key(UiMenuKey::Enter));
     }
-    if pad.just_pressed(GamepadButton::East) {
+    if pad.just_pressed(MENU_BACK) {
         requests.write(UiMenuRequest::Key(UiMenuKey::Escape));
     }
     let stick = pad.left_stick();

@@ -75,6 +75,26 @@ impl DecodedMips {
         }
     }
 
+    /// Drop top mips until both sides fit `max`, as IW4's `r_picmip` does.
+    /// A single-level image is kept whole.
+    fn picmip(mut self, max: u32) -> Self {
+        let mut skip = 0;
+        while skip + 1 < self.level_sizes.len()
+            && (self.width >> skip > max || self.height >> skip > max)
+        {
+            skip += 1;
+        }
+        if skip == 0 {
+            return self;
+        }
+        let bytes: usize = self.level_sizes[..skip].iter().map(|&n| n as usize).sum();
+        self.packed = self.packed[bytes..].to_vec();
+        self.level_sizes.drain(..skip);
+        self.width = (self.width >> skip).max(1);
+        self.height = (self.height >> skip).max(1);
+        self
+    }
+
     fn level_count(&self) -> u32 {
         self.level_sizes.len() as u32
     }
@@ -1452,8 +1472,16 @@ fn read_cached_mips(key: &str, io_at: std::time::Instant) -> Option<DecodedMips>
     MIP_IO_NS.fetch_add(io_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
     let mips = DecodedMips::cache_decode(&hit)?;
     MIP_HIT.fetch_add(1, Ordering::Relaxed);
-    Some(mips)
+    Some(mips.picmip(PICMIP_MAX))
 }
+
+/// Largest IWD texture side kept. On Switch the ~3 GB heap also backs GPU
+/// memory, and every common_mp texture at full size does not fit beside the map.
+// ponytail: fixed 512 on Horizon; a setting if docked play wants sharper textures.
+#[cfg(target_os = "horizon")]
+const PICMIP_MAX: u32 = 512;
+#[cfg(not(target_os = "horizon"))]
+const PICMIP_MAX: u32 = u32::MAX;
 
 fn mip_cache_key(crc: u32, size: u64, entry: &str) -> String {
     format!(
@@ -1474,7 +1502,7 @@ fn load_or_decode_mips(candidate: &asset_transport::IwdFile) -> Result<DecodedMi
         return Ok(mips);
     }
     let bytes = candidate.read()?;
-    let mips = decode_iwi_mips(&bytes)?;
+    let mips = decode_iwi_mips(&bytes)?.picmip(PICMIP_MAX);
     let blob = mips.cache_encode();
     let store_at = std::time::Instant::now();
     if let Err(error) = crate::cache_put("mips", &key, &blob) {
@@ -2937,4 +2965,23 @@ fn decode_inline(
         }
     }
     stats
+}
+
+#[cfg(test)]
+mod picmip_tests {
+    use super::*;
+
+    #[test]
+    fn picmip_drops_top_levels_until_fit() {
+        // 1024x256 RGBA chain, each level filled with its index.
+        let levels: Vec<Vec<u8>> = (0..11u32)
+            .map(|l| vec![l as u8; (((1024 >> l).max(1)) * ((256 >> l).max(1)) * 4) as usize])
+            .collect();
+        let mips = DecodedMips::from_levels(1024, 256, MipStorage::Rgba8, levels).picmip(512);
+        assert_eq!((mips.width, mips.height, mips.level_count()), (512, 128, 10));
+        assert_eq!(mips.packed[0], 1);
+        assert_eq!(mips.packed.len(), mips.level_sizes.iter().sum::<u32>() as usize);
+        let single = DecodedMips::single(2048, 2048, vec![0; 16]).picmip(512);
+        assert_eq!((single.width, single.level_count()), (2048, 1));
+    }
 }
