@@ -16,6 +16,38 @@ unsafe extern "C" {
     fn __libnx_exit(code: c_int) -> !;
     static __code_start: u8;
     static __rodata_start: u8;
+    fn mallinfo() -> MallInfo;
+    static fake_heap_start: *const u8;
+    static fake_heap_end: *const u8;
+}
+
+/// newlib `struct mallinfo` (`malloc.h`), all `size_t`.
+#[repr(C)]
+struct MallInfo {
+    arena: usize,
+    _ordblks: usize,
+    _smblks: usize,
+    _hblks: usize,
+    _hblkhd: usize,
+    _usmblks: usize,
+    _fsmblks: usize,
+    uordblks: usize,
+    _fordblks: usize,
+    _keepcost: usize,
+}
+
+/// newlib heap in MB: in use, grown from the libnx heap, and that heap's size.
+/// Counts Rust and C (Mesa) allocations alike; `mem_line` cannot, since libnx
+/// claims the whole heap up front.
+pub fn heap_mb() -> (usize, usize, usize) {
+    // SAFETY: plain FFI; libnx sets the heap bounds before main.
+    let (info, size) = unsafe { (mallinfo(), fake_heap_end as usize - fake_heap_start as usize) };
+    (info.uordblks >> 20, info.arena >> 20, size >> 20)
+}
+
+pub fn heap_line() -> String {
+    let (used, arena, size) = heap_mb();
+    format!("heap used={used}MB arena={arena}MB of {size}MB")
 }
 
 // libnx calls this before main. Only an `nxlink -s` launch needs the BSD
@@ -66,31 +98,42 @@ extern "C" fn _exit(code: c_int) -> ! {
 /// `addr2line -f -e iw4l.elf <offset>`. Release builds keep no frame pointers,
 /// so this is a conservative scan, not an unwind: expect some stale entries.
 // ponytail: boot-debug only, drop once boot is stable.
-fn stack_trace() -> String {
+pub fn stack_trace() -> String {
+    let mut words = [0usize; 24];
+    let n = code_words(&mut words);
+    let mut out = format!("base={:#x} bt=", code_base());
+    for word in &words[..n] {
+        out.push_str(&format!("{word:x} "));
+    }
+    out
+}
+
+pub fn code_base() -> usize {
+    // SAFETY: linker-provided section marker; only its address is used.
+    unsafe { core::ptr::addr_of!(__code_start) as usize }
+}
+
+/// `stack_trace` without allocating: fills `out` with load-base offsets of the
+/// code addresses found in the next 2 KiB of stack, returns how many.
+pub fn code_words(out: &mut [usize]) -> usize {
     let sp: usize;
     // SAFETY: reads the stack pointer.
     unsafe { core::arch::asm!("mov {}, sp", out(reg) sp) };
-    // SAFETY: linker-provided section markers; only their addresses are used.
-    let (lo, hi) = unsafe {
-        (
-            core::ptr::addr_of!(__code_start) as usize,
-            core::ptr::addr_of!(__rodata_start) as usize,
-        )
-    };
-    let mut out = format!("base={lo:#x} bt=");
+    // SAFETY: linker-provided section marker; only its address is used.
+    let (lo, hi) = (code_base(), unsafe { core::ptr::addr_of!(__rodata_start) as usize });
     let mut found = 0;
     for i in 0..256 {
+        if found == out.len() {
+            break;
+        }
         // SAFETY: the frames above the current sp are mapped stack.
         let word = unsafe { core::ptr::read_volatile((sp + i * 8) as *const usize) };
         if (lo..hi).contains(&word) && word % 4 == 0 {
-            out.push_str(&format!("{:x} ", word - lo));
+            out[found] = word - lo;
             found += 1;
-            if found == 24 {
-                break;
-            }
         }
     }
-    out
+    found
 }
 
 // libnx hands out 12 pthread keys per process (`threadTlsAlloc`); std, tracing,
@@ -241,7 +284,7 @@ fn mem_line() -> String {
 pub fn boot_env() {
     // SAFETY: plain FFI; applet services are up by `main`.
     let applet = unsafe { appletGetAppletType() };
-    breadcrumb(&format!("env: applet_type={applet} {}", mem_line()));
+    breadcrumb(&format!("env: applet_type={applet} {} {}", mem_line(), heap_line()));
 }
 
 // newlib declares sysconf but libnx does not implement it. std asks for the

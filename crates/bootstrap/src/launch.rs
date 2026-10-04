@@ -57,6 +57,7 @@ fn launch_report(
     }
 }
 
+#[cfg_attr(target_os = "horizon", allow(dead_code))]
 #[derive(Resource)]
 struct ShellCommonTask {
     task: bevy::tasks::Task<assets::ShellCommon>,
@@ -64,6 +65,7 @@ struct ShellCommonTask {
     started: std::time::Instant,
 }
 
+#[cfg_attr(target_os = "horizon", allow(dead_code))]
 fn install_class_catalog(
     mut commands: Commands,
     shell: Option<ResMut<ShellCommonTask>>,
@@ -241,6 +243,9 @@ fn run_menu(games: asset_transport::GamesRoot, artifacts: PathBuf) {
              missing base files; DLC maps alone are insufficient.\n\nSearch details: {error}"
         ))
     });
+    // Switch: the common set holds every common_mp model at every LOD and does
+    // not fit beside the menu in the ~3 GB heap. CAC weapon lists stay empty.
+    #[cfg(not(target_os = "horizon"))]
     let shell_common = assets::load_pool().spawn(assets::load_shell_common(games.clone()));
     let (mut menus, menu_report) = load_ui_menu_catalog(&ui_games);
     ui::install_frontend_menus(&mut menus).unwrap_or_else(|error| fatal(&error));
@@ -301,6 +306,7 @@ fn run_menu(games: asset_transport::GamesRoot, artifacts: PathBuf) {
             ..default()
         },
     ));
+    #[cfg(not(target_os = "horizon"))]
     app.insert_resource(ShellCommonTask {
         task: shell_common,
         perk_table: menus.string_table("mp/perkTable.csv").cloned(),
