@@ -208,6 +208,14 @@ fn schedule_admitted_pipelines(
     scheduled: &mut HashSet<ExactColourPipelineKey>,
     current: &mut Vec<ExactPipelineSlot>,
 ) {
+    // Switch: Mesa keeps ~1MB per GL program and the heap backs GPU memory,
+    // so the full working set (~1500 on mp_rust) cannot fit. Build only what
+    // draws discover; the overlay still waits for the visible set.
+    // ponytail: no eviction, built set only grows; add LRU eviction if a
+    // match's built count nears the heap.
+    if cfg!(target_os = "horizon") {
+        return;
+    }
     for (main_format, samples) in view_sig.iter().copied() {
         let techs = lighting_iw4::LIT_TECH_NO_SHADOW_DIR_SLOTS
             .into_iter()
