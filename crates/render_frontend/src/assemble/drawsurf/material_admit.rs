@@ -7,6 +7,11 @@ use super::sm3_wgsl::ValidatedPassWgsl;
 use super::{MaterialProgramCompile, RuntimeProgramRegistry};
 
 fn shader_from_generated_wgsl(source: String, path: String) -> Shader {
+    let source = if render_frame::shader_srgb_write() {
+        d3d9_sm3::with_srgb_write_entries(&source)
+    } else {
+        source
+    };
     if source.contains('#') {
         return Shader::from_wgsl(source, path);
     }

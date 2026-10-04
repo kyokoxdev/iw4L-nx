@@ -242,13 +242,21 @@ impl PostFxTargets {
                     dimension: TextureDimension::D2,
                     format: TextureFormat::Rgba8Unorm,
                     usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[TextureFormat::Rgba8UnormSrgb],
+                    view_formats: if super::shader_srgb_write() {
+                        &[]
+                    } else {
+                        &[TextureFormat::Rgba8UnormSrgb]
+                    },
                 });
                 let view = texture.create_view(&TextureViewDescriptor::default());
-                let srgb_view = texture.create_view(&TextureViewDescriptor {
-                    format: Some(TextureFormat::Rgba8UnormSrgb),
-                    ..default()
-                });
+                let srgb_view = if super::shader_srgb_write() {
+                    view.clone()
+                } else {
+                    texture.create_view(&TextureViewDescriptor {
+                        format: Some(TextureFormat::Rgba8UnormSrgb),
+                        ..default()
+                    })
+                };
                 Intermediate {
                     _texture: texture,
                     view,
@@ -504,9 +512,16 @@ fn queue_postfx_pipeline(
         fragment: Some(FragmentState {
             shader: film.shader.clone(),
             shader_defs: Vec::new(),
-            entry_point: Some(PASS_FRAGMENT_ENTRY.into()),
+            entry_point: Some(
+                super::colour_submit::srgb_write_entry(
+                    PASS_FRAGMENT_ENTRY.into(),
+                    TextureFormat::Rgba8Unorm,
+                    state.srgb_write_enable(),
+                )
+                .into(),
+            ),
             targets: vec![Some(ColorTargetState {
-                format: if state.srgb_write_enable() {
+                format: if state.srgb_write_enable() && !super::shader_srgb_write() {
                     TextureFormat::Rgba8UnormSrgb
                 } else {
                     TextureFormat::Rgba8Unorm

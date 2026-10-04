@@ -68,6 +68,19 @@ pub fn bound_slots() -> bool {
     })
 }
 
+/// GL has no sRGB view of a linear texture (`DownlevelFlags::VIEW_FORMATS`),
+/// so `srgb_write` passes draw into the raw view through a shader that encodes
+/// linear to sRGB itself (`d3d9_sm3::with_srgb_write_entries`). Blending then
+/// runs on encoded values, as it did on most D3D9-era hardware. On for
+/// Horizon; `IW4L_SHADER_SRGB=1` forces it elsewhere.
+// ponytail: cfg + env like `bound_slots`; read VIEW_FORMATS from the adapter once PC GL needs it.
+pub fn shader_srgb_write() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(target_os = "horizon") || std::env::var("IW4L_SHADER_SRGB").is_ok_and(|v| v == "1")
+    })
+}
+
 fn bound_slot_bind_entries(abi: &PassProgramAbi) -> impl Iterator<Item = WgpuBindLayoutEntry> {
     let entry = |binding: u32, kind| WgpuBindLayoutEntry {
         group: u8::try_from(d3d9_sm3::TEXTURE_TABLE_GROUP).expect("group 1"),

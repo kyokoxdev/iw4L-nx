@@ -487,7 +487,7 @@ pub(super) struct ExactColourPipelineKey {
 }
 
 fn exact_colour_target_format(target: TextureFormat, srgb_write: bool) -> TextureFormat {
-    if srgb_write {
+    if srgb_write && !super::shader_srgb_write() {
         target.add_srgb_suffix()
     } else {
         target
@@ -503,6 +503,16 @@ struct ExactColourTargetViews {
 
 impl ExactColourTargetViews {
     fn new(target: &ViewTarget) -> Self {
+        if super::shader_srgb_write() {
+            let raw = target.main_texture_view().clone();
+            let sampled = target.sampled_main_texture_view().cloned();
+            return Self {
+                main_srgb: raw.clone(),
+                main_raw: raw,
+                sampled_srgb: sampled.clone(),
+                sampled_raw: sampled,
+            };
+        }
         let raw_format = target.main_texture_format();
         let srgb_format = raw_format.add_srgb_suffix();
         Self {
@@ -548,6 +558,16 @@ fn exact_fragment_entry(
     }
 }
 
+/// `entry`, or its in-shader sRGB encoding twin when `srgb_write` lands on a
+/// raw target that has an sRGB variant (see `shader_srgb_write`).
+pub(super) fn srgb_write_entry(entry: String, target: TextureFormat, srgb_write: bool) -> String {
+    if srgb_write && super::shader_srgb_write() && target.add_srgb_suffix() != target {
+        entry + d3d9_sm3::SRGB_WRITE_ENTRY_SUFFIX
+    } else {
+        entry
+    }
+}
+
 fn exact_pipeline_plan(
     ports: &ExactColourPipeline,
     registry: &ExactPipelineRegistry,
@@ -576,7 +596,11 @@ fn exact_pipeline_plan(
             "iw4_exact_colour/{:016x}/{}",
             key.port.vertex_program_hash, key.port.vertex_type
         ),
-        fragment_entry: exact_fragment_entry(key.target, key.forward_z, key.state0.alpha_test),
+        fragment_entry: srgb_write_entry(
+            exact_fragment_entry(key.target, key.forward_z, key.state0.alpha_test),
+            key.target,
+            key.state0.srgb_write,
+        ),
         vertex_buffers: if cached_lighting && !port.cached_vertex_buffers.is_empty() {
             port.cached_vertex_buffers.clone()
         } else {

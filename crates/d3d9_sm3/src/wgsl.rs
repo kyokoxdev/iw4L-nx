@@ -51,6 +51,47 @@ pub fn pass_fragment_alpha_test_entry(index: usize) -> String {
     format!("{PASS_FRAGMENT_ENTRY}_atest{index}")
 }
 
+/// Suffix of the entry points [`with_srgb_write_entries`] adds.
+pub const SRGB_WRITE_ENTRY_SUFFIX: &str = "_srgbw";
+
+/// `source` plus, for every fragment entry `name`, an entry `name_srgbw` that
+/// returns the same colour encoded linear -> sRGB. For targets with no sRGB
+/// view (GL): D3D9 `SRGBWRITEENABLE` then happens in the shader. Relies on the
+/// lowering's shape: each fragment entry ends `    return <reg>;\n}\n`, the
+/// only unindented `}` in its body.
+pub fn with_srgb_write_entries(source: &str) -> String {
+    const HEAD: &str = "\n@fragment\nfn ";
+    let mut out = String::from(source);
+    let mut rest = source;
+    while let Some(at) = rest.find(HEAD) {
+        let entry = &rest[at..];
+        let Some(end) = entry.find("\n}\n") else {
+            break;
+        };
+        let body = &entry[..end + 3];
+        let name_end = HEAD.len() + body[HEAD.len()..].find('(').unwrap_or(0);
+        let name = &body[HEAD.len()..name_end];
+        let Some(ret) = body.rfind("    return ") else {
+            break;
+        };
+        let value = body[ret + 11..].trim_end().trim_end_matches('}').trim_end().trim_end_matches(';');
+        out.push_str(&body[..HEAD.len()]);
+        out.push_str(name);
+        out.push_str(SRGB_WRITE_ENTRY_SUFFIX);
+        out.push_str(&body[name_end..ret]);
+        writeln!(out, "    return sm3_srgb_encode({value});\n}}").unwrap();
+        rest = &entry[end + 3..];
+    }
+    out.push_str(
+        "\nfn sm3_srgb_encode(c: vec4<f32>) -> vec4<f32> {\n\
+         \x20   let x = clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0));\n\
+         \x20   let hi = 1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);\n\
+         \x20   return vec4<f32>(select(hi, x * 12.92, x <= vec3<f32>(0.0031308)), c.a);\n\
+         }\n",
+    );
+    out
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sm3Wgsl {
     pub source: String,
@@ -1970,4 +2011,20 @@ fn register_name(register: Sm3Register) -> String {
 
 fn component_name(component: u8) -> char {
     ['x', 'y', 'z', 'w'][usize::from(component)]
+}
+
+#[cfg(test)]
+mod srgb_write_tests {
+    use super::*;
+
+    #[test]
+    fn adds_an_encoding_twin_per_fragment_entry() {
+        let source = "fn helper() {\n}\n\n@fragment\nfn sm3_fragment_main(varyings: V) -> @location(0) vec4<f32> {\n    if x { discard; }\n    return r0;\n}\n\n@fragment\nfn sm3_fragment_main_atest0(varyings: V) -> @location(0) vec4<f32> {\n    return oC0;\n}\n";
+        let out = with_srgb_write_entries(source);
+        assert!(out.starts_with(source));
+        assert!(out.contains("fn sm3_fragment_main_srgbw(varyings: V) -> @location(0) vec4<f32> {\n    if x { discard; }\n    return sm3_srgb_encode(r0);\n}"));
+        assert!(out.contains("fn sm3_fragment_main_atest0_srgbw(varyings: V) -> @location(0) vec4<f32> {\n    return sm3_srgb_encode(oC0);\n}"));
+        assert_eq!(out.matches("@fragment").count(), 4);
+        assert_eq!(out.matches("fn sm3_srgb_encode").count(), 1);
+    }
 }

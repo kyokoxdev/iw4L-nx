@@ -23,5 +23,6 @@ pub use wgsl::{
     PASS_FRAGMENT_ENTRY, PASS_VERTEX_ENTRY, PassWgsl, Sm3Wgsl, Sm3WgslError,
     TEXTURE_TABLE_BINDING_2D, TEXTURE_TABLE_BINDING_3D, TEXTURE_TABLE_BINDING_CUBE,
     TEXTURE_TABLE_BINDING_SAMPLERS, TEXTURE_TABLE_GROUP, bound_slot_bindings, lower_pass_to_wgsl,
-    lower_sm3_to_wgsl, pass_fragment_alpha_test_entry, texture_slot_rows, texture_slot_word,
+    SRGB_WRITE_ENTRY_SUFFIX, lower_sm3_to_wgsl, pass_fragment_alpha_test_entry, texture_slot_rows,
+    texture_slot_word, with_srgb_write_entries,
 };

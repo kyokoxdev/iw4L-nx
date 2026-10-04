@@ -222,10 +222,15 @@ fn build_port(
     let (shader, created) = match existing {
         Some(shader) => (shader, None),
         None => {
+            let wgsl = if super::shader_srgb_write() {
+                std::borrow::Cow::Owned(d3d9_sm3::with_srgb_write_entries(source.wgsl()))
+            } else {
+                std::borrow::Cow::Borrowed(source.wgsl())
+            };
             let shader = Arc::new(unsafe {
                 device.create_shader_module(ShaderModuleDescriptor {
                     label: Some(&label),
-                    source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(source.wgsl())),
+                    source: ShaderSource::Wgsl(wgsl),
                 })
             });
             (shader.clone(), Some(shader))
