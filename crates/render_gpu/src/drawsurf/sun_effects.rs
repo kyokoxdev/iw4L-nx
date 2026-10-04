@@ -4,7 +4,7 @@ use bevy::core_pipeline::{Core3d, Core3dSystems};
 use bevy::prelude::*;
 use bevy::render::RenderStartup;
 use bevy::render::render_resource::binding_types::{
-    sampler, texture_2d, texture_depth_2d, uniform_buffer_sized,
+    sampler, texture_2d, uniform_buffer_sized,
 };
 use bevy::render::render_resource::{
     BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent,
@@ -244,7 +244,7 @@ fn init_sun_effects(
             ShaderStages::VERTEX_FRAGMENT,
             (
                 uniform_buffer_sized(false, NonZeroU64::new(PARAMS_SIZE)),
-                texture_depth_2d(),
+                texture_2d(TextureSampleType::Float { filterable: false }),
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),

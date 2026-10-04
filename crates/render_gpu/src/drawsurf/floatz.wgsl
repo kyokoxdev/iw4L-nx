@@ -14,17 +14,18 @@ fn vs_fullscreen(@builtin(vertex_index) vertex_index: u32) -> VsOut {
     return out;
 }
 
+// Unfilterable float, not texture_depth_*: GLSL has no textureLoad on depth textures.
 #ifdef MULTISAMPLED
-@group(0) @binding(0) var depth_tex: texture_depth_multisampled_2d;
+@group(0) @binding(0) var depth_tex: texture_multisampled_2d<f32>;
 #else
-@group(0) @binding(0) var depth_tex: texture_depth_2d;
+@group(0) @binding(0) var depth_tex: texture_2d<f32>;
 #endif
 @group(0) @binding(1) var<uniform> params: Params;
 
 @fragment
 fn fs_floatz(in: VsOut) -> @location(0) f32 {
     let coords = vec2<i32>(floor(in.position.xy));
-    let depth = textureLoad(depth_tex, coords, 0);
+    let depth = textureLoad(depth_tex, coords, 0).x;
     if depth > params.znear.z {
         let ndc = (depth - params.znear.z) / params.znear.w;
         return -params.znear.y / ndc;

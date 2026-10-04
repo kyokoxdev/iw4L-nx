@@ -23,7 +23,8 @@ struct SunParams {
 }
 
 @group(0) @binding(0) var<uniform> params: SunParams;
-@group(0) @binding(1) var depth_tex: texture_depth_2d;
+// Unfilterable float, not texture_depth_2d: GLSL has no textureLoad on depth textures.
+@group(0) @binding(1) var depth_tex: texture_2d<f32>;
 @group(0) @binding(2) var prev_history: texture_2d<f32>;
 @group(0) @binding(3) var color_tex: texture_2d<f32>;
 @group(0) @binding(4) var color_samp: sampler;
@@ -74,7 +75,7 @@ fn probe_visibility() -> f32 {
             if pixel.x < 0.0 || pixel.y < 0.0 || pixel.x >= size.x || pixel.y >= size.y {
                 continue;
             }
-            let depth = textureLoad(depth_tex, vec2<i32>(pixel), 0);
+            let depth = textureLoad(depth_tex, vec2<i32>(pixel), 0).x;
             counted = counted + 1.0;
             if depth <= 0.002 {
                 visible = visible + 1.0;

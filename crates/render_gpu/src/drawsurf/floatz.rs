@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::render::RenderStartup;
 use bevy::render::render_phase::TrackedRenderPass;
 use bevy::render::render_resource::binding_types::{
-    texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer_sized,
+    texture_2d, texture_2d_multisampled, uniform_buffer_sized,
 };
 use bevy::render::render_resource::{
     BindGroup, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BindingResource,
@@ -12,8 +12,8 @@ use bevy::render::render_resource::{
     ColorTargetState, ColorWrites, CommandEncoder, Extent3d, FragmentState, LoadOp, Operations,
     PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines,
-    StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewId, VertexState,
+    StoreOp, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType,
+    TextureUsages, TextureView, TextureViewDescriptor, TextureViewId, VertexState,
 };
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::shader::Shader;
@@ -116,7 +116,7 @@ fn init_pipeline(
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (
-                    texture_depth_2d(),
+                    texture_2d(TextureSampleType::Float { filterable: false }),
                     uniform_buffer_sized(false, NonZeroU64::new(PARAMS_SIZE)),
                 ),
             ),
@@ -126,7 +126,7 @@ fn init_pipeline(
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (
-                    texture_depth_2d_multisampled(),
+                    texture_2d_multisampled(TextureSampleType::Float { filterable: false }),
                     uniform_buffer_sized(false, NonZeroU64::new(PARAMS_SIZE)),
                 ),
             ),
