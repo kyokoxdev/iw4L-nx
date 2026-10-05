@@ -68,6 +68,11 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
     app.edit_schedule(Last, |schedule| {
         schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
     });
+    // The authority systems are one chain; the multithreaded executor only adds
+    // a hand-off per system, twice a frame.
+    app.edit_schedule(FixedUpdate, |schedule| {
+        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    });
 
     if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
         render_app.edit_schedule(bevy::render::renderer::RenderGraph, |schedule| {
@@ -116,8 +121,13 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
     let plugins = DefaultPlugins
         .set(window)
         .set(LogPlugin {
+            #[cfg(not(feature = "span-profile"))]
             filter: "warn,iw4l=info".into(),
+            #[cfg(feature = "span-profile")]
+            filter: crate::span_profile::FILTER.into(),
             level: bevy::log::Level::WARN,
+            #[cfg(feature = "span-profile")]
+            custom_layer: crate::span_profile::layer,
             #[cfg(target_os = "horizon")]
             fmt_layer: |_| {
                 Some(Box::new(
@@ -134,11 +144,38 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
             ..default()
         });
     #[cfg(target_os = "horizon")]
-    let plugins = plugins.add_after::<WindowPlugin>(platform_nx::NxPlugin);
+    let plugins = plugins
+        .add_after::<WindowPlugin>(platform_nx::NxPlugin)
+        .set(bevy::app::TaskPoolPlugin {
+            task_pool_options: horizon_task_pools(),
+        });
     if pipelined_rendering() {
         plugins
     } else {
         plugins.disable::<PipelinedRenderingPlugin>()
+    }
+}
+
+/// One thread per Bevy pool, all on core 2: core 0 is the main thread's and
+/// core 1 the render thread's (`platform_nx::pin_current_thread`).
+#[cfg(target_os = "horizon")]
+fn horizon_task_pools() -> bevy::app::TaskPoolOptions {
+    use bevy::app::{TaskPoolOptions, TaskPoolThreadAssignmentPolicy};
+    let pool = |name: &'static str| TaskPoolThreadAssignmentPolicy {
+        min_threads: 1,
+        max_threads: 1,
+        percent: 1.0,
+        on_thread_spawn: Some(std::sync::Arc::new(move || {
+            platform_nx::pin_current_thread(2, 0b100, name);
+        })),
+        on_thread_destroy: None,
+    };
+    TaskPoolOptions {
+        min_total_threads: 3,
+        max_total_threads: 3,
+        io: pool("io"),
+        async_compute: pool("async"),
+        compute: pool("compute"),
     }
 }
 

@@ -1445,7 +1445,16 @@ impl AssetLinkSink for CommonWalkSink {
                     geometry,
                     Some(&self.materials),
                 )
-                .map(|skel| asset_world::MapXModelSceneAsset::Iw4(std::sync::Arc::new(skel)))
+                .map(|mut skel| {
+                    // A match draws a fraction of common_mp's models; on Switch
+                    // the rest wait on the SD card instead of the shared heap.
+                    if cfg!(target_os = "horizon")
+                        && let Err(error) = skel.spill_geometry()
+                    {
+                        diag::warn!(Zone, "xmodel spill {name}: {error}; kept resident");
+                    }
+                    asset_world::MapXModelSceneAsset::Iw4(std::sync::Arc::new(skel))
+                })
                 .unwrap_or(asset_world::MapXModelSceneAsset::Unavailable {
                     reason: "common XModel skeleton capture failed",
                 });

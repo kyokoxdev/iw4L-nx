@@ -2,7 +2,7 @@ use bevy::prelude::Resource;
 
 #[derive(Resource, Default)]
 pub struct Retiring {
-    handed: Vec<Box<dyn std::any::Any + Send + Sync>>,
+    handed: Vec<Retired>,
     teardown_requested: bool,
     jobs: u64,
     values: u64,
@@ -10,9 +10,18 @@ pub struct Retiring {
     teardown_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// A handed-over value with its type name, so a slow drop can be named.
+pub struct Retired {
+    pub name: &'static str,
+    pub value: Box<dyn std::any::Any + Send + Sync>,
+}
+
 impl Retiring {
     pub fn hand_over<T: Send + Sync + 'static>(&mut self, value: T) {
-        self.handed.push(Box::new(value));
+        self.handed.push(Retired {
+            name: std::any::type_name::<T>(),
+            value: Box::new(value),
+        });
         self.values = self.values.saturating_add(1);
     }
 
@@ -20,7 +29,7 @@ impl Retiring {
         self.teardown_requested = true;
     }
 
-    pub fn take_batch(&mut self) -> (Vec<Box<dyn std::any::Any + Send + Sync>>, bool) {
+    pub fn take_batch(&mut self) -> (Vec<Retired>, bool) {
         let batch = std::mem::take(&mut self.handed);
         let teardown = std::mem::take(&mut self.teardown_requested);
         if !batch.is_empty() {

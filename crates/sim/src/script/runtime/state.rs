@@ -26,6 +26,9 @@ pub(crate) struct Runtime {
     pub(crate) buckets: BTreeMap<i64, VecDeque<u64>>,
     pub(crate) spawned: Vec<u64>,
     pub(crate) waiters: Vec<crate::script::Waiter>,
+    /// Per thread, an upper bound on the frame of its endon waiters: lets
+    /// `Op::Return` skip the scan of every waiter when none can match.
+    pub(crate) endon_top: std::collections::HashMap<u64, usize>,
     pub(crate) dvars: BTreeMap<String, String>,
     pub(crate) loading: bool,
     pub(crate) precached: BTreeMap<(&'static str, String), i32>,

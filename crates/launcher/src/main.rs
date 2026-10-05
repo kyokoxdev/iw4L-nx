@@ -8,149 +8,8 @@ extern crate platform_nx;
 
 use asset_transport::{ensure_artifacts_dir, games_root_from_env};
 
-#[cfg(not(target_os = "horizon"))]
 #[global_allocator]
 static PROCESS_ALLOCATOR: diag::ProcessCountingAllocator = diag::ProcessCountingAllocator;
-
-#[cfg(target_os = "horizon")]
-#[global_allocator]
-static PROCESS_ALLOCATOR: NxAllocator = NxAllocator;
-
-/// Counting allocator that also keeps the live allocations of 1 MB or more
-/// (up to `RING`), with the code addresses on the caller's stack, in static
-/// memory. A free clears its slot, so the alloc-failure hook dumps what holds
-/// the heap at the failure to boot.txt: the heap is full by then, so the
-/// record itself must never need it.
-// ponytail: OOM hunt only; drop once the menu fits.
-#[cfg(target_os = "horizon")]
-struct NxAllocator;
-
-#[cfg(target_os = "horizon")]
-mod big_allocs {
-    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-
-    pub const MIN: usize = 1 << 20;
-    const RING: usize = 4096;
-    const PCS: usize = 12;
-
-    struct Slot {
-        ptr: AtomicUsize,
-        size: AtomicUsize,
-        pcs: [AtomicUsize; PCS],
-    }
-
-    static SLOTS: [Slot; RING] = [const {
-        Slot {
-            ptr: AtomicUsize::new(0),
-            size: AtomicUsize::new(0),
-            pcs: [const { AtomicUsize::new(0) }; PCS],
-        }
-    }; RING];
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-
-    pub fn record(ptr: *mut u8, size: usize) {
-        if ptr.is_null() {
-            return;
-        }
-        let mut pcs = [0usize; PCS];
-        let n = platform_nx::code_words(&mut pcs);
-        let slot = &SLOTS[NEXT.fetch_add(1, Relaxed) % RING];
-        slot.ptr.store(ptr as usize, Relaxed);
-        slot.size.store(size, Relaxed);
-        for (to, pc) in slot.pcs.iter().zip(pcs.iter().take(n)) {
-            to.store(*pc, Relaxed);
-        }
-    }
-
-    // ponytail: linear scan per big free; big allocs are a few thousand per load.
-    pub fn forget(ptr: *mut u8) {
-        let ptr = ptr as usize;
-        for slot in &SLOTS {
-            if slot.ptr.load(Relaxed) == ptr {
-                slot.size.store(0, Relaxed);
-                slot.ptr.store(0, Relaxed);
-                return;
-            }
-        }
-    }
-
-    /// Live allocations, oldest first: `big <bytes> <offset>...`, offsets
-    /// for addr2line.
-    pub fn dump() {
-        use std::fmt::Write as _;
-        // 4096 lines of ~150 bytes; static so a full heap cannot stop the dump.
-        static mut BUF: [u8; 1 << 20] = [0; 1 << 20];
-        struct Cursor(usize);
-        impl std::fmt::Write for Cursor {
-            fn write_str(&mut self, text: &str) -> std::fmt::Result {
-                // SAFETY: only the failing thread's alloc-error hook reaches here, once.
-                let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
-                let end = (self.0 + text.len()).min(buf.len());
-                buf[self.0..end].copy_from_slice(&text.as_bytes()[..end - self.0]);
-                self.0 = end;
-                Ok(())
-            }
-        }
-        let total = NEXT.load(Relaxed);
-        let mut out = Cursor(0);
-        let live: usize = SLOTS.iter().map(|slot| slot.size.load(Relaxed)).sum();
-        let _ = writeln!(
-            out,
-            "big allocs: {total} >= 1MB made; live ones follow ({}MB, ring {RING})",
-            live >> 20
-        );
-        for i in total.saturating_sub(RING)..total {
-            let slot = &SLOTS[i % RING];
-            if slot.size.load(Relaxed) == 0 {
-                continue;
-            }
-            let _ = write!(out, "big {}", slot.size.load(Relaxed));
-            for pc in &slot.pcs {
-                let _ = write!(out, " {:x}", pc.load(Relaxed));
-            }
-            let _ = writeln!(out);
-        }
-        // SAFETY: as above.
-        let text = unsafe { &(&*core::ptr::addr_of!(BUF))[..out.0] };
-        platform_nx::breadcrumb(String::from_utf8_lossy(text).trim_end());
-    }
-}
-
-#[cfg(target_os = "horizon")]
-impl NxAllocator {
-    fn note(ptr: *mut u8, size: usize) -> *mut u8 {
-        if size >= big_allocs::MIN {
-            big_allocs::record(ptr, size);
-        }
-        ptr
-    }
-}
-
-#[cfg(target_os = "horizon")]
-unsafe impl std::alloc::GlobalAlloc for NxAllocator {
-    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        Self::note(unsafe { diag::ProcessCountingAllocator.alloc(layout) }, layout.size())
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
-        Self::note(unsafe { diag::ProcessCountingAllocator.alloc_zeroed(layout) }, layout.size())
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        if layout.size() >= big_allocs::MIN {
-            big_allocs::forget(ptr);
-        }
-        unsafe { diag::ProcessCountingAllocator.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
-        let new = unsafe { diag::ProcessCountingAllocator.realloc(ptr, layout, new_size) };
-        if !new.is_null() && layout.size() >= big_allocs::MIN {
-            big_allocs::forget(ptr);
-        }
-        Self::note(new, new_size)
-    }
-}
 
 fn main() {
     // panic=abort on Switch shows only hbmenu's generic error; keep the message.
@@ -162,6 +21,8 @@ fn main() {
         platform_nx::boot_env();
         std::panic::set_hook(Box::new(|info| {
             platform_nx::breadcrumb(&format!("panic: {info}"));
+            // A GL allocation failure surfaces as DeviceLost, then a panic.
+            platform_nx::dump_heap_samples();
             diag::exit_launch_error(&format!("panic: {info}"))
         }));
         // Allocation failure aborts without running the panic hook.
@@ -185,7 +46,7 @@ fn main() {
                 "alloc failed: {layout:?} {}",
                 platform_nx::heap_line()
             ));
-            big_allocs::dump();
+            platform_nx::dump_heap_samples();
             std::process::abort()
         });
     }

@@ -14,12 +14,65 @@ unsafe extern "C" {
     fn svcGetInfo(out: *mut u64, id0: u32, handle: u32, id1: u64) -> u32;
     fn appletGetAppletType() -> u32;
     fn appletSetMediaPlaybackState(state: bool) -> u32;
+    fn svcSetThreadCoreMask(handle: u32, preferred_core: i32, affinity_mask: u32) -> u32;
+    fn svcGetCurrentProcessorNumber() -> u32;
+    fn clkrstInitialize() -> u32;
+    fn clkrstExit();
+    fn clkrstOpenSession(session: *mut ClkrstSession, module: u32, unk: u32) -> u32;
+    fn clkrstCloseSession(session: *mut ClkrstSession);
+    fn clkrstSetClockRate(session: *mut ClkrstSession, hz: u32) -> u32;
     fn __libnx_exit(code: c_int) -> !;
     static __code_start: u8;
     static __rodata_start: u8;
     fn mallinfo() -> MallInfo;
     static fake_heap_start: *const u8;
     static fake_heap_end: *const u8;
+}
+
+/// libnx `ClkrstSession` (one `Service`: handle, own_handle, object_id, u16).
+#[repr(C)]
+struct ClkrstSession([u32; 4]);
+
+/// Applications run the CPU at 1020 MHz; 1785 MHz is the stock boost clock
+/// (what `ApmCpuBoostMode_FastLoad` uses, minus its GPU underclock). Frames are
+/// CPU-bound on both the main and render threads.
+// ponytail: set once; a dock/undock or sleep resets it. Reapply on
+// performance-mode change if that shows up in play.
+fn boost_cpu() -> u32 {
+    const PCV_MODULE_ID_CPU_BUS: u32 = 0x4000_0001;
+    const CPU_HZ: u32 = 1_785_000_000;
+    // SAFETY: plain FFI; the session is opened, used and closed here.
+    unsafe {
+        let rc = clkrstInitialize();
+        if rc != 0 {
+            return rc;
+        }
+        let mut session = ClkrstSession([0; 4]);
+        let mut rc = clkrstOpenSession(&mut session, PCV_MODULE_ID_CPU_BUS, 3);
+        if rc == 0 {
+            rc = clkrstSetClockRate(&mut session, CPU_HZ);
+            clkrstCloseSession(&mut session);
+        }
+        clkrstExit();
+        rc
+    }
+}
+
+/// libnx creates every pthread with `cpuid = -2`: the process default core,
+/// affinity that core only. Without this the main thread, the render thread
+/// and every pool share one core of the three. Logs the move to boot.txt.
+pub fn pin_current_thread(preferred: i32, mask: u32, name: &str) {
+    const CUR_THREAD_HANDLE: u32 = 0xFFFF_8000;
+    // SAFETY: plain SVCs on the calling thread's pseudo-handle.
+    let (before, rc) = unsafe {
+        (
+            svcGetCurrentProcessorNumber(),
+            svcSetThreadCoreMask(CUR_THREAD_HANDLE, preferred, mask),
+        )
+    };
+    breadcrumb(&format!(
+        "thread {name}: was on core {before}, pin core {preferred} mask={mask:#05b} rc={rc:#x}"
+    ));
 }
 
 /// newlib `struct mallinfo` (`malloc.h`), all `size_t`.
@@ -278,6 +331,185 @@ mod tls {
     }
 }
 
+// The newlib heap backs Rust, Mesa and libdrm_nouveau's GPU buffers alike, so
+// the `--wrap=malloc,...` hooks (launcher/build.rs) sample it all: one
+// allocation per INTERVAL bytes allocated, plus every one of INTERVAL or more,
+// kept with its stack until freed. `dump_heap_samples` writes the live ones
+// to boot.txt from the alloc-failure hook; `switch/heap_report.py` sums them.
+// Opt-in (`--features heap-samples`): every free probes the table, which cost
+// whole frames once tombstones filled it.
+// ponytail: OOM hunt only; up to PROBES loads per free.
+#[cfg(feature = "heap-samples")]
+mod heap_samples {
+    use core::{
+        ffi::c_void,
+        sync::atomic::{AtomicUsize, Ordering::Relaxed},
+    };
+
+    const INTERVAL: usize = 512 << 10;
+    const BITS: u32 = 14;
+    const PROBES: usize = 64;
+    // Mesa's driver frames alone fill ten; sixteen reach the wgpu/bevy caller.
+    const PCS: usize = 16;
+    const EMPTY: usize = 0;
+    const GONE: usize = 1;
+
+    unsafe extern "C" {
+        fn __real_malloc(size: usize) -> *mut c_void;
+        fn __real_calloc(n: usize, size: usize) -> *mut c_void;
+        fn __real_realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
+        fn __real_memalign(align: usize, size: usize) -> *mut c_void;
+        fn __real_aligned_alloc(align: usize, size: usize) -> *mut c_void;
+        fn __real_free(ptr: *mut c_void);
+    }
+
+    struct Slot {
+        ptr: AtomicUsize,
+        weight: AtomicUsize,
+        size: AtomicUsize,
+        pcs: [AtomicUsize; PCS],
+    }
+
+    static SLOTS: [Slot; 1 << BITS] = [const {
+        Slot {
+            ptr: AtomicUsize::new(EMPTY),
+            weight: AtomicUsize::new(0),
+            size: AtomicUsize::new(0),
+            pcs: [const { AtomicUsize::new(0) }; PCS],
+        }
+    }; 1 << BITS];
+    static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    fn probe(ptr: usize) -> impl Iterator<Item = &'static Slot> {
+        let start = (ptr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (usize::BITS - BITS);
+        (0..PROBES).map(move |i| &SLOTS[(start + i) & ((1 << BITS) - 1)])
+    }
+
+    fn note(ptr: *mut c_void, size: usize) -> *mut c_void {
+        let before = ALLOCATED.fetch_add(size, Relaxed);
+        if ptr.is_null() || before / INTERVAL == (before + size) / INTERVAL {
+            return ptr;
+        }
+        let mut pcs = [0usize; PCS];
+        let n = super::code_words(&mut pcs);
+        for slot in probe(ptr as usize) {
+            let won = [EMPTY, GONE].into_iter().any(|free| {
+                slot.ptr.compare_exchange(free, ptr as usize, Relaxed, Relaxed).is_ok()
+            });
+            if won {
+                slot.weight.store(size.max(INTERVAL), Relaxed);
+                slot.size.store(size, Relaxed);
+                for (i, to) in slot.pcs.iter().enumerate() {
+                    to.store(if i < n { pcs[i] } else { 0 }, Relaxed);
+                }
+                return ptr;
+            }
+        }
+        DROPPED.fetch_add(1, Relaxed);
+        ptr
+    }
+
+    // Before the real free: the address cannot be handed out again meanwhile.
+    fn forget(ptr: *mut c_void) {
+        if ptr.is_null() {
+            return;
+        }
+        for slot in probe(ptr as usize) {
+            match slot.ptr.load(Relaxed) {
+                EMPTY => return,
+                p if p == ptr as usize => {
+                    let _ = slot.ptr.compare_exchange(p, GONE, Relaxed, Relaxed);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_malloc(size: usize) -> *mut c_void {
+        note(unsafe { __real_malloc(size) }, size)
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_calloc(n: usize, size: usize) -> *mut c_void {
+        note(unsafe { __real_calloc(n, size) }, n.saturating_mul(size))
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
+        forget(ptr);
+        note(unsafe { __real_realloc(ptr, size) }, size)
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_memalign(align: usize, size: usize) -> *mut c_void {
+        note(unsafe { __real_memalign(align, size) }, size)
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_aligned_alloc(align: usize, size: usize) -> *mut c_void {
+        note(unsafe { __real_aligned_alloc(align, size) }, size)
+    }
+
+    #[unsafe(no_mangle)]
+    unsafe extern "C" fn __wrap_free(ptr: *mut c_void) {
+        forget(ptr);
+        unsafe { __real_free(ptr) }
+    }
+
+    /// `smp <weight> <size> <offset>...` per live sample, offsets for
+    /// addr2line; weights sum to an estimate of the live heap.
+    pub fn dump() {
+        use std::fmt::Write as _;
+        // Once: the alloc-error hook and the panic hook both call this.
+        static DUMPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if DUMPED.swap(true, Relaxed) {
+            return;
+        }
+        // ~6k lines of ~160 bytes at a full 3 GB heap; static so a full heap
+        // cannot stop the dump.
+        static mut BUF: [u8; 2 << 20] = [0; 2 << 20];
+        struct Cursor(usize);
+        impl std::fmt::Write for Cursor {
+            fn write_str(&mut self, text: &str) -> std::fmt::Result {
+                // SAFETY: `DUMPED` lets one caller through, once.
+                let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+                let end = (self.0 + text.len()).min(buf.len());
+                buf[self.0..end].copy_from_slice(&text.as_bytes()[..end - self.0]);
+                self.0 = end;
+                Ok(())
+            }
+        }
+        let live = |slot: &Slot| slot.ptr.load(Relaxed) > GONE;
+        let estimate: usize = SLOTS.iter().filter(|s| live(s)).map(|s| s.weight.load(Relaxed)).sum();
+        let mut out = Cursor(0);
+        let _ = writeln!(
+            out,
+            "heap samples: 1 per {}KB, ~{}MB live, {} dropped",
+            INTERVAL >> 10,
+            estimate >> 20,
+            DROPPED.load(Relaxed)
+        );
+        for slot in SLOTS.iter().filter(|s| live(s)) {
+            let _ = write!(out, "smp {} {}", slot.weight.load(Relaxed), slot.size.load(Relaxed));
+            for pc in slot.pcs.iter().map(|pc| pc.load(Relaxed)).filter(|&pc| pc != 0) {
+                let _ = write!(out, " {pc:x}");
+            }
+            let _ = writeln!(out);
+        }
+        // SAFETY: as above.
+        let text = unsafe { &(&*core::ptr::addr_of!(BUF))[..out.0] };
+        super::breadcrumb(String::from_utf8_lossy(text).trim_end());
+    }
+}
+
+#[cfg(feature = "heap-samples")]
+pub use heap_samples::dump as dump_heap_samples;
+#[cfg(not(feature = "heap-samples"))]
+pub fn dump_heap_samples() {}
+
 /// Process memory in use / available; `svcGetInfo` on the current process.
 fn mem_line() -> String {
     const CUR_PROCESS: u32 = 0xFFFF_8001;
@@ -294,7 +526,13 @@ fn mem_line() -> String {
 pub fn boot_env() {
     // SAFETY: plain FFI; applet services are up by `main`.
     let applet = unsafe { appletGetAppletType() };
-    breadcrumb(&format!("env: applet_type={applet} {} {}", mem_line(), heap_line()));
+    let cpu_rc = boost_cpu();
+    pin_current_thread(0, 0b001, "main");
+    breadcrumb(&format!(
+        "env: applet_type={applet} cpu_boost_rc={cpu_rc:#x} {} {}",
+        mem_line(),
+        heap_line()
+    ));
 }
 
 // newlib declares sysconf but libnx does not implement it. std asks for the
@@ -429,6 +667,11 @@ mod window {
     /// reads the handle while it builds.
     pub struct NxPlugin;
 
+    // ponytail: fixed cap; raise if map loads wait visibly on GPU images.
+    const UPLOAD_BYTES_PER_FRAME: usize = 32 << 20;
+    /// Two 20 Hz fixed ticks per frame at most.
+    const MAX_FRAME_DELTA: std::time::Duration = std::time::Duration::from_millis(100);
+
     impl Plugin for NxPlugin {
         fn build(&self, app: &mut App) {
             crate::breadcrumb("NxPlugin build");
@@ -443,8 +686,35 @@ mod window {
                 .expect("NxPlugin needs WindowPlugin's primary window");
             *holder.0.lock().expect("window handle lock") = Some(handle.clone());
             world.entity_mut(entity).insert(handle);
+            // Each uploaded byte sits in a wgpu staging buffer and a Mesa
+            // transfer copy until the frame's fence passes, all on the same
+            // heap: an uncapped map load (2550 images, 361 MB) or spawn burst
+            // held ~300 MB of staging at the OOM after class select.
+            app.insert_resource(bevy::render::render_asset::RenderAssetBytesPerFrame::new(
+                UPLOAD_BYTES_PER_FRAME,
+            ));
+            // A 20 Hz sim tick costs ~30 ms here: with Bevy's 250 ms default a
+            // slow frame queued up to 5 ticks, which made the next frame slower
+            // still (in-game frames climbed 140 -> 250 ms at 2.9 -> 4.8 ticks).
+            // ponytail: game time runs slow below 10 fps; drop once a tick is cheap.
+            if let Some(mut time) = app.world_mut().get_resource_mut::<Time<Virtual>>() {
+                time.set_max_delta(MAX_FRAME_DELTA);
+            }
             app.add_plugins(crate::input::InputPlugin).set_runner(run);
             crate::breadcrumb("NxPlugin ready");
+        }
+
+        fn finish(&self, app: &mut App) {
+            // Pipelined rendering runs the render app on its own thread: give it core 1.
+            if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+                render_app.add_systems(bevy::render::Render, pin_render_thread);
+            }
+        }
+    }
+
+    fn pin_render_thread(mut pinned: Local<bool>) {
+        if !std::mem::replace(&mut *pinned, true) {
+            crate::pin_current_thread(1, 0b010, "render");
         }
     }
 

@@ -512,7 +512,16 @@ fn retire_handed_over(mut retiring: ResMut<Retiring>) {
     let guard = retiring.ship(teardown);
     AsyncComputeTaskPool::get_or_init(TaskPool::default)
         .spawn(async move {
-            drop(batch);
+            // A post-match drop once ran 46 s on Switch and slowed every frame
+            // meanwhile; name whatever is slow to drop.
+            for retired in batch {
+                let started = std::time::Instant::now();
+                drop(retired.value);
+                let ms = started.elapsed().as_secs_f64() * 1000.0;
+                if ms >= 100.0 {
+                    diag::info!(Sim, "session: retiring {} took {ms:.0}ms to drop", retired.name);
+                }
+            }
             if guard.settle() == Some(0) {
                 diag::lifecycle_boundary("retirement_settled", &format!(" values={values}"));
             }

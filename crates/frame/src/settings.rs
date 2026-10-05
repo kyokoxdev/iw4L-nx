@@ -64,9 +64,11 @@ impl Default for GameSettings {
             fov: Self::FOV_DEFAULT,
             master_volume: 1.0,
             brightness: 0.0,
-            shadows: true,
-            depth_of_field: true,
-            bloom: true,
+            // Switch: shadow maps, DOF and bloom are whole extra passes the
+            // Tegra cannot spare; the video menu turns them back on.
+            shadows: !cfg!(target_os = "horizon"),
+            depth_of_field: !cfg!(target_os = "horizon"),
+            bloom: !cfg!(target_os = "horizon"),
             sensitivity: 5.0,
             invert_mouse: false,
             player_name: "Player".to_owned(),

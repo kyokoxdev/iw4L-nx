@@ -13,5 +13,12 @@ fn main() {
         for f in ["key_create", "key_delete", "setspecific", "getspecific"] {
             println!("cargo::rustc-link-arg-bins=-Wl,--wrap=pthread_{f}");
         }
+        // platform_nx::heap_samples: who holds the heap at an OOM.
+        if std::env::var_os("CARGO_FEATURE_HEAP_SAMPLES").is_none() {
+            return;
+        }
+        for f in ["malloc", "calloc", "realloc", "memalign", "aligned_alloc", "free"] {
+            println!("cargo::rustc-link-arg-bins=-Wl,--wrap={f}");
+        }
     }
 }

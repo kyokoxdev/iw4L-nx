@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Nintendo Switch (Horizon) platform layer: libnx link, libc gaps, Bevy runner. Empty on other targets."
 
+[features]
+# Sample every malloc/free for OOM dumps; slows every free. Needs the
+# matching `--wrap` link args, which `launcher/heap-samples` adds.
+heap-samples = []
+
 [target.'cfg(target_os = "horizon")'.dependencies]
 bevy.workspace = true
 getrandom = "0.4"

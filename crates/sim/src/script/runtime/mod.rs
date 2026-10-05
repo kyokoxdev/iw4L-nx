@@ -204,7 +204,10 @@ fn spawn_thread(
     let thread = new_thread(world, program, function, receiver, args)?;
     let serial = thread.serial;
     world.resource_mut::<Runtime>().spawned.push(serial);
-    world.spawn(thread);
+    let entity = world.spawn(thread).id();
+    if let Some(mut index) = world.get_resource_mut::<ThreadIndex>() {
+        index.0.insert(serial, entity);
+    }
     Ok(serial)
 }
 
@@ -1015,7 +1018,10 @@ fn instruction(
             let name = event_name(pop(thread)?)?;
             let receiver = event_receiver(pop(thread)?)?;
             let frame = thread.frames.len() - 1;
-            world.resource_mut::<Runtime>().waiters.push(Waiter {
+            let mut runtime = world.resource_mut::<Runtime>();
+            let top = runtime.endon_top.entry(thread.serial).or_insert(frame);
+            *top = (*top).max(frame);
+            runtime.waiters.push(Waiter {
                 receiver,
                 name,
                 thread: thread.serial,
@@ -1026,10 +1032,17 @@ fn instruction(
             let value = pop(thread)?;
             let depth = thread.frames.len() - 1;
             let serial = thread.serial;
-            world.resource_mut::<Runtime>().waiters.retain(|w| {
-                w.thread != serial
-                    || !matches!(w.kind, WaiterKind::Endon { frame } if frame >= depth)
-            });
+            let mut runtime = world.resource_mut::<Runtime>();
+            if runtime.endon_top.get(&serial).is_some_and(|top| *top >= depth) {
+                runtime.waiters.retain(|w| {
+                    w.thread != serial
+                        || !matches!(w.kind, WaiterKind::Endon { frame } if frame >= depth)
+                });
+                match depth.checked_sub(1) {
+                    Some(top) => runtime.endon_top.insert(serial, top),
+                    None => runtime.endon_top.remove(&serial),
+                };
+            }
             let frame = thread
                 .frames
                 .pop()
@@ -1077,12 +1090,29 @@ fn register(
     });
 }
 
+/// serial -> thread entity, checked on every hit and rebuilt on a miss.
+/// `find_thread` runs per runnable thread and per woken waiter; a scan of
+/// every thread each time was quadratic in the thread count.
+#[derive(bevy_ecs::prelude::Resource, Default)]
+struct ThreadIndex(std::collections::HashMap<u64, Entity>);
+
 fn find_thread(world: &mut World, serial: u64) -> Option<Entity> {
-    world
+    let cached = world
+        .get_resource::<ThreadIndex>()
+        .and_then(|index| index.0.get(&serial).copied());
+    if let Some(entity) = cached
+        .filter(|entity| world.get::<Thread>(*entity).is_some_and(|t| t.serial == serial))
+    {
+        return Some(entity);
+    }
+    let index: std::collections::HashMap<_, _> = world
         .query::<(Entity, &Thread)>()
         .iter(world)
-        .find(|(_, t)| t.serial == serial)
-        .map(|(e, _)| e)
+        .map(|(entity, thread)| (thread.serial, entity))
+        .collect();
+    let found = index.get(&serial).copied();
+    world.insert_resource(ThreadIndex(index));
+    found
 }
 
 fn with_thread<R>(
@@ -1107,6 +1137,7 @@ fn with_thread<R>(
 
 fn retire(runtime: &mut Runtime, serial: u64) {
     runtime.waiters.retain(|w| w.thread != serial);
+    runtime.endon_top.remove(&serial);
     dequeue(runtime, serial);
 }
 
@@ -1260,15 +1291,22 @@ pub(crate) fn advance_scheduler(world: &mut World) {
     let now = i64::from(tick.0) * i64::from(crate::MATCH_TICK_MS);
     super::host::mechanics::deliver_finished(world);
     deliver_external(world, now);
-    let threads: Vec<_> = world
+    // One pass over the waiters, not one per thread: `entity_receivers` per
+    // thread made this threads x waiters every tick.
+    let doomed: std::collections::HashSet<u64> = {
+        let runtime = world.resource::<Runtime>();
+        runtime
+            .waiters
+            .iter()
+            .filter(|w| any_deleted(world, std::slice::from_ref(&w.receiver)))
+            .map(|w| w.thread)
+            .collect()
+    };
+    let dead: Vec<_> = world
         .query::<(Entity, &Thread)>()
         .iter(world)
-        .map(|(entity, thread)| (entity, thread.serial, entity_receivers(world, thread)))
-        .collect();
-    let dead: Vec<_> = threads
-        .into_iter()
-        .filter(|(_, _, receivers)| any_deleted(world, receivers))
-        .map(|(entity, serial, _)| (entity, serial))
+        .filter(|(_, thread)| doomed.contains(&thread.serial))
+        .map(|(entity, thread)| (entity, thread.serial))
         .collect();
     for (entity, serial) in dead {
         kill(world, entity, serial);
@@ -1300,8 +1338,14 @@ pub(crate) fn advance_scheduler(world: &mut World) {
         runtime.buckets.remove(&now);
     }
     runtime.loading = false;
-    collect_heap(world);
+    // A full mark-sweep of the script heap every tick cost more than the
+    // garbage it freed; unreachable values just live up to half a second.
+    if tick.0 % GC_INTERVAL_TICKS == 0 {
+        collect_heap(world);
+    }
 }
+
+const GC_INTERVAL_TICKS: u32 = 10;
 
 fn run_ready(world: &mut World, program: &Program, now: i64) {
     loop {
@@ -1324,6 +1368,12 @@ fn run_ready(world: &mut World, program: &Program, now: i64) {
         let mut thread = world.entity_mut(entity).take::<Thread>().unwrap();
         thread.state = ThreadState::Runnable;
         world.resource_mut::<Runtime>().budget = INSTRUCTION_BUDGET;
+        // Named by where the thread resumes; read by the `span-profile` layer.
+        let _span = tracing::info_span!(target: "iw4l", "gsc", name = %{
+            let at = &program.functions[thread.frames.last().unwrap().function].location;
+            format!("{}::{}", at.module, at.function)
+        })
+        .entered();
         execute(world, program, &mut thread, now);
         if thread.state == ThreadState::Complete {
             kill(world, entity, serial);
@@ -1340,13 +1390,16 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
     while thread.state == ThreadState::Runnable {
         let frame = thread.frames.last().unwrap();
         let function = &program.functions[frame.function];
-        let Some((location, op)) = function.code.get(frame.pc).cloned() else {
+        // Borrow the location: cloning it costs two String allocations per
+        // instruction, and it is only read on the error path.
+        let Some((location, op)) = function.code.get(frame.pc) else {
             world.resource_mut::<Runtime>().fault = Some(Fault::at(
                 &function.location,
                 "invalid IR: instruction position out of range",
             ));
             break;
         };
+        let op = op.clone();
         let exhausted = world.resource::<Runtime>().budget == 0;
         let (pops, pushes) = stack_effect(&op);
         let iterates = matches!(op, Op::ArrayKeys);
@@ -1364,7 +1417,7 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
         if world.resource::<Runtime>().fault.is_some() {
             break;
         }
-        let mut fault = Fault::at(&location, message);
+        let mut fault = Fault::at(location, message);
         fault.callers = thread
             .frames
             .iter()
@@ -1397,7 +1450,7 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
         let base = thread.frames.last().map_or(0, |f| f.stack_base);
         let Some(kept) = before.checked_sub(pops).filter(|kept| *kept >= base) else {
             world.resource_mut::<Runtime>().fault =
-                Some(Fault::at(&location, "invalid IR: stack underflow"));
+                Some(Fault::at(location, "invalid IR: stack underflow"));
             break;
         };
         thread.stack.truncate(kept);
@@ -1408,7 +1461,7 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
             match allocate_array(world) {
                 Ok(empty) => *thread.stack.last_mut().unwrap() = empty,
                 Err(message) => {
-                    world.resource_mut::<Runtime>().fault = Some(Fault::at(&location, message));
+                    world.resource_mut::<Runtime>().fault = Some(Fault::at(location, message));
                     break;
                 }
             }
@@ -1662,4 +1715,32 @@ fn collect_heap(world: &mut World) {
     runtime.objects.retain(|id, _| objects.contains(id));
     runtime.dead.retain(|id| objects.contains(id));
     runtime.arrays.retain(|id, _| arrays.contains(id));
+}
+
+#[cfg(test)]
+mod thread_index_tests {
+    use super::*;
+
+    fn thread(serial: u64) -> Thread {
+        Thread {
+            serial,
+            frames: Vec::new(),
+            stack: Vec::new(),
+            state: super::super::ThreadState::Queued,
+        }
+    }
+
+    #[test]
+    fn find_thread_follows_spawns_and_despawns() {
+        let mut world = World::new();
+        let a = world.spawn(thread(1)).id();
+        let b = world.spawn(thread(2)).id();
+        assert_eq!(find_thread(&mut world, 1), Some(a));
+        assert_eq!(find_thread(&mut world, 2), Some(b));
+        world.despawn(a);
+        assert_eq!(find_thread(&mut world, 1), None);
+        let c = world.spawn(thread(3)).id();
+        assert_eq!(find_thread(&mut world, 3), Some(c));
+        assert_eq!(find_thread(&mut world, 2), Some(b));
+    }
 }

@@ -1178,6 +1178,7 @@ pub fn sample_render_frame_diag(
     visible_meshes: Query<(&Mesh3d, &ViewVisibility)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut last_gpu_batch: Local<Option<Instant>>,
+    mut last_log: Local<Option<Instant>>,
 ) {
     if let Ok(mut guard) = slot.0.lock() {
         // The published sample is read every main frame; its counters belong
@@ -1468,12 +1469,21 @@ pub fn sample_render_frame_diag(
     static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if n % RENDER_FRAME_LOG_EVERY == 0 {
+        // Mean main-frame wall since the last line: the frame rate as played.
+        let now = Instant::now();
+        let frame_ms = last_log.replace(now).map(|then| {
+            now.duration_since(then).as_secs_f32() * 1000.0 / RENDER_FRAME_LOG_EVERY as f32
+        });
         diag::info!(
             World,
-            "render frame diag: extract_ms={} extract_commands_ms={} prepare_assets_ms={} prepare_meshes_ms={} create_views_ms={} specialize_ms={} prepare_views_ms={} queue_ms={} phase_sort_ms={} prepare_ms={} render_ms={} present_mode={} submit_prepare_ms={} \
+            "render frame diag: frame_ms={} graph_render_ms={} graph_submit_ms={} graph_present_ms={} extract_ms={} extract_commands_ms={} prepare_assets_ms={} prepare_meshes_ms={} create_views_ms={} specialize_ms={} prepare_views_ms={} queue_ms={} phase_sort_ms={} prepare_ms={} render_ms={} present_mode={} submit_prepare_ms={} \
              ports_ms={} tess_ms={} products_ms={} images_ms={} diag_ms={} world_skip={} \
              world_clone_bytes={} xmodel_clone_bytes={} fx_clone_bytes={} \
              gpu_frame_ms={} gpu_opaque_ms={} drawn_entities={} drawn_index_count={}",
+            fmt_opt_ms(frame_ms),
+            fmt_opt_ms(diag.graph_render_ms),
+            fmt_opt_ms(diag.graph_submit_ms),
+            fmt_opt_ms(diag.graph_present_ms),
             fmt_opt_ms(diag.render_extract_ms),
             fmt_opt_ms(diag.render_extract_commands_ms),
             fmt_opt_ms(diag.render_prepare_assets_ms),

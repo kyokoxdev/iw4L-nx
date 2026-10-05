@@ -53,6 +53,7 @@ impl Plugin for RenderPlugin {
                     crate::extract::extract_image_handles,
                     crate::extract::extract_postfx,
                     crate::extract::extract_model_lighting_tiles,
+                    log_pipeline_compile_time,
                 ),
             );
             if render_gpu::geometry_diagnostic_enabled() {
@@ -90,6 +91,49 @@ fn extract_gpu_load_progress(
     progress.working_not_ready = working_set.pipeline_not_ready;
     let pending = std::mem::take(&mut progress.pending_shaders);
     progress.pending_shaders = waiting_pipeline_shaders(&pipelines, pending);
+}
+
+#[derive(Default)]
+struct PipelineCompileClock {
+    since: Option<std::time::Instant>,
+    busy: std::time::Duration,
+    created: usize,
+}
+
+/// Wall time with at least one pipeline in `Creating` (naga -> GLSL, GL
+/// compile + link on the GL backend), logged as each busy stretch ends. Tells
+/// how much of a load the shader compile path gates.
+// ponytail: frame-granular, includes task-pool queueing; per-call timing needs the wgpu fork.
+fn log_pipeline_compile_time(
+    pipelines: Res<bevy::render::render_resource::PipelineCache>,
+    mut clock: Local<PipelineCompileClock>,
+) {
+    use bevy::render::render_resource::CachedPipelineState;
+
+    let compiling = pipelines
+        .pipelines()
+        .any(|p| matches!(p.state, CachedPipelineState::Creating(_)));
+    match (compiling, clock.since) {
+        (true, None) => clock.since = Some(std::time::Instant::now()),
+        (false, Some(start)) => {
+            let span = start.elapsed();
+            clock.busy += span;
+            clock.since = None;
+            let created = pipelines
+                .pipelines()
+                .filter(|p| matches!(p.state, CachedPipelineState::Ok(_)))
+                .count();
+            diag::info!(
+                World,
+                "pipeline compile: {}ms span, {}ms total, {} new, {created} ready",
+                span.as_millis(),
+                clock.busy.as_millis(),
+                created.saturating_sub(clock.created)
+            );
+            clock.created = created;
+        }
+        _ => {}
+    }
 }
 
 fn waiting_pipeline_shaders(

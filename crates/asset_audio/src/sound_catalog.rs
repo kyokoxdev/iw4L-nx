@@ -55,6 +55,48 @@ fn ns_of(game: ZoneGame) -> AssetNamespace {
 
 pub const MSS_PCM: i32 = 1;
 
+/// A loaded sound's bytes, kept in `i16` storage so 16-bit PCM reaches the
+/// mixer as `samples()` without a second copy of every clip.
+#[derive(Clone, Debug, Default)]
+pub struct SoundBytes {
+    words: std::sync::Arc<[i16]>,
+    len: usize,
+}
+
+impl From<Vec<u8>> for SoundBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            words: bytes
+                .chunks(2)
+                .map(|pair| i16::from_ne_bytes([pair[0], pair.get(1).copied().unwrap_or(0)]))
+                .collect(),
+            len: bytes.len(),
+        }
+    }
+}
+
+impl SoundBytes {
+    pub fn bytes(&self) -> &[u8] {
+        // SAFETY: `words` holds at least `len` initialised bytes, and any byte
+        // pattern is a valid `u8`.
+        unsafe { std::slice::from_raw_parts(self.words.as_ptr().cast(), self.len) }
+    }
+
+    /// The bytes as little-endian 16-bit samples, shared rather than copied.
+    /// `None` for an odd length or a big-endian host.
+    pub fn samples(&self) -> Option<std::sync::Arc<[i16]>> {
+        (cfg!(target_endian = "little") && self.len % 2 == 0).then(|| self.words.clone())
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.words, &other.words)
+    }
+
+    pub fn addr(&self) -> usize {
+        self.words.as_ptr() as usize
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LoadedSoundPcm {
     pub name: String,
@@ -66,7 +108,7 @@ pub struct LoadedSoundPcm {
     pub(crate) channels: i32,
     pub samples: u32,
     pub block_size: u32,
-    pub(crate) pcm: std::sync::Arc<[u8]>,
+    pub(crate) pcm: SoundBytes,
 
     pub zone: ZoneOwner,
 
@@ -98,7 +140,7 @@ impl LoadedSoundPcm {
     }
 
     pub fn t5_adpcm_bytes(&self) -> Option<&[u8]> {
-        (self.format == 6).then_some(&self.pcm[..])
+        (self.format == 6).then_some(self.pcm.bytes())
     }
 
     pub fn channels(&self) -> i32 {
@@ -108,10 +150,10 @@ impl LoadedSoundPcm {
     /// Source bytes are immutable. Decoded samples and failures belong to the
     /// runtime ClipStore, never to this shared catalog entry.
     pub fn encoded_bytes(&self) -> &[u8] {
-        &self.pcm
+        self.pcm.bytes()
     }
 
-    pub fn encoded_arc(&self) -> std::sync::Arc<[u8]> {
+    pub fn encoded_arc(&self) -> SoundBytes {
         self.pcm.clone()
     }
 
@@ -1676,5 +1718,22 @@ impl AssetLinkSink for SoundCatalog {
             zone: self.capture_zone,
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SoundBytes;
+
+    #[test]
+    fn sound_bytes_keep_bytes_and_share_pcm16() {
+        for raw in [vec![], vec![1u8], vec![1, 2, 3], vec![0x34, 0x12, 0xff, 0x7f]] {
+            let sound = SoundBytes::from(raw.clone());
+            assert_eq!(sound.bytes(), &raw[..]);
+            assert_eq!(sound.samples().is_some(), raw.len() % 2 == 0);
+        }
+        let sound = SoundBytes::from(vec![0x34, 0x12, 0xff, 0x7f]);
+        assert_eq!(&*sound.samples().unwrap(), &[0x1234, 0x7fff]);
+        assert!(sound.ptr_eq(&sound.clone()));
     }
 }

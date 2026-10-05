@@ -33,6 +33,8 @@ fn spawn_overlay_ui_camera(commands: &mut Commands) {
         },
         crate::UiCamera,
         OverlayUiCamera,
+        // Camera's default 4x MSAA: two 15 MB screen targets for 2D UI.
+        bevy::render::view::Msaa::Off,
     ));
 }
 
@@ -167,6 +169,7 @@ pub(crate) fn spawn_loading_screen(
         },
         crate::UiCamera,
         LoadingCamera,
+        bevy::render::view::Msaa::Off,
     ));
 
     commands

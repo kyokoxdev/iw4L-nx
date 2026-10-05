@@ -17,6 +17,10 @@ bevy-debug = ["bevy/debug", "bevy/track_location"]
 # on this feature is what turns "the interval across bevy's submit set was
 # long" into a statement about where the time went.
 bevy-trace = ["bevy/trace", "bevy/trace_chrome"]
+# The same spans summed in-process and logged every few seconds: the Switch
+# build's profiler (`span_profile.rs`). `bevy/debug` keeps system names;
+# without it every system span reads "<Enable the debug feature ...>".
+span-profile = ["bevy/trace", "bevy/debug"]
 
 [dependencies]
 bevy.workspace = true

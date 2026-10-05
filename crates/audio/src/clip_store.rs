@@ -89,7 +89,7 @@ pub(crate) struct PreparedPcm {
 
 #[derive(Clone)]
 struct LoadedClipKey {
-    encoded: Arc<[u8]>,
+    encoded: asset_audio::SoundBytes,
     format: i32,
     rate: u32,
     bits: i32,
@@ -101,7 +101,7 @@ struct LoadedClipKey {
 
 impl PartialEq for LoadedClipKey {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.encoded, &other.encoded)
+        self.encoded.ptr_eq(&other.encoded)
             && self.format == other.format
             && self.rate == other.rate
             && self.bits == other.bits
@@ -116,7 +116,7 @@ impl Eq for LoadedClipKey {}
 
 impl std::hash::Hash for LoadedClipKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.encoded) as *const u8 as usize).hash(state);
+        self.encoded.addr().hash(state);
         self.format.hash(state);
         self.rate.hash(state);
         self.bits.hash(state);
@@ -844,6 +844,18 @@ fn prepare_loaded(sound: &asset_audio::LoadedSoundPcm) -> Result<PreparedPcm, Cl
         .map_err(|_| ClipError::Decode)?;
         (16, decoded.as_slice())
     } else if sound.format() == 1 {
+        // 16-bit PCM in whole frames is played from the catalog's own buffer.
+        if sound.bits() == 16
+            && let Some(samples) = sound.encoded_arc().samples()
+            && !samples.is_empty()
+            && samples.len() % sound.channels().max(1) as usize == 0
+        {
+            return Ok(PreparedPcm {
+                samples,
+                channels: u16::try_from(sound.channels().max(1)).map_err(|_| ClipError::Decode)?,
+                sample_rate: sound.rate.max(1),
+            });
+        }
         (sound.bits(), sound.encoded_bytes())
     } else {
         return Err(ClipError::Decode);
@@ -923,6 +935,15 @@ fn prepare_streamed(
         );
         return Err(ClipError::Decode);
     };
+    let bytes = pcm.samples().len() * size_of::<i16>();
+    if bytes >= 8 << 20 {
+        diag::info!(
+            Audio,
+            "audio: streamed `{}:{rel}` decodes to {}MB resident",
+            ns.as_str(),
+            bytes >> 20
+        );
+    }
     Ok(Some(PreparedPcm {
         samples: Arc::clone(pcm.samples()),
         channels: pcm.channel_count(),

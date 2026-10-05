@@ -8,6 +8,7 @@ mod model_skel;
 mod packed_vertex;
 mod projectile_mesh_catalog;
 mod soldiers;
+mod spill;
 mod world_weapon_catalog;
 
 pub use asset_core::*;
@@ -20,6 +21,7 @@ pub use model_skel::*;
 pub use packed_vertex::*;
 pub use projectile_mesh_catalog::*;
 pub use soldiers::*;
+pub use spill::{Plain, Spill, spill_stats};
 pub use world_weapon_catalog::*;
 
 pub mod asset_graph {

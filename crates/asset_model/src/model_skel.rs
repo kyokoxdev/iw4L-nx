@@ -59,7 +59,7 @@ pub struct ModelSkel {
     pub tag_weapon: Option<usize>,
 
     pub pose: Option<ModelPoseSrc>,
-    pub indices: std::sync::Arc<[u32]>,
+    pub indices: crate::Spill<u32>,
 
     pub surface_materials: Vec<Option<crate::WalkLocalMaterialIndex>>,
 
@@ -73,11 +73,11 @@ pub struct ModelSkel {
 
     pub surface_vert_list_count: Vec<Option<u32>>,
 
-    pub vert_skin: std::sync::Arc<[VertSkin]>,
+    pub vert_skin: crate::Spill<VertSkin>,
     pub rigid_verts: usize,
     pub blend_verts: usize,
 
-    pub packed_vertices: std::sync::Arc<[[u8; sz::GFX_PACKED_VERTEX]]>,
+    pub packed_vertices: crate::Spill<[u8; sz::GFX_PACKED_VERTEX]>,
 
     pub radius: Option<f32>,
 
@@ -212,9 +212,24 @@ impl ModelSkel {
     }
 }
 
+impl ModelSkel {
+    /// Moves vertices, skinning and indices to the SD card until first read
+    /// (`crate::Spill`); returns the heap bytes released.
+    pub fn spill_geometry(&mut self) -> Result<u64, String> {
+        let label = self.name.as_str();
+        Ok(self.packed_vertices.spill(&format!("{label}.v"))?
+            + self.vert_skin.spill(&format!("{label}.s"))?
+            + self.indices.spill(&format!("{label}.i"))?)
+    }
+}
+
+// SAFETY: `repr(C)` [u8; 4] then [u16; 4]: no padding, any bits valid.
+unsafe impl crate::Plain for VertSkin {}
+
 pub type FpvSkel = ModelSkel;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
 pub struct VertSkin {
     /// XModel bone counts are a byte in every format read here.
     pub bones: [u8; 4],

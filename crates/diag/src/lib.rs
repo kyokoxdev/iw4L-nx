@@ -282,8 +282,10 @@ fn emit_raw(
         && let Some(file) = state.file.as_mut()
     {
         // Switch has no traces file; the elapsed ms is what places a slow stage.
+        // One write per line: each write to the unbuffered file is an SD append.
         if cfg!(target_os = "horizon") {
-            let _ = writeln!(file, "{:>8} {text}", now_ms(state.started));
+            let line = format!("{:>8} {text}\n", now_ms(state.started));
+            let _ = file.write_all(line.as_bytes());
         } else {
             let _ = writeln!(file, "{text}");
         }

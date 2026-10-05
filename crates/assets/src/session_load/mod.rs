@@ -72,6 +72,9 @@ pub fn load_pool() -> &'static TaskPool {
             .on_thread_spawn(|| {
                 if let Some(cpus) = PROCESS_CPUS.get() {
                     set_thread_cpus(cpus);
+                } else if cfg!(target_os = "horizon") {
+                    // Off the main thread's core 0; loads overlap a mostly idle render core.
+                    set_thread_cpus(&[1, 2]);
                 }
             })
             .build()
@@ -92,7 +95,22 @@ fn set_thread_cpus(cpus: &[usize]) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// libnx threads start pinned to the process default core; widen to `cpus`.
+#[cfg(target_os = "horizon")]
+fn set_thread_cpus(cpus: &[usize]) {
+    unsafe extern "C" {
+        fn svcSetThreadCoreMask(handle: u32, preferred_core: i32, affinity_mask: u32) -> u32;
+    }
+    const CUR_THREAD_HANDLE: u32 = 0xFFFF_8000;
+    let mask = cpus.iter().filter(|cpu| **cpu < 3).fold(0u32, |m, cpu| m | 1 << cpu);
+    let Some(&preferred) = cpus.last() else {
+        return;
+    };
+    // SAFETY: plain SVC on the calling thread's pseudo-handle.
+    unsafe { svcSetThreadCoreMask(CUR_THREAD_HANDLE, preferred as i32, mask) };
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "horizon")))]
 fn set_thread_cpus(_cpus: &[usize]) {}
 
 #[derive(Default, Clone)]

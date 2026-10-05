@@ -27,6 +27,9 @@ pub(crate) fn register_drawsurf_render(app: &mut App) {
         super::scene_depth::prepare_scene_depth.in_set(RenderSystems::PrepareResources),
     );
     super::colour_submit::register(app);
+    // Switch: the sun sprite, flare and blind cost four passes and a fresh
+    // bind group every frame on a CPU-bound render thread.
+    #[cfg(not(target_os = "horizon"))]
     super::sun_effects::register(app);
     super::postfx::register(app);
     super::iw_tess::register(app);

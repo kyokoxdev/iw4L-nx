@@ -127,7 +127,7 @@ impl RuntimeProgramPort {
             color_space: pass.color_space,
             hardware_shadow_compare: pass.hardware_shadow_compare,
             abi,
-            module: std::sync::Arc::new(module),
+            module: share_module(module),
             wgpu_layout,
         })
     }
@@ -245,6 +245,27 @@ impl RuntimeProgramPort {
             && pass.hardware_shadow_compare == self.hardware_shadow_compare
             && self.abi.vertex_type == vertex_type
     }
+}
+
+/// Passes that lower to the same WGSL share one copy of it (mp_rust: 3097
+/// ports, 2494 sources, ~75 KB each).
+// ponytail: dead entries stay as small Weak shells until exit; prune if maps churn.
+fn share_module(
+    module: super::sm3_wgsl::ValidatedPassWgsl,
+) -> std::sync::Arc<super::sm3_wgsl::ValidatedPassWgsl> {
+    type Shared = std::sync::Weak<super::sm3_wgsl::ValidatedPassWgsl>;
+    static MODULES: std::sync::Mutex<BTreeMap<u64, Vec<Shared>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let key = assets::fnv1a64(module.source.as_bytes());
+    let mut modules = MODULES.lock().unwrap_or_else(|poison| poison.into_inner());
+    let same = modules.entry(key).or_default();
+    if let Some(shared) = same.iter().filter_map(Shared::upgrade).find(|m| **m == module) {
+        return shared;
+    }
+    let module = std::sync::Arc::new(module);
+    same.retain(|weak| weak.strong_count() > 0);
+    same.push(std::sync::Arc::downgrade(&module));
+    module
 }
 
 fn same_shader_pair_content(a: RuntimeShaderPair, b: RuntimeShaderPair) -> bool {

@@ -46,12 +46,21 @@ pub struct LodRampDvar {
     pub t5: asset_model::t5_lod::LodParmsAxis,
 }
 
+/// Switch: static models drop LODs and cull at half their authored distance,
+/// which trims the draw count the GL driver pays for per frame.
+/// `r_lodScaleRigid` still overrides the mid scale.
+const SWITCH_LOD_SCALE: Option<f32> = if cfg!(target_os = "horizon") {
+    Some(2.0)
+} else {
+    None
+};
+
 impl Default for LodRampDvar {
     fn default() -> Self {
         Self {
-            scale_mid: None,
-            bias_mid: None,
-            scale_last: None,
+            scale_mid: SWITCH_LOD_SCALE,
+            bias_mid: SWITCH_LOD_SCALE.map(|_| 0.0),
+            scale_last: SWITCH_LOD_SCALE,
             world_unit: None,
             t5_scale: asset_model::t5_lod::R_LOD_SCALE_RIGID_DEFAULT,
             t5_bias: asset_model::t5_lod::R_LOD_BIAS_RIGID_DEFAULT,

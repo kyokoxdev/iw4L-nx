@@ -352,6 +352,11 @@ pub fn decode_audio_bytes(bytes: &[u8]) -> Option<PcmAudio> {
         .ok()?;
 
     let mut samples: Vec<i16> = Vec::new();
+    // Doubling growth would hold up to twice a minutes-long track while it
+    // decodes, then copy it into the `Arc`.
+    if let (Some(frames), Some(lanes)) = (track.codec_params.n_frames, track.codec_params.channels) {
+        samples.reserve_exact(frames as usize * lanes.count());
+    }
     let mut channels: u16 = 0;
     loop {
         let packet = match format.next_packet() {

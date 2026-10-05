@@ -475,7 +475,9 @@ pub struct CatalogWeapon {
 
     pub scope_name: Option<String>,
 
-    pub scope_rows: [Iw5ScopeRow; 6],
+    /// IW5 only. Boxed: six rows inline were ~most of every IW4 weapon's
+    /// size (common_mp: 1194 weapons, ~43 MiB).
+    pub scope_rows: Box<[Iw5ScopeRow]>,
 
     pub iw5_attachment_slots: [Option<String>; fastfile_iw5::size::WEAPON_ATTACHMENT_SLOT_COUNT],
     pub iw5_reload_overrides: Vec<fastfile_iw5::ReloadOverride>,
@@ -2078,12 +2080,13 @@ impl WeaponCatalog {
         let overlay_image = None;
         let overlay_material_slot = leftover_iw5_weapdef_overlay_slot(stream, geometry.weap_def);
         let scope_name = None;
-        let scope_rows = std::array::from_fn(|index| {
+        let scope_rows: [Iw5ScopeRow; 6] = std::array::from_fn(|index| {
             geometry.attachments[index]
                 .and_then(|ptr| leftover_cstr_iw5(stream, ptr))
                 .and_then(|name| self.iw5_attachments.get(&name).cloned())
                 .unwrap_or_default()
         });
+        let scope_rows = Box::from(scope_rows);
         let iw5_attachment_slots = geometry
             .attachments
             .map(|name| name.and_then(|ptr| leftover_cstr_iw5(stream, ptr)));

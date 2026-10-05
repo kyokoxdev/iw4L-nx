@@ -34,6 +34,9 @@ pub(crate) struct StepRequest {
 
 pub(crate) fn schedule() -> Schedule {
     let mut schedule = Schedule::default();
+    // One chain of mostly exclusive systems: nothing to run in parallel, and
+    // the multi-threaded executor's per-system handoff runs every tick.
+    schedule.set_executor(bevy_ecs::schedule::SingleThreadedExecutor::new());
     schedule.add_systems(
         (
             advance_time_system,

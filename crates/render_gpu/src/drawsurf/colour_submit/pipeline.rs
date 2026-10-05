@@ -213,16 +213,18 @@ fn schedule_admitted_pipelines(
     // draws discover; the overlay still waits for the visible set.
     // ponytail: no eviction, built set only grows; add LRU eviction if a
     // match's built count nears the heap.
-    if cfg!(target_os = "horizon") {
-        return;
-    }
+    // Exception: the world's emissive passes (tech 5: the sky, emissive
+    // surfaces) are few, and an unbuilt sky pass left the sky black in play
+    // until it compiled.
+    let world_emissive_only = cfg!(target_os = "horizon");
     for (main_format, samples) in view_sig.iter().copied() {
         let techs = lighting_iw4::LIT_TECH_NO_SHADOW_DIR_SLOTS
             .into_iter()
             .chain(lighting_iw4::LIT_TECH_NO_SHADOW_LOCAL_SLOTS)
             .chain(lighting_iw4::LIT_TECH_SHADOW_DIR_SLOTS)
             .chain(lighting_iw4::LIT_TECH_SHADOW_SPOT_SLOTS)
-            .chain([super::super::SUN_SHADOW_CASTER_TECH, 5]);
+            .chain([super::super::SUN_SHADOW_CASTER_TECH, 5])
+            .filter(|&tech| !world_emissive_only || tech == 5);
         for tech in techs {
             let shadow = tech == super::super::SUN_SHADOW_CASTER_TECH;
             for (material, prepared_pass) in
@@ -243,6 +245,13 @@ fn schedule_admitted_pipelines(
                     use asset_iw4::vertex_decl::{
                         PACKED_VERTEX_TYPE, STATICMODELCACHE_VERTEX_TYPE,
                     };
+                    if world_emissive_only
+                        && (port.vertex_type == PACKED_VERTEX_TYPE
+                            || port.vertex_type == STATICMODELCACHE_VERTEX_TYPE
+                            || !extracted.frame.pipeline_world_materials.contains(&material.0))
+                    {
+                        continue;
+                    }
                     if tech != 5 && port.vertex_type != PACKED_VERTEX_TYPE {
                         let used = if port.vertex_type == STATICMODELCACHE_VERTEX_TYPE {
                             extracted

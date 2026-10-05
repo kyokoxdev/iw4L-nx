@@ -1,15 +1,31 @@
 # IW4L
 
 IW4L is an open-source runtime for Call of Duty: Modern Warfare 2 (2009), written in
-Rust with [Bevy](https://bevy.org/). Point it at a copy of MW2 you already own and it
-loads that installation's maps, models, textures and weapons into its own engine. You
-can try implemented movement and combat on multiplayer maps, then inspect or change how
-those systems work.
+Rust with [Bevy](https://bevy.org/). **The goal of this project is to port MW2 to the
+Nintendo Switch.** Point it at a copy of MW2 you already own and it loads that
+installation's maps, models, textures and weapons into its own engine, which runs on
+Switch homebrew (`aarch64`, Horizon OS) as well as on desktop. Desktop builds are the
+development and debugging platform; the Switch build is the target.
 
 <p align="center">
   <img src="docs/screenshots/bomb-plant.jpg" width="49%" alt="Bomb planting in IW4L">
   <img src="docs/screenshots/tanker-explosion.jpg" width="49%" alt="Tanker explosion in IW4L">
 </p>
+
+## Nintendo Switch port
+
+The Switch port is the focus of current work and is **in progress**. It runs as a
+homebrew `.nro` under title takeover and has its own platform layer
+(`crates/platform_nx`): libnx, SDL2 gamepads, system keyboard, a GL-friendly texture
+binding path, and a stack of changes that cut memory use to fit the console's limits.
+Expect crashes, out-of-memory failures and missing features while map loading and
+performance are brought up on hardware.
+
+```bash
+switch/build.sh build --profile play -p launcher
+```
+
+Toolchain, packaging, SD card layout and debugging are in the [Switch guide](docs/SWITCH.md).
 
 ## What you can try
 

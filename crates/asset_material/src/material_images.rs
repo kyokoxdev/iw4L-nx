@@ -1482,9 +1482,10 @@ fn read_cached_mips(key: &str, io_at: std::time::Instant) -> Option<DecodedMips>
 
 /// Largest IWD texture side kept. On Switch the ~3 GB heap also backs GPU
 /// memory, and every common_mp texture at full size does not fit beside the map.
-// ponytail: fixed 512 on Horizon; a setting if docked play wants sharper textures.
+// 256, not 512: at 512 GPU textures still filled the heap past class select.
+// ponytail: fixed 256 on Horizon; a setting if docked play wants sharper textures.
 #[cfg(target_os = "horizon")]
-const PICMIP_MAX: u32 = 512;
+const PICMIP_MAX: u32 = 256;
 #[cfg(not(target_os = "horizon"))]
 const PICMIP_MAX: u32 = u32::MAX;
 

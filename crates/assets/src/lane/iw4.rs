@@ -798,6 +798,15 @@ impl ZoneLane for Iw4Lane {
         let mut report = sink.models.report("common_mp");
         report.splice(0..0, report_arenas.drain(..));
         report.extend(super::sink::HeapSpan::drain_lines("common_mp"));
+        let (spilled, written, reloaded) = asset_model::spill_stats();
+        if spilled > 0 {
+            report.push(format!(
+                "common_mp xmodel spill: {}MiB on SD ({}MiB written this boot), {}MiB read back so far",
+                spilled >> 20,
+                written >> 20,
+                reloaded >> 20
+            ));
+        }
         if let Err(error) = walk {
             report.push(format!(
                 "common_mp model walk: stopped after {} assets — {error}",

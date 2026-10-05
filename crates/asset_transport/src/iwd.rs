@@ -180,16 +180,8 @@ fn is_iwd_archive(path: &Path) -> bool {
 }
 
 fn index_image_entries(path: &Path) -> Result<Vec<(String, IwdFile)>, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| format!("cannot index {}: {error}", path.display()))?;
     let mut entries = Vec::new();
-    for entry_index in 0..archive.len() {
-        let entry = archive
-            .by_index(entry_index)
-            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        let exact = entry.name().to_owned();
+    for (exact, crc32, size) in archive_entries(path)? {
         let normalized = exact.replace('\\', "/");
         let Some(name) = normalized
             .strip_prefix("images/")
@@ -205,12 +197,83 @@ fn index_image_entries(path: &Path) -> Result<Vec<(String, IwdFile)>, String> {
             IwdFile {
                 archive: path.to_path_buf(),
                 entry: exact,
-                crc32: entry.crc32(),
-                size: entry.size(),
+                crc32,
+                size,
             },
         ));
     }
     Ok(entries)
+}
+
+/// Name, CRC-32 and uncompressed size of every entry. `ZipArchive::by_index`
+/// seeks to each entry's local header, thousands of SD reads per IWD (~30 s
+/// on Switch); the central directory holds all three in one read. Archives
+/// it cannot read plainly (zip64, non-ASCII names) go through the zip crate.
+fn archive_entries(path: &Path) -> Result<Vec<(String, u32, u64)>, String> {
+    if let Some(entries) = central_directory(path) {
+        return Ok(entries);
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .map_err(|error| format!("cannot index {}: {error}", path.display()))?;
+    (0..archive.len())
+        .map(|index| {
+            let entry = archive
+                .by_index(index)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            Ok((entry.name().to_owned(), entry.crc32(), entry.size()))
+        })
+        .collect()
+}
+
+fn central_directory(path: &Path) -> Option<Vec<(String, u32, u64)>> {
+    use std::io::{Seek, SeekFrom};
+    const EOCD: usize = 22;
+    const ENTRY: usize = 46;
+    let u16_at = |b: &[u8], i: usize| Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?));
+    let u32_at = |b: &[u8], i: usize| Some(u32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?));
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.seek(SeekFrom::End(0)).ok()?;
+    // End record: 22 bytes, then a comment of up to 64 KiB.
+    let tail_start = len.saturating_sub((EOCD + 0xFFFF) as u64);
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(tail_start)).ok()?;
+    file.read_to_end(&mut tail).ok()?;
+    let eocd = (0..=tail.len().checked_sub(EOCD)?)
+        .rev()
+        .find(|&i| tail[i..i + 4] == *b"PK\x05\x06")?;
+    let count = u16_at(&tail, eocd + 10)?;
+    let dir_len = u32_at(&tail, eocd + 12)?;
+    if count == 0xFFFF || dir_len == 0xFFFF_FFFF {
+        return None;
+    }
+    // Measured back from the end record, so data prepended to the zip is fine.
+    let dir_start = (tail_start + eocd as u64).checked_sub(u64::from(dir_len))?;
+    let mut dir = vec![0; dir_len as usize];
+    file.seek(SeekFrom::Start(dir_start)).ok()?;
+    file.read_exact(&mut dir).ok()?;
+
+    let mut entries = Vec::with_capacity(usize::from(count));
+    let mut at = 0;
+    for _ in 0..count {
+        if dir.get(at..at + 4)? != b"PK\x01\x02" {
+            return None;
+        }
+        let crc32 = u32_at(&dir, at + 16)?;
+        let size = u32_at(&dir, at + 24)?;
+        let name_len = usize::from(u16_at(&dir, at + 28)?);
+        let extra_len = usize::from(u16_at(&dir, at + 30)?);
+        let comment_len = usize::from(u16_at(&dir, at + 32)?);
+        let name = dir.get(at + ENTRY..at + ENTRY + name_len)?;
+        if size == 0xFFFF_FFFF || !name.is_ascii() {
+            return None;
+        }
+        entries.push((String::from_utf8(name.to_vec()).ok()?, crc32, u64::from(size)));
+        at += ENTRY + name_len + extra_len + comment_len;
+    }
+    Some(entries)
 }
 
 type OpenArchive = zip::ZipArchive<std::io::BufReader<std::fs::File>>;
@@ -485,19 +548,12 @@ impl IwdSoundIndex {
 
         let mut sounds = HashMap::new();
         for path in archives {
-            let file = std::fs::File::open(&path)
-                .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-
-            let archive = zip::ZipArchive::new(std::io::BufReader::new(file))
-                .map_err(|e| format!("zip {}: {e}", path.display()))?;
             let language = archive_language(&path);
-            for name in archive.file_names() {
-                let Some(rel) = sound_rel_from_zip_name(name, language.as_deref()) else {
+            for (name, _, _) in archive_entries(&path)? {
+                let Some(rel) = sound_rel_from_zip_name(&name, language.as_deref()) else {
                     continue;
                 };
-                sounds
-                    .entry(rel)
-                    .or_insert_with(|| (path.clone(), name.to_owned()));
+                sounds.entry(rel).or_insert_with(|| (path.clone(), name));
             }
         }
         Ok(Self {
@@ -517,5 +573,76 @@ impl IwdSoundIndex {
     pub fn read_sound(&self, relative: &str) -> Option<Result<Vec<u8>, String>> {
         let (archive, entry) = self.sounds.get(&sound_key(relative))?;
         Some(read_pooled_entry(archive, entry, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stored zip with leading junk and an archive comment, as bytes.
+    fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut out = b"junk before the archive".to_vec();
+        let mut dir = Vec::new();
+        for (index, (name, data)) in files.iter().enumerate() {
+            let offset = out.len() as u32;
+            let crc = 0x1000_0000 + index as u32; // not checked by either reader
+            let fixed = |sig: &[u8], out: &mut Vec<u8>| {
+                out.extend(sig);
+                out.extend(20u16.to_le_bytes()); // version
+                out.extend([0; 8]); // flags, method, time, date
+                out.extend(crc.to_le_bytes());
+                out.extend((data.len() as u32).to_le_bytes());
+                out.extend((data.len() as u32).to_le_bytes());
+                out.extend((name.len() as u16).to_le_bytes());
+            };
+            fixed(b"PK\x03\x04", &mut out);
+            out.extend([0; 2]); // extra
+            out.extend(name.as_bytes());
+            out.extend(*data);
+            dir.extend(b"PK\x01\x02");
+            dir.extend(20u16.to_le_bytes()); // made by
+            fixed(&[], &mut dir);
+            dir.extend(3u16.to_le_bytes()); // extra
+            dir.extend(2u16.to_le_bytes()); // comment
+            dir.extend([0; 8]); // disk, attributes
+            dir.extend(offset.to_le_bytes());
+            dir.extend(name.as_bytes());
+            dir.extend(b"xyzcc");
+        }
+        let dir_start = out.len() as u32;
+        out.extend(&dir);
+        out.extend(b"PK\x05\x06");
+        out.extend([0; 4]);
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((files.len() as u16).to_le_bytes());
+        out.extend((dir.len() as u32).to_le_bytes());
+        out.extend(dir_start.to_le_bytes());
+        out.extend(4u16.to_le_bytes());
+        out.extend(b"note");
+        out
+    }
+
+    #[test]
+    fn central_directory_matches_zip_crate() {
+        let path = std::env::temp_dir().join(format!("iw4l_cd_{}.iwd", std::process::id()));
+        let files: [(&str, &[u8]); 3] = [
+            ("images/a.iwi", b"alpha"),
+            ("sound/b.wav", b""),
+            ("images\\c.iwi", b"gamma!"),
+        ];
+        std::fs::write(&path, zip_bytes(&files)).unwrap();
+        let ours = central_directory(&path).expect("plain zip");
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let theirs: Vec<_> = (0..archive.len())
+            .map(|i| {
+                let entry = archive.by_index(i).unwrap();
+                (entry.name().to_owned(), entry.crc32(), entry.size())
+            })
+            .collect();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(ours, theirs);
+        assert_eq!(ours.len(), 3);
     }
 }

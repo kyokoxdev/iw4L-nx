@@ -296,9 +296,13 @@ pub(crate) fn save_user_settings(
         return;
     }
     let temporary = path.with_extension("cfg.tmp");
-    if let Err(error) =
-        fs::write(&temporary, payload.as_bytes()).and_then(|()| fs::rename(&temporary, &path))
-    {
+    if let Err(error) = fs::write(&temporary, payload.as_bytes()).and_then(|()| {
+        // Horizon's RenameFile refuses an existing target.
+        if cfg!(target_os = "horizon") {
+            let _ = fs::remove_file(&path);
+        }
+        fs::rename(&temporary, &path)
+    }) {
         warn!("could not atomically save {}: {error}", path.display());
         return;
     }
@@ -309,7 +313,8 @@ fn settings_path(artifacts: &std::path::Path) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("IW4L_SETTINGS_PATH") {
         return Some(PathBuf::from(path));
     }
-    if cfg!(windows) {
+    // Switch has no HOME either: keep it beside the logs on the SD card.
+    if cfg!(windows) || cfg!(target_os = "horizon") {
         return Some(artifacts.join("settings.cfg"));
     }
     std::env::var_os("XDG_CONFIG_HOME")

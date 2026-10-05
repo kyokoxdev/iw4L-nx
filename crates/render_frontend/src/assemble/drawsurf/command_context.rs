@@ -875,6 +875,10 @@ pub(crate) fn update_command_context_code_sources(
     prepared: Res<PreparedSceneView>,
     cameras: Query<&Camera, With<FpvLens>>,
     scene: Option<Res<crate::prepare::scene::world::WorldScene>>,
+    sm: (
+        Res<crate::prepare::scene::view_parms::SmEnableDvar>,
+        Res<crate::prepare::scene::view_parms::SmSunEnableDvar>,
+    ),
 ) {
     if !prepared.ready {
         return;
@@ -1035,7 +1039,11 @@ pub(crate) fn update_command_context_code_sources(
     let _ = mat_frame
         .code_sources
         .set_texture(CODE_TEXTURE_RESOLVED_POST_SUN, 0x62);
-    if let Some(light) = dir_light.as_deref() {
+    // sm_enable 0 / sm_sunEnable 0: no sun frame, so the caster bake, the
+    // shadow pass and the shadowed lit techniques all stand down.
+    let sun_shadows = sm.0.enabled.unwrap_or(lighting_iw4::SM_ENABLE_DEFAULT)
+        && sm.1.enabled.unwrap_or(lighting_iw4::SM_SUN_ENABLE_DEFAULT);
+    if let Some(light) = dir_light.as_deref().filter(|_| sun_shadows) {
         let _ = produce_sun_shadow_code_texture(&mut mat_frame.code_sources);
 
         if let Some(bounds) = scene.as_deref().and_then(|scene| scene.world_bounds) {
