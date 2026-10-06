@@ -2851,9 +2851,16 @@ impl SimState {
         hitbox_cmds: Option<&[ClientId]>,
     ) {
         use crate::bullet_collision::{HistoryFrame, HistoryPhase};
-        self.tick_player_dobjs(hitbox_cmds);
-        self.tick_player_anim_trees(msec, player, hitbox_cmds);
+        {
+            let _span = tracing::info_span!(target: "iw4l", "sim", name = "tick_player_dobjs").entered();
+            self.tick_player_dobjs(hitbox_cmds);
+        }
+        {
+            let _span = tracing::info_span!(target: "iw4l", "sim", name = "tick_player_anim_trees").entered();
+            self.tick_player_anim_trees(msec, player, hitbox_cmds);
+        }
         let mut error = None;
+        let _span = tracing::info_span!(target: "iw4l", "sim", name = "collision_poses").entered();
         let poses = self.alive_collision_poses_inner(player, &[], |e| {
             if error.is_none() {
                 error = Some(e.to_owned());

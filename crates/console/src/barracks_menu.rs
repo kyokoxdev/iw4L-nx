@@ -47,6 +47,16 @@ pub(crate) fn route(
         commands.read().for_each(drop);
         return;
     }
+    // ~250 dvars are formatted below: only redo it when an input moved.
+    if commands.is_empty()
+        && !catalog.is_changed()
+        && !loc.is_changed()
+        && !settings.is_changed()
+        && !profile.is_changed()
+        && !dvars.is_added()
+    {
+        return;
+    }
     let rows = reward_rows(&catalog);
     for command in commands
         .read()

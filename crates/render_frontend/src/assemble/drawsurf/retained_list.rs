@@ -2523,6 +2523,13 @@ pub(crate) fn rebuild_static_draw_lane(
     let eye_key = eye_lod_reuse_key(eye, lod_args);
     let generation_hold = list.generation_id == runtime.catalog.generation_id
         && list.world_generation == world_generation;
+    // Named phases for the `span-profile` layer; runs/frame give the rebuild rate.
+    macro_rules! phase {
+        ($name:literal, $body:expr) => {{
+            let _span = bevy::log::info_span!(target: "iw4l", "static_lane", name = $name).entered();
+            $body
+        }};
+    }
     let reuse = static_list_reusable(
         list.last_static,
         world_id,
@@ -2550,14 +2557,17 @@ pub(crate) fn rebuild_static_draw_lane(
             .and_then(|scene| scene.cull.as_ref())
             .map(|cull| cull.static_model_cull_dists.as_slice())
             .unwrap_or(&[]);
-        let smodel_walk = collect_smodel_lod_picks(
-            smodel_plan.as_deref(),
-            smodel_vis,
-            cull_dists,
-            eye,
-            lod_args,
-            lighting.as_deref(),
-            smc_cache.as_deref(),
+        let smodel_walk = phase!(
+            "lod_walk",
+            collect_smodel_lod_picks(
+                smodel_plan.as_deref(),
+                smodel_vis,
+                cull_dists,
+                eye,
+                lod_args,
+                lighting.as_deref(),
+                smc_cache.as_deref(),
+            )
         );
         let smodel_hold = generation_hold
             && list.last_static.is_some()
@@ -2597,26 +2607,32 @@ pub(crate) fn rebuild_static_draw_lane(
                 list.last_smodel_picks.clone_from(&smodel_walk.picks);
             }
             if !world_hold {
-                emit_world_static_lane(
-                    list.as_mut(),
-                    &world_list,
-                    world_plan.as_deref(),
-                    scene.as_deref(),
-                    &runtime.catalog,
+                phase!(
+                    "world_emit",
+                    emit_world_static_lane(
+                        list.as_mut(),
+                        &world_list,
+                        world_plan.as_deref(),
+                        scene.as_deref(),
+                        &runtime.catalog,
+                    )
                 );
             }
             if !smodel_hold && let Some(plan) = smodel_plan.as_deref() {
-                emit_smodel_static_lane(
-                    list.as_mut(),
-                    plan,
-                    &smodel_walk,
-                    smc_cache.as_deref(),
-                    smc_on,
-                    pretess_dvar.enabled,
-                    &runtime.catalog,
+                phase!(
+                    "smodel_emit",
+                    emit_smodel_static_lane(
+                        list.as_mut(),
+                        plan,
+                        &smodel_walk,
+                        smc_cache.as_deref(),
+                        smc_on,
+                        pretess_dvar.enabled,
+                        &runtime.catalog,
+                    )
                 );
             }
-            compose_static_lanes(list.as_mut());
+            phase!("compose", compose_static_lanes(list.as_mut()));
         }
     }
     list.last_static = Some((world_id, vis_id, eye_key));

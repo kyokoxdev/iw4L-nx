@@ -162,6 +162,15 @@ pub(crate) fn route(
     mut menus: MessageWriter<UiMenuRequest>,
     mut echo: crate::feature_dispatch::ConsoleEcho,
 ) {
+    // The dvar publish below formats ~50 strings: only redo it when an input moved.
+    if events.is_empty()
+        && !store.is_changed()
+        && !catalog.is_changed()
+        && !loc.is_changed()
+        && !dvars.is_added()
+    {
+        return;
+    }
     for command in events
         .read()
         .filter(|command| command.name.starts_with("ui_class_"))

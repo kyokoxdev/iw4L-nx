@@ -1076,16 +1076,20 @@ fn fanout_loopback(
     queues.pending_gamenotify.clear_after_fanout();
 }
 
+/// Last reader of the tick's snapshot (after Fanout and `retire_departed_peers`):
+/// moves it into the archive instead of deep-cloning it every tick.
 pub fn authority_bookkeeping(
-    server_tick: Res<ServerTick>,
+    mut server_tick: ResMut<ServerTick>,
     mut archive: ResMut<FrameArchive>,
     seats: Res<ActiveKillcams>,
     trace: Option<ResMut<AuthorityPhaseTrace>>,
 ) {
     push_phase(trace, "Bookkeeping");
 
-    if let Some(tick) = server_tick.0.as_ref() {
-        archive.push_snapshot(&tick.snapshot, &seats.viewers());
+    if let Some(tick) = server_tick.0.as_mut() {
+        let at = tick.snapshot.tick;
+        let snapshot = std::mem::replace(&mut tick.snapshot, sim::Snapshot::unpublished(at));
+        archive.push_snapshot_owned(snapshot, &seats.viewers());
     }
 }
 pub fn register_listen_runtime(app: &mut App) {
@@ -1134,7 +1138,9 @@ pub fn register_listen_runtime(app: &mut App) {
                     .in_set(AuthoritySet::Bookkeeping)
                     .before(retire_departed_peers),
                 retire_departed_peers.in_set(AuthoritySet::Bookkeeping),
-                authority_bookkeeping.in_set(frame::AuthorityBookkeeping),
+                authority_bookkeeping
+                    .in_set(frame::AuthorityBookkeeping)
+                    .after(retire_departed_peers),
                 end_fixed_census.after(AuthoritySet::Bookkeeping),
             )
                 .run_if(authority_should_tick),
@@ -1158,7 +1164,9 @@ pub fn register_listen_runtime(app: &mut App) {
                     .in_set(AuthoritySet::Bookkeeping)
                     .before(retire_departed_peers),
                 retire_departed_peers.in_set(AuthoritySet::Bookkeeping),
-                authority_bookkeeping.in_set(frame::AuthorityBookkeeping),
+                authority_bookkeeping
+                    .in_set(frame::AuthorityBookkeeping)
+                    .after(retire_departed_peers),
                 end_fixed_census.after(AuthoritySet::Bookkeeping),
             )
                 .run_if(authority_should_tick),

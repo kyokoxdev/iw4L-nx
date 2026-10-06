@@ -75,6 +75,43 @@ pub fn pin_current_thread(preferred: i32, mask: u32, name: &str) {
     ));
 }
 
+/// Every thread nobody pins (SDL audio, Mesa queues, audio workers, `std`
+/// spawns) is created on the process default core with that core as its only
+/// affinity: the main or render thread's core, where Horizon will not
+/// time-slice equal priorities. Start them on core 2 with the Bevy pools
+/// instead; `pin_current_thread` still moves the main, render and pool threads.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_threadCreate(
+    t: *mut c_void,
+    entry: *const c_void,
+    arg: *mut c_void,
+    stack_mem: *mut c_void,
+    stack_sz: usize,
+    prio: c_int,
+    cpuid: c_int,
+) -> u32 {
+    const DEFAULT_CORE: c_int = -2;
+    unsafe extern "C" {
+        fn __real_threadCreate(
+            t: *mut c_void,
+            entry: *const c_void,
+            arg: *mut c_void,
+            stack_mem: *mut c_void,
+            stack_sz: usize,
+            prio: c_int,
+            cpuid: c_int,
+        ) -> u32;
+    }
+    let moved = if cpuid == DEFAULT_CORE { 2 } else { cpuid };
+    // SAFETY: arguments forwarded unchanged apart from the core.
+    let rc = unsafe { __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, moved) };
+    breadcrumb(&format!(
+        "threadCreate: cpuid={cpuid} -> {moved} prio={prio:#x} stack={}K rc={rc:#x}",
+        stack_sz >> 10
+    ));
+    rc
+}
+
 /// newlib `struct mallinfo` (`malloc.h`), all `size_t`.
 #[repr(C)]
 struct MallInfo {
@@ -155,6 +192,29 @@ extern "C" fn _exit(code: c_int) -> ! {
         breadcrumb(&format!("_exit: code={code} {}", mem_line()));
     }
     unsafe { __libnx_exit(code) }
+}
+
+// Horizon's RenameFile refuses an existing target (EEXIST); every save path
+// (barracks, classes, profile, account, spill) is written as POSIX
+// replace-by-rename. `--wrap=rename` (launcher/build.rs) restores that.
+// ponytail: unlink then rename is not atomic; a crash between them loses the
+// old file. Horizon has no atomic replace.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_rename(from: *const c_char, to: *const c_char) -> c_int {
+    const EEXIST: c_int = 17;
+    unsafe extern "C" {
+        fn __real_rename(from: *const c_char, to: *const c_char) -> c_int;
+        fn unlink(path: *const c_char) -> c_int;
+        fn __errno() -> *mut c_int;
+    }
+    // SAFETY: C strings straight from the caller; newlib's errno is per thread.
+    unsafe {
+        let rc = __real_rename(from, to);
+        if rc == 0 || *__errno() != EEXIST || unlink(to) != 0 {
+            return rc;
+        }
+        __real_rename(from, to)
+    }
 }
 
 /// Code addresses in the next 2 KiB of stack, as offsets from the load base:
@@ -528,8 +588,14 @@ pub fn boot_env() {
     let applet = unsafe { appletGetAppletType() };
     let cpu_rc = boost_cpu();
     pin_current_thread(0, 0b001, "main");
+    // Which cores this process may use at all (NPDM): 0b1111 would mean core 3.
+    const INFO_CORE_MASK: u32 = 0;
+    const CUR_PROCESS_HANDLE: u32 = 0xFFFF_8001;
+    let mut cores = 0u64;
+    // SAFETY: plain SVC into a local.
+    let cores_rc = unsafe { svcGetInfo(&mut cores, INFO_CORE_MASK, CUR_PROCESS_HANDLE, 0) };
     breadcrumb(&format!(
-        "env: applet_type={applet} cpu_boost_rc={cpu_rc:#x} {} {}",
+        "env: applet_type={applet} cpu_boost_rc={cpu_rc:#x} cores={cores:#06b} rc={cores_rc:#x} {} {}",
         mem_line(),
         heap_line()
     ));
@@ -590,6 +656,10 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 // ponytail: unbuffered open-per-line trace; drop once boot is stable.
 pub fn breadcrumb(line: &str) {
     use std::io::Write as _;
+    // Two threads appending at once both write at the end they saw on open, so
+    // one line overwrote the other (the render thread's pin line went missing).
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = LOCK.lock();
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -712,7 +782,10 @@ mod window {
         }
     }
 
-    fn pin_render_thread(mut pinned: Local<bool>) {
+    /// Exclusive so it runs on the thread driving the `Render` schedule: as a
+    /// plain system the executor ran it on a compute-pool thread, which pinned
+    /// that thread instead and left the render thread on the main thread's core.
+    fn pin_render_thread(_: &mut World, mut pinned: Local<bool>) {
         if !std::mem::replace(&mut *pinned, true) {
             crate::pin_current_thread(1, 0b010, "render");
         }

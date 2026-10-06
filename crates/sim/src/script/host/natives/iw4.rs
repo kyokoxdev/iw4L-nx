@@ -196,13 +196,18 @@ pub(crate) fn deliver_local_presentation_dvars(world: &mut World) {
     for (setting, value) in commands {
         set_dvar(world, setting.name(), &value);
     }
-    let values: Vec<_> = world
-        .resource::<Runtime>()
-        .dvars
-        .iter()
-        .filter(|(name, _)| crate::TargetBoxDvar::named(name).is_some())
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
+    // Every tick: look up the four keys (stored lowercase, BTreeMap order)
+    // instead of scanning and lowercasing every script dvar.
+    let script_dvars = &world.resource::<Runtime>().dvars;
+    let values: Vec<_> = [
+        "foficonminsize",
+        "foficonscale",
+        "foficonspawntimedelay",
+        "foficonspawntimefade",
+    ]
+    .into_iter()
+    .filter_map(|name| Some((name.to_owned(), script_dvars.get(name)?.clone())))
+    .collect();
     let mut frame = crate::frame::FrameWorld::from_world(world);
     let dvars = &mut frame.client_meta_mut(client).client_dvars;
     for (name, value) in values {

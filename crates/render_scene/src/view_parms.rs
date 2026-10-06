@@ -206,6 +206,8 @@ impl RLockPvs {
                 && held.live_forward.dot(live.forward) >= HOLD_TURN_RAD.cos()
         });
         if !covered {
+            // `span-profile`: runs/frame of this span is the held-view refresh rate.
+            let _span = bevy::log::info_span!(target: "iw4l", "cull", name = "held_refresh").entered();
             self.held = Some(HeldCullView {
                 view: widen(live),
                 live_forward: live.forward,

@@ -744,7 +744,15 @@ impl HudPresentationGaps {
     }
 }
 
-pub(crate) fn report_hud_gaps(gaps: Res<HudPresentationGaps>, mut last: Local<Option<String>>) {
+pub(crate) fn report_hud_gaps(
+    gaps: Res<HudPresentationGaps>,
+    mut last: Local<Option<String>>,
+    mut seen: Local<Option<u64>>,
+) {
+    // Every frame: compare the ledger revision before formatting a signature.
+    if seen.replace(gaps.0.revision()) == Some(gaps.0.revision()) {
+        return;
+    }
     let signature = gap_signature(&gaps);
     if last.as_deref() == Some(signature.as_str()) {
         return;

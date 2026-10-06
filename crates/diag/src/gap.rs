@@ -15,7 +15,7 @@ pub trait Gap: Copy + PartialEq + 'static {
     }
 }
 
-pub trait GapCause: fmt::Display {
+pub trait GapCause: fmt::Display + PartialEq {
     type Gap: Gap;
 
     fn gap(&self) -> Self::Gap;
@@ -33,6 +33,8 @@ pub struct GapLedger<C: GapCause, const N: usize> {
     live: [GapState<C>; N],
 
     hits: [u64; N],
+
+    revision: u64,
 }
 
 impl<C: GapCause, const N: usize> Default for GapLedger<C, N> {
@@ -58,19 +60,30 @@ impl<C: GapCause, const N: usize> GapLedger<C, N> {
                 }
             }),
             hits: [0; N],
+            revision: 0,
         }
     }
 
     pub fn raise(&mut self, cause: C) {
         let slot = cause.gap().index();
         self.hits[slot] = self.hits[slot].saturating_add(1);
-        self.live[slot] = GapState::Raised(cause);
+        if !matches!(&self.live[slot], GapState::Raised(live) if *live == cause) {
+            self.live[slot] = GapState::Raised(cause);
+            self.revision = self.revision.wrapping_add(1);
+        }
     }
 
     pub fn clear(&mut self, gap: C::Gap) {
-        if !gap.is_standing() {
+        if !gap.is_standing() && self.is_live(gap) {
             self.live[gap.index()] = GapState::Absent;
+            self.revision = self.revision.wrapping_add(1);
         }
+    }
+
+    /// Bumps whenever the live set or a cause changes; cheaper to compare
+    /// every frame than `write_signature`.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn is_live(&self, gap: C::Gap) -> bool {
@@ -117,5 +130,60 @@ impl<C: GapCause, const N: usize> fmt::Debug for GapLedger<C, N> {
         f.write_str("GapLedger[")?;
         self.write_signature(f)?;
         f.write_char(']')
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum G {
+        A,
+    }
+
+    impl Gap for G {
+        const ALL: &'static [Self] = &[G::A];
+        fn name(self) -> &'static str {
+            "a"
+        }
+        fn is_standing(self) -> bool {
+            false
+        }
+    }
+
+    #[derive(PartialEq)]
+    struct C(u8);
+
+    impl fmt::Display for C {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl GapCause for C {
+        type Gap = G;
+        fn gap(&self) -> G {
+            G::A
+        }
+    }
+
+    #[test]
+    fn revision_moves_only_on_state_change() {
+        let mut ledger = GapLedger::<C, 1>::new();
+        let r0 = ledger.revision();
+        ledger.clear(G::A);
+        assert_eq!(ledger.revision(), r0);
+        ledger.raise(C(1));
+        let r1 = ledger.revision();
+        assert_ne!(r1, r0);
+        ledger.raise(C(1));
+        assert_eq!(ledger.revision(), r1);
+        assert_eq!(ledger.hits(G::A), 2);
+        ledger.raise(C(2));
+        let r2 = ledger.revision();
+        assert_ne!(r2, r1);
+        ledger.clear(G::A);
+        assert_ne!(ledger.revision(), r2);
     }
 }

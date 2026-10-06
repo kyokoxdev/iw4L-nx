@@ -113,11 +113,16 @@ pub fn link_steam_games(root: &GamesRoot) -> SteamProbe {
 
 #[cfg(not(windows))]
 pub(crate) fn installed_game_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    // has_game peeks every zone under every root; skip it with no Steam (Switch).
+    let libraries = steam_libraries();
+    if libraries.is_empty() {
+        return Vec::new();
+    }
     let missing = TITLES
         .into_iter()
         .filter(|(game, _, _)| !has_game(roots, *game))
         .collect::<Vec<_>>();
-    steam_libraries()
+    libraries
         .into_iter()
         .flat_map(|library| {
             missing

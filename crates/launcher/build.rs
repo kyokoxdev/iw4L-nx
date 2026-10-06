@@ -13,6 +13,10 @@ fn main() {
         for f in ["key_create", "key_delete", "setspecific", "getspecific"] {
             println!("cargo::rustc-link-arg-bins=-Wl,--wrap=pthread_{f}");
         }
+        // platform_nx::__wrap_rename: replace an existing target.
+        println!("cargo::rustc-link-arg-bins=-Wl,--wrap=rename");
+        // platform_nx::__wrap_threadCreate: unpinned threads start on core 2.
+        println!("cargo::rustc-link-arg-bins=-Wl,--wrap=threadCreate");
         // platform_nx::heap_samples: who holds the heap at an OOM.
         if std::env::var_os("CARGO_FEATURE_HEAP_SAMPLES").is_none() {
             return;

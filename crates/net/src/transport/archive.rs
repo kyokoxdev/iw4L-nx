@@ -115,6 +115,10 @@ impl FrameArchive {
     }
 
     pub fn push_snapshot(&mut self, snapshot: &Snapshot, spectators: &[ClientId]) -> bool {
+        self.push_snapshot_owned(snapshot.clone(), spectators)
+    }
+
+    pub fn push_snapshot_owned(&mut self, snapshot: Snapshot, spectators: &[ClientId]) -> bool {
         let no_player_state = snapshot
             .meta
             .clients
@@ -132,7 +136,7 @@ impl FrameArchive {
             .collect();
         self.push(ArchivedFrame {
             tick: snapshot.tick,
-            snapshot: snapshot.clone(),
+            snapshot,
             no_player_state,
         })
     }

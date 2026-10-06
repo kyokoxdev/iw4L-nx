@@ -375,6 +375,7 @@ struct ThinkBots<'w> {
     fire: ResMut<'w, BotFireQueue>,
     reliable: ResMut<'w, ReliableEventHub>,
     meter: ResMut<'w, BotMeter>,
+    archive: Res<'w, net::FrameArchive>,
 }
 
 fn think_bots(mut p: ThinkBots) {
@@ -390,7 +391,13 @@ fn think_bots(mut p: ThinkBots) {
         return;
     }
 
-    let snapshot = p.world.0.snapshot(Tick(p.clock.tick.saturating_sub(1)));
+    // Last tick's published snapshot is already in the killcam archive;
+    // rebuilding it here cost as much as the publish itself (~2.5 ms a tick).
+    let last = Tick(p.clock.tick.saturating_sub(1));
+    let snapshot = match p.archive.newest() {
+        Some(frame) if frame.tick == last => std::borrow::Cow::Borrowed(&frame.snapshot),
+        _ => std::borrow::Cow::Owned(p.world.0.snapshot(last)),
+    };
     let fires = p.fire.drain();
     let mut budget = TraceBudget::new(TRACE_QUOTA);
     let mut astar = ASTAR_QUOTA;
@@ -440,11 +447,14 @@ fn think_bots(mut p: ThinkBots) {
             }
         } else if let Some(brain) = bot.brain.as_mut() {
             let mut queried = Budgeted::new(&mut p.world.0, &mut budget);
+            let observe = bevy::log::info_span!(target: "iw4l", "bots", name = "observe").entered();
             let Some(obs) =
                 sensor::observe_focused(&snapshot, bot.id, &mut queried, brain.focus_target())
             else {
                 continue;
             };
+            drop(observe);
+            let _drive = bevy::log::info_span!(target: "iw4l", "bots", name = "drive_nav").entered();
             let started = std::time::Instant::now();
             let mut cmd = brain.drive_nav(
                 &obs,

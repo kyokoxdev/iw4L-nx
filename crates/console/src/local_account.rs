@@ -76,6 +76,21 @@ pub(crate) fn save(
     let (Some(mut account), Some(path)) = (account, persistence.path.clone()) else {
         return;
     };
+    // Every frame: skip the account-buffer clone and compare once the live
+    // revision is the one already saved and receipted.
+    if *role == frame::RuntimeRole::Listen
+        && let (Some(saved), Some(authority)) = (persistence.saved.as_ref(), authority.as_ref())
+        && saved.account == account.id
+        && authority.0.persistent_data().revision(account.id) == Some(saved.revision)
+        && receipt.as_ref().is_none_or(|receipt| {
+            receipt
+                .0
+                .as_ref()
+                .is_some_and(|r| r.account == saved.account && r.revision == saved.revision)
+        })
+    {
+        return;
+    }
     let mut authority = authority;
     let snapshot = if *role == frame::RuntimeRole::Listen {
         authority
@@ -278,6 +293,8 @@ fn lock_file(path: &Path) -> io::Result<File> {
         options.mode(0o600);
     }
     let file = options.open(parent.join(name))?;
+    // Horizon has no file locks; one process owns the SD card there.
+    #[cfg(not(target_os = "horizon"))]
     file.lock()?;
     Ok(file)
 }
@@ -355,14 +372,16 @@ fn write_atomic(path: &Path, account: &LocalAccount, create: bool) -> io::Result
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        if create {
+        // Horizon has no hard links, and no concurrent creator to race.
+        if create && !cfg!(target_os = "horizon") {
             // Publish the first identity without replacing a concurrent creator's identity.
             fs::hard_link(&temporary, path)?;
             fs::remove_file(&temporary)?;
         } else {
             fs::rename(&temporary, path)?;
         }
-        #[cfg(unix)]
+        // Horizon cannot open a directory as a file.
+        #[cfg(all(unix, not(target_os = "horizon")))]
         File::open(parent)?.sync_all()?;
         Ok(())
     })();

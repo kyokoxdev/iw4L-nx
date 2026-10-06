@@ -1423,14 +1423,22 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
             break;
         };
         let op = op.clone();
-        let exhausted = world.resource::<Runtime>().budget == 0;
+        // One resource lookup per instruction, not two: this loop is the
+        // whole GSC scheduler cost.
+        let exhausted = {
+            let mut runtime = world.resource_mut::<Runtime>();
+            let exhausted = runtime.budget == 0;
+            if !exhausted {
+                runtime.budget -= 1;
+            }
+            exhausted
+        };
         let (pops, pushes) = stack_effect(&op);
         let iterates = matches!(op, Op::ArrayKeys);
         let before = thread.stack.len();
         let result = if exhausted {
             Err("potential infinite loop in script - killing thread".into())
         } else {
-            world.resource_mut::<Runtime>().budget -= 1;
             thread.frames.last_mut().unwrap().pc += 1;
             instruction(world, program, thread, op, now)
         };

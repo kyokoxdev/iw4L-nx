@@ -16,6 +16,10 @@ pub fn publish_gap_hud(
     let Some(report) = report else {
         return;
     };
+    // Every frame: skip formatting the whole report when no input moved.
+    if !report.is_changed() && !identity.is_changed() && !class_store.is_changed() {
+        return;
+    }
 
     let mut body = vec![
         format!("role: {}", identity.role_label),

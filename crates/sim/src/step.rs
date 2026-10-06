@@ -709,6 +709,7 @@ fn publish_snapshot_system(ecs: &mut World) {
         emit_player_ticks(&world, tick);
     }
     let snapshot = if world.publishes_snapshot() {
+        let _span = tracing::info_span!(target: "iw4l", "sim", name = "build_snapshot").entered();
         let snapshot = world.snapshot(tick);
         emit_snapshot_events(&world, &snapshot);
         snapshot

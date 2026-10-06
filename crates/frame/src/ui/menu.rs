@@ -13,14 +13,28 @@ pub struct UiMenuDvars {
 }
 
 impl UiMenuDvars {
+    // Hot (menus read and republish dvars every frame): only allocate a key
+    // when the name has uppercase or is new.
+    fn key(name: &str) -> std::borrow::Cow<'_, str> {
+        if name.bytes().any(|b| b.is_ascii_uppercase()) {
+            name.to_ascii_lowercase().into()
+        } else {
+            name.into()
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.values
-            .get(&name.to_ascii_lowercase())
-            .map(String::as_str)
+        self.values.get(Self::key(name).as_ref()).map(String::as_str)
     }
 
     pub fn set(&mut self, name: &str, value: impl Into<String>) {
-        self.values.insert(name.to_ascii_lowercase(), value.into());
+        let key = Self::key(name);
+        match self.values.get_mut(key.as_ref()) {
+            Some(current) => *current = value.into(),
+            None => {
+                self.values.insert(key.into_owned(), value.into());
+            }
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {

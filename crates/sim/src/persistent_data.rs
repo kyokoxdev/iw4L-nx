@@ -481,6 +481,10 @@ impl PersistentDataStore {
         Ok(())
     }
 
+    pub fn revision(&self, account: AccountId) -> Option<u64> {
+        self.accounts.get(&account).map(|record| record.revision)
+    }
+
     pub fn snapshot(&self, account: AccountId) -> Option<AccountSnapshot> {
         let record = self.accounts.get(&account)?;
         Some(AccountSnapshot {

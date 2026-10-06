@@ -105,6 +105,10 @@ pub fn game_install_root(picked: &Path) -> PathBuf {
 }
 
 pub fn folder_holds_game(folder: &Path, game: crate::ZoneGame) -> bool {
+    // Switch build is MW2-only; other titles' zones are never on the SD card.
+    if cfg!(target_os = "horizon") && game != crate::ZoneGame::Iw4 {
+        return false;
+    }
     let version = zone_version(game);
     let mut pending = vec![(folder.join("zone"), 0)];
     while let Some((dir, depth)) = pending.pop() {
@@ -392,6 +396,12 @@ pub fn find_zone_file_version(
     version: u32,
 ) -> Result<ZoneFile, String> {
     let file_name = format!("{zone}.ff");
+    // Switch build is MW2-only: skip the full SD walk for other titles.
+    if cfg!(target_os = "horizon") && version != IW4_ZONE_VERSION {
+        return Err(format!(
+            "zone `{file_name}` version {version:#x} not found; MW2-only build"
+        ));
+    }
     let mut found: Option<PathBuf> = None;
     let mut rejected = Vec::new();
     for entry in game_files(&root.0) {

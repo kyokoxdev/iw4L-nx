@@ -158,15 +158,22 @@ pub(crate) fn sync_presence(world: &mut World) {
     }
     let tick = request.tick;
     let now = crate::level_time_ms(tick);
-    settle_collision(world);
-    super::entity_damage::apply_script_blasts(world, tick);
-    publish_loop_sounds(world);
-    super::objectives::publish(world);
-    super::controls::sync_script_locks(world);
-    super::triggers::dispatch_triggers(world);
-    present(world, now);
-    settle_collision(world);
-    resolve_link_tags(world);
+    // Named phases for the `span-profile` layer; disabled spans cost nothing.
+    macro_rules! phase {
+        ($name:literal, $body:expr) => {{
+            let _span = tracing::info_span!(target: "iw4l", "presence", name = $name).entered();
+            $body
+        }};
+    }
+    phase!("settle_collision", settle_collision(world));
+    phase!("script_blasts", super::entity_damage::apply_script_blasts(world, tick));
+    phase!("loop_sounds", publish_loop_sounds(world));
+    phase!("objectives", super::objectives::publish(world));
+    phase!("script_locks", super::controls::sync_script_locks(world));
+    phase!("triggers", super::triggers::dispatch_triggers(world));
+    phase!("present", present(world, now));
+    phase!("settle_collision", settle_collision(world));
+    phase!("link_tags", resolve_link_tags(world));
 }
 
 fn present(world: &mut World, now: i32) {

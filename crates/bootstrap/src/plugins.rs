@@ -129,8 +129,12 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
     let plugins = DefaultPlugins
         .set(window)
         .set(LogPlugin {
-            #[cfg(not(feature = "span-profile"))]
+            #[cfg(all(not(feature = "span-profile"), not(target_os = "horizon")))]
             filter: "warn,iw4l=info".into(),
+            // `iw4l` is only the profiler's span target (one per GSC thread
+            // resume, name formatted); nothing reads them without `span-profile`.
+            #[cfg(all(not(feature = "span-profile"), target_os = "horizon"))]
+            filter: "warn".into(),
             #[cfg(feature = "span-profile")]
             filter: crate::span_profile::FILTER.into(),
             level: bevy::log::Level::WARN,
@@ -163,10 +167,48 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
         .set(bevy::app::TaskPoolPlugin {
             task_pool_options: horizon_task_pools(),
         });
+    #[cfg(target_os = "horizon")]
+    let plugins = if perf::switch(SINGLE_EXECUTOR_ENV) {
+        plugins.add(SingleExecutorPlugin)
+    } else {
+        plugins
+    };
     if pipelined_rendering() {
         plugins
     } else {
         plugins.disable::<PipelinedRenderingPlugin>()
+    }
+}
+
+#[cfg(target_os = "horizon")]
+const SINGLE_EXECUTOR_ENV: &str = "IW4L_SINGLE_EXECUTOR";
+
+/// `IW4L_SINGLE_EXECUTOR=1`: every schedule of every app runs on the thread
+/// that runs it. With one compute thread, the multi-threaded executor's
+/// per-system task handoff can cost more than the overlap it buys.
+#[cfg(target_os = "horizon")]
+struct SingleExecutorPlugin;
+
+#[cfg(target_os = "horizon")]
+impl Plugin for SingleExecutorPlugin {
+    fn build(&self, _: &mut App) {}
+
+    // `finish`: every schedule exists, and the render app is not yet moved
+    // to its thread (pipelined rendering does that in `cleanup`).
+    fn finish(&self, app: &mut App) {
+        use bevy::ecs::schedule::{Schedules, SingleThreadedExecutor};
+        let single = |world: &mut World| {
+            if let Some(mut schedules) = world.get_resource_mut::<Schedules>() {
+                for (_, schedule) in schedules.iter_mut() {
+                    schedule.set_executor(SingleThreadedExecutor::new());
+                }
+            }
+        };
+        single(app.world_mut());
+        for sub in app.sub_apps_mut().sub_apps.values_mut() {
+            single(sub.world_mut());
+        }
+        platform_nx::breadcrumb("executor: single-threaded");
     }
 }
 

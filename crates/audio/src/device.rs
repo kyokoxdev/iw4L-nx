@@ -118,7 +118,10 @@ pub(crate) fn open(
         .map_or(config, |range| range.with_sample_rate(SAMPLE_RATE));
     let buffer = *config.buffer_size();
     let mut config = config.config();
-    if let cpal::SupportedBufferSize::Range { min, max } = buffer
+    // Switch: 256 frames (5 ms) starves the SDL callback under load and
+    // crackles; the host default (1024) is what rodio used.
+    if !cfg!(target_os = "horizon")
+        && let cpal::SupportedBufferSize::Range { min, max } = buffer
         && min <= 256
         && 256 <= max
     {
