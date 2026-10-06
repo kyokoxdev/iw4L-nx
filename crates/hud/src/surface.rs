@@ -62,6 +62,19 @@ impl Hud2dSurface {
     pub fn placement(&self) -> &ScreenPlacement {
         &self.place
     }
+
+    /// `world` in this surface's pixels. The 3D camera can draw into a
+    /// downscaled lens target, so its viewport is not the HUD's.
+    pub fn project(
+        &self,
+        camera: &Camera,
+        transform: &GlobalTransform,
+        world: Vec3,
+    ) -> Option<Vec2> {
+        let viewport = camera.logical_viewport_size()?;
+        let pixel = camera.world_to_viewport(transform, world).ok()?;
+        Some(pixel * Vec2::new(self.width, self.height) / viewport)
+    }
 }
 
 pub(crate) fn update_hud_surface(
