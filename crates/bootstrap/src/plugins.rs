@@ -118,6 +118,11 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
             | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
             | WgpuFeatures::PARTIALLY_BOUND_BINDING_ARRAY;
     }
+    // For `unclipped_depth` on the exact colour pipelines (GL depth clamp).
+    #[cfg(target_os = "horizon")]
+    {
+        wgpu.features |= WgpuFeatures::DEPTH_CLIP_CONTROL;
+    }
     let plugins = DefaultPlugins
         .set(window)
         .set(LogPlugin {
@@ -130,11 +135,17 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
             custom_layer: crate::span_profile::layer,
             #[cfg(target_os = "horizon")]
             fmt_layer: |_| {
+                use bevy::log::tracing_subscriber::Layer as _;
+                // Events only: under `span-profile` it would otherwise format
+                // the fields of every span opened, thousands a frame.
                 Some(Box::new(
                     bevy::log::tracing_subscriber::fmt::Layer::default()
                         .with_ansi(false)
                         .without_time()
-                        .with_writer(|| platform_nx::BootLog),
+                        .with_writer(|| platform_nx::BootLog)
+                        .with_filter(bevy::log::tracing_subscriber::filter::filter_fn(
+                            |meta| meta.is_event(),
+                        )),
                 ))
             },
             ..default()

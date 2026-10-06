@@ -899,38 +899,41 @@ fn fanout_loopback(
         .configuration_changes
         .push_journal(&tick.snapshot.meta.journal);
 
-    let mut listen_snapshot = tick.snapshot.clone();
     let mut seat_applied = 0i32;
-    if let Some(local) = queues.local.as_ref() {
-        let (out, sample) = crate::policy::seat::snapshot_and_sample_for_viewer(
-            &archive,
-            &seats,
-            &tick.snapshot,
-            local.0,
-            clock.time_ms,
-        );
-        listen_snapshot = out;
-        if let Some(sample) = sample {
-            seat_applied = 1;
-            let session = seats.get(local.0);
-            queues.fanout_census.seat_archivetime_ms = session.map(|s| s.archivetime_ms);
-            queues.fanout_census.seat_focus_client = session.map(|s| s.focus_client.0 as i32);
-            queues.fanout_census.seat_lookup_tick = sample.lookup.tick.map(|t| t.0 as i32);
-            queues.fanout_census.seat_attained_ms = Some(sample.lookup.attained_ms);
-            queues.fanout_census.seat_rebase_ms = Some(sample.rebase_ms);
-            queues.fanout_census.seat_world_archived =
-                Some(i32::from(sample.lookup.tick.is_some()));
-            let focus = session.map(|s| s.focus_client);
-            queues.fanout_census.seat_focus_live_origin =
-                focus.and_then(|f| queues.world.0.player(f).map(|ps| ps.origin));
-            queues.fanout_census.seat_focus_lifecycle = focus.and_then(|f| {
-                queues
-                    .world
-                    .0
-                    .client_meta(f)
-                    .map(|m| client_lifecycle_dump_label(m.lifecycle))
-            });
+    let mut seat_sample = None;
+    let listen_snapshot = match queues.local.as_ref() {
+        Some(local) => {
+            let (out, sample) = crate::policy::seat::snapshot_and_sample_for_viewer(
+                &archive,
+                &seats,
+                &tick.snapshot,
+                local.0,
+                clock.time_ms,
+            );
+            seat_sample = sample.map(|sample| (local.0, sample));
+            out
         }
+        None => std::borrow::Cow::Borrowed(&tick.snapshot),
+    };
+    if let Some((local, sample)) = seat_sample {
+        seat_applied = 1;
+        let session = seats.get(local);
+        queues.fanout_census.seat_archivetime_ms = session.map(|s| s.archivetime_ms);
+        queues.fanout_census.seat_focus_client = session.map(|s| s.focus_client.0 as i32);
+        queues.fanout_census.seat_lookup_tick = sample.lookup.tick.map(|t| t.0 as i32);
+        queues.fanout_census.seat_attained_ms = Some(sample.lookup.attained_ms);
+        queues.fanout_census.seat_rebase_ms = Some(sample.rebase_ms);
+        queues.fanout_census.seat_world_archived = Some(i32::from(sample.lookup.tick.is_some()));
+        let focus = session.map(|s| s.focus_client);
+        queues.fanout_census.seat_focus_live_origin =
+            focus.and_then(|f| queues.world.0.player(f).map(|ps| ps.origin));
+        queues.fanout_census.seat_focus_lifecycle = focus.and_then(|f| {
+            queues
+                .world
+                .0
+                .client_meta(f)
+                .map(|m| client_lifecycle_dump_label(m.lifecycle))
+        });
     }
     let local_id = queues.local.as_ref().map(|id| id.0);
     let world_row = local_id.and_then(|id| {

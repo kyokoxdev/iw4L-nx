@@ -69,6 +69,22 @@ impl Frame {
     }
 
     fn encode_sections(&self, out: &mut WireWriter) -> FrameSectionBytes {
+        self.encode_sections_with_meta(out, &self.snapshot_meta)
+    }
+
+    /// The wire form of this frame carrying `meta` in place of its own
+    /// `snapshot_meta`, so a sender holding the meta elsewhere need not clone it.
+    pub fn to_bytes_with_meta(&self, meta: &SnapshotMeta) -> Vec<u8> {
+        let mut out = WireWriter::new();
+        let _ = self.encode_sections_with_meta(&mut out, meta);
+        out.finish()
+    }
+
+    fn encode_sections_with_meta(
+        &self,
+        out: &mut WireWriter,
+        snapshot_meta: &SnapshotMeta,
+    ) -> FrameSectionBytes {
         let start = out.len();
         let mut mark = start;
         out.put_u32(self.tick.0);
@@ -93,8 +109,7 @@ impl Frame {
         mark = out.len();
         self.snapshot_delta.encode(out);
         let snapshot_delta = out.len() - mark;
-        let meta =
-            encode_snapshot_meta_sections(out, &self.snapshot_meta, &self.world_objects_wire);
+        let meta = encode_snapshot_meta_sections(out, snapshot_meta, &self.world_objects_wire);
         mark = out.len();
         encode_reliable_payload(
             out,
@@ -244,6 +259,13 @@ impl LoopbackTransport {
     }
 }
 
+impl LoopbackTransport {
+    /// [`Transport::send`] of `frame` carrying `meta` as its snapshot meta.
+    pub fn send_with_meta(&mut self, frame: &Frame, meta: &SnapshotMeta) {
+        self.queue.push_back(frame.to_bytes_with_meta(meta));
+    }
+}
+
 impl Transport for LoopbackTransport {
     fn send(&mut self, frame: &Frame) -> Result<(), TransportError> {
         self.queue.push_back(frame.to_bytes());
@@ -293,6 +315,20 @@ pub fn frame_from_acked_tick_with_reliable(
     acks: Vec<(ClientId, CmdSeq)>,
     reliable: ReliablePayload,
 ) -> Frame {
+    let mut frame = frame_without_meta(coder, input, snapshot, acks, reliable);
+    frame.snapshot_meta = snapshot.meta.clone();
+    frame
+}
+
+/// [`frame_from_acked_tick_with_reliable`] with a default `snapshot_meta`:
+/// for [`Frame::to_bytes_with_meta`] with `snapshot.meta`.
+pub fn frame_without_meta(
+    coder: &mut crate::SnapshotEncoder,
+    input: &TickInput,
+    snapshot: &Snapshot,
+    acks: Vec<(ClientId, CmdSeq)>,
+    reliable: ReliablePayload,
+) -> Frame {
     let world_objects_wire = coder
         .encode_world_objects(snapshot.tick, &snapshot.meta.world_objects)
         .to_vec();
@@ -303,7 +339,7 @@ pub fn frame_from_acked_tick_with_reliable(
         actions: input.actions.clone(),
         acks,
         snapshot_delta: coder.encode(snapshot),
-        snapshot_meta: snapshot.meta.clone(),
+        snapshot_meta: SnapshotMeta::default(),
         world_objects_wire,
         reliable,
         svc_sounds: Vec::new(),

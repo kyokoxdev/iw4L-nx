@@ -48,6 +48,10 @@ impl Default for ClipRing {
 }
 
 impl ClipRing {
+    /// Off on the Switch: a deep snapshot clone per tick and up to
+    /// [`CLIP_BYTE_BUDGET`] of heap for a debug clip nobody saves there.
+    pub const ENABLED: bool = !cfg!(target_os = "horizon");
+
     pub fn with_limits(max_ticks: usize, byte_budget: usize) -> Self {
         Self {
             ticks: VecDeque::new(),

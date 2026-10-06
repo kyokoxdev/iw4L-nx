@@ -703,6 +703,10 @@ pub(super) fn exact_primitive_state(cull: u8, line_fill: bool) -> PrimitiveState
         } else {
             PolygonMode::Fill
         },
+        // wgpu's GL path rewrites clip z as 2z - w with no clip control, so
+        // the sky (pinned to the far plane, z = w) lands on the clip boundary
+        // and rounding cuts straight-edged holes in it. Clamp depth instead.
+        unclipped_depth: cfg!(target_os = "horizon"),
         ..Default::default()
     }
 }
@@ -5892,7 +5896,7 @@ impl ExactPrepare<'_> {
                         };
 
                         let Some(pipeline) = self.registry.slot(&key) else {
-                            self.registry.discover(key);
+                            self.registry.discover(key, executable.state);
                             return Err(GpuSubmitRefusal::PipelineNotReady);
                         };
                         if !self.registry.is_ready(pipeline) {

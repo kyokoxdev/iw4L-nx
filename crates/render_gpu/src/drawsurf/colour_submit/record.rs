@@ -511,6 +511,17 @@ pub(super) fn draw_exact_colour(
         hits: ready_draws.saturating_add(refused_draws),
         pipeline_not_ready,
     };
+    // Switch: GL submit cost follows the draw count, and the full census
+    // needs a Perfetto recording the console cannot hold.
+    if cfg!(target_os = "horizon") {
+        static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 300 == 0 {
+            diag::info!(
+                World,
+                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready}"
+            );
+        }
+    }
 
     if census_on {
         census.ready_draws = ready_draws;

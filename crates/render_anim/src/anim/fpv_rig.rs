@@ -121,6 +121,9 @@ impl PreparedFpvModel {
             .get_at(catalog_entry)
             .ok_or(FpvRigError::Catalog("model"))?;
         let skel = &entry.skel;
+        // Read the spilled skin weights back now, before Ready: posing reads
+        // them, and an SD read at first raise is a hitch.
+        let _ = skel.vert_skin.arc();
         let lod_range = skel.surfaces_for_lod(0);
         let first_surface = lod_range.start;
         let hidden = |surface: usize| {

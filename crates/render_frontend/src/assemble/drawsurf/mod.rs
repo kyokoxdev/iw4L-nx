@@ -54,6 +54,9 @@ pub use sun_effects::SunEffectsFrameInput;
 pub(crate) use sun_effects::publish_sun_effects_frame;
 pub use sun_shadow::*;
 pub use tess::*;
-pub use wgsl_disk_cache::{WGSL_CACHE_FORMAT, stats as wgsl_cache_stats};
+pub use wgsl_disk_cache::{
+    WGSL_CACHE_FORMAT, hold as hold_wgsl_cache, release as release_wgsl_cache,
+    stats as wgsl_cache_stats,
+};
 
 pub(crate) use postfx_plan::{build_runtime_blood, build_runtime_postfx};

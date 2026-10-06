@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use bevy::prelude::Resource;
@@ -175,18 +176,27 @@ pub fn snapshot_for_viewer(
     viewer: ClientId,
     now_ms: i32,
 ) -> Snapshot {
-    snapshot_and_sample_for_viewer(archive, seats, live, viewer, now_ms).0
+    snapshot_and_sample_for_viewer(archive, seats, live, viewer, now_ms)
+        .0
+        .into_owned()
 }
 
-pub fn snapshot_and_sample_for_viewer(
+/// `live` itself, borrowed, unless a killcam seat or a per-viewer mover
+/// changes it: the listen server sends it every tick, and a clone of the
+/// whole snapshot per tick is most of that send's cost on the Switch.
+pub fn snapshot_and_sample_for_viewer<'a>(
     archive: &FrameArchive,
     seats: &ActiveKillcams,
-    live: &Snapshot,
+    live: &'a Snapshot,
     viewer: ClientId,
     now_ms: i32,
-) -> (Snapshot, Option<SeatSample>) {
+) -> (Cow<'a, Snapshot>, Option<SeatSample>) {
     let (mut out, sample) = seat_snapshot(archive, seats, live, viewer, now_ms);
-    reveal_shown_movers(&mut out, viewer);
+    if out.meta.script_movers.iter().any(|mover| {
+        mover.shown_to != 0 && mover.state.e_flags & entity_iw4::CG_SCRIPT_MOVER_NODRAW != 0
+    }) {
+        reveal_shown_movers(out.to_mut(), viewer);
+    }
     (out, sample)
 }
 
@@ -212,15 +222,15 @@ fn reveal_shown_movers(out: &mut Snapshot, viewer: ClientId) {
     }
 }
 
-fn seat_snapshot(
+fn seat_snapshot<'a>(
     archive: &FrameArchive,
     seats: &ActiveKillcams,
-    live: &Snapshot,
+    live: &'a Snapshot,
     viewer: ClientId,
     now_ms: i32,
-) -> (Snapshot, Option<SeatSample>) {
+) -> (Cow<'a, Snapshot>, Option<SeatSample>) {
     let Some(session) = seats.get(viewer) else {
-        return (live.clone(), None);
+        return (Cow::Borrowed(live), None);
     };
 
     if !session.final_kill
@@ -229,12 +239,12 @@ fn seat_snapshot(
             .for_client(viewer)
             .is_some_and(|m| m.lifecycle == ClientLifecycle::Alive)
     {
-        return (live.clone(), None);
+        return (Cow::Borrowed(live), None);
     }
     if session.killcamoffset_ms == 0 {
         let mut out = live.clone();
         let sample = apply_seat_to_snapshot(archive, &mut out, viewer, session, now_ms);
-        return (out, sample);
+        return (Cow::Owned(out), sample);
     }
     let lookup = archive.lookup(session.archivetime_ms);
     let mut out = match lookup.tick.and_then(|tick| archive.frame(tick)) {
@@ -251,7 +261,7 @@ fn seat_snapshot(
         session,
         sample.as_ref().map(|s| s.rebase_ms).unwrap_or(0),
     );
-    (out, sample)
+    (Cow::Owned(out), sample)
 }
 
 fn overlay_archived_world(

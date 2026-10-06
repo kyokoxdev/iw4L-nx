@@ -431,6 +431,35 @@ fn prepare_iw_tess(
     queue.write_buffer(&pipeline.params, 0, bytemuck::bytes_of(&coeffs));
 }
 
+/// HUD material states play has drawn, specialized as soon as the view
+/// format is known so a match never compiles one (`super::learned`).
+static LEARNED_TESS: super::learned::Learned<9> = super::learned::Learned::new("iw-tess-v1");
+
+#[derive(Default)]
+struct LearnedTess {
+    warmed: bevy::platform::collections::HashSet<TextureFormat>,
+    seen: bevy::platform::collections::HashSet<Option<[u32; 2]>>,
+}
+
+fn tess_record(bits: Option<[u32; 2]>) -> [u8; 9] {
+    let mut record = [0; 9];
+    if let Some([word0, word1]) = bits {
+        record[0] = 1;
+        record[1..5].copy_from_slice(&word0.to_le_bytes());
+        record[5..9].copy_from_slice(&word1.to_le_bytes());
+    }
+    record
+}
+
+fn tess_bits(record: &[u8; 9]) -> Option<[u32; 2]> {
+    (record[0] == 1).then(|| {
+        [
+            u32::from_le_bytes(record[1..5].try_into().unwrap()),
+            u32::from_le_bytes(record[5..9].try_into().unwrap()),
+        ]
+    })
+}
+
 fn draw_iw_tess(
     view: ViewQuery<(&ViewTarget, &ExtractedView)>,
     extracted: Res<ExtractedIwTess>,
@@ -445,9 +474,23 @@ fn draw_iw_tess(
     mut saved: ResMut<SavedScreenGpu>,
     mut context: RenderContext,
     stages: Option<Res<SharedRenderStagesSlot>>,
+    mut learned: Local<LearnedTess>,
 ) {
     let (target, _extracted_view) = view.into_inner();
     let format = target.main_texture_format();
+    if learned.warmed.insert(format) {
+        for record in LEARNED_TESS.records() {
+            specialized.specialize(
+                &cache,
+                &pipeline,
+                IwTessPipelineKey {
+                    target: format,
+                    samples: 1,
+                    state_bits: tess_bits(&record),
+                },
+            );
+        }
+    }
     let scene_size = target.main_texture().size();
     if extracted.0.saved_screen_sequence != saved.sequence {
         saved.captured = false;
@@ -484,10 +527,15 @@ fn draw_iw_tess(
         .filter(|copy| saved.captured && copy.format == format && copy.size == scene_size);
     let blood_ready = blood.uploaded;
     let mut prepared = Vec::with_capacity(meta.draws.len());
+    let mut learned_new = false;
     for geom in &meta.draws {
         let Some(batch) = extracted.0.batches.get(geom.batch_i) else {
             continue;
         };
+        if batch.technique != HudTessTechnique::SplatterAlt && learned.seen.insert(batch.state_bits)
+        {
+            learned_new |= LEARNED_TESS.remember(tess_record(batch.state_bits));
+        }
         let Some(gpu_image) = images.get(&batch.image) else {
             continue;
         };
@@ -555,6 +603,9 @@ fn draw_iw_tess(
             continue;
         }
         prepared.push((id, bind, textures, geom));
+    }
+    if learned_new {
+        LEARNED_TESS.save();
     }
     if prepared.is_empty() {
         if let Some(slot) = stages.as_ref()

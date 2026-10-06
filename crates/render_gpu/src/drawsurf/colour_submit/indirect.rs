@@ -9,7 +9,8 @@ const ARG_WORDS: usize = 5;
 /// Whether this run asked for the indirect path.
 ///
 /// Read once, through the same rule as every other switch a paired run is
-/// alternated across: off unless `IW4L_MULTI_DRAW=1`.
+/// alternated across: off unless `IW4L_MULTI_DRAW=1`. Crashes the Switch
+/// (Mesa/nouveau GL) at the end of map load; leave it off there.
 pub(super) fn multi_draw_requested() -> bool {
     static REQUESTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *REQUESTED.get_or_init(|| perf::switch("IW4L_MULTI_DRAW"))

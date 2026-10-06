@@ -10,6 +10,7 @@ mod gpu_prepare;
 mod gpu_resources;
 mod hud_blood;
 mod iw_tess;
+mod learned;
 mod model_lighting_tiles;
 mod postfx;
 mod postfx_dof;

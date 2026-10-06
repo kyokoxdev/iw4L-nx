@@ -49,7 +49,7 @@ pub use smodel::{
 pub use view_parms::{
     LockPvsView, PreparedSceneView, RLockPvs, RSubwindowDvar, RZnearDepthhackDvar, RZnearDvar,
     SmEnableDvar, SmSunEnableDvar, host_clip_from_view, lens_world_from_parent_child,
-    pack_live_view_parms, prepare_scene_view,
+    pack_live_view_parms, prepare_scene_view, widened_cull_view,
 };
 pub use world_instances::{WorldDynEntInstance, WorldScriptModelInstance};
 pub use xmodel_draw::{XModelCasterBound, XModelColourRefusal, XModelSurfaceDraw};

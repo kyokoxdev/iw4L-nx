@@ -21,6 +21,7 @@ pub fn place(
     exact_material_handles: Vec<Option<Handle<Image>>>,
     reflection_probe_handles: Vec<Option<Handle<Image>>>,
     lightmap_handles: Vec<Option<RuntimeLightmapHandles>>,
+    window_size: UVec2,
 ) {
     let _batches = std::mem::take(&mut scene.batches);
 
@@ -318,4 +319,104 @@ pub fn place(
     ));
     let lens_id = lens.id();
     commands.entity(host_id).add_child(lens_id);
+    let scale = render_scale();
+    if scale < 1.0 {
+        downscale_lens(commands, images, host_id, lens_id, window_size, scale);
+    }
+}
+
+/// World render scale, `IW4L_RENDER_SCALE` in 0.25..=1. The Switch defaults
+/// to 0.75 (960x540 of 720p), the way the 360/PS3 ports drew below 720p.
+fn render_scale() -> f32 {
+    let default = if cfg!(target_os = "horizon") { 0.75 } else { 1.0 };
+    std::env::var("IW4L_RENDER_SCALE")
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|scale| scale.is_finite())
+        .unwrap_or(default)
+        .clamp(0.25, 1.0)
+}
+
+/// Point the lens at an image `scale` times the window and draw that image
+/// over the window, linearly filtered, from a 2D camera after it. Bevy UI goes
+/// to that camera, so the HUD nodes keep full resolution; the HUD tess the
+/// lens draws itself scales with the world.
+fn downscale_lens(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    host_id: Entity,
+    lens_id: Entity,
+    window_size: UVec2,
+    scale: f32,
+) {
+    let size = (window_size.as_vec2() * scale).round().as_uvec2().max(UVec2::ONE);
+    let mut image = Image::new_target_texture(
+        size.x,
+        size.y,
+        // Not sRGB: Horizon's GL never enables FRAMEBUFFER_SRGB, so an sRGB
+        // target stores unencoded values that sampling then decodes again.
+        // Float, not Rgba8Unorm: the lens blit decodes to linear on the way
+        // in, and 8-bit linear crushes the darks to black bands.
+        bevy::render::render_resource::TextureFormat::Rgba16Float,
+        None,
+    );
+    // Render target only: no CPU copy on a heap that also backs GPU memory.
+    image.data = None;
+    image.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD;
+    image.sampler = bevy::image::ImageSampler::linear();
+    let image = images.add(image);
+    commands
+        .entity(lens_id)
+        .insert(bevy::camera::RenderTarget::Image(image.clone().into()));
+    // A child of the host like the lens, so teardown takes both. The quad
+    // sits at the camera's origin, so the host's transform cancels out.
+    // Opaque, not a Sprite: the compass masks through destination alpha, and a
+    // blended quad let the uncleared frame under it show through there.
+    let quad = commands.spawn(Transform::IDENTITY).id();
+    commands.queue(move |world: &mut World| {
+        let mesh = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(Rectangle::new(1.0, 1.0));
+        let material = world
+            .resource_mut::<Assets<ColorMaterial>>()
+            .add(ColorMaterial {
+                texture: Some(image),
+                alpha_mode: bevy::sprite_render::AlphaMode2d::Opaque,
+                ..default()
+            });
+        if let Ok(mut quad) = world.get_entity_mut(quad) {
+            quad.insert((Mesh2d(mesh), MeshMaterial2d(material)));
+        }
+    });
+    let presenter = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            CompositingSpace::Srgb,
+            Tonemapping::None,
+            Msaa::Off,
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: bevy::camera::ScalingMode::Fixed {
+                    width: 1.0,
+                    height: 1.0,
+                },
+                ..OrthographicProjection::default_2d()
+            }),
+            Visibility::Inherited,
+        ))
+        .add_child(quad)
+        .id();
+    commands.entity(host_id).add_child(presenter);
+    diag::info!(
+        World,
+        "render scale: {scale:.2} world {}x{} -> window {}x{}",
+        size.x,
+        size.y,
+        window_size.x,
+        window_size.y
+    );
 }

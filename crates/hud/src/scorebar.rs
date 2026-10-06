@@ -275,6 +275,11 @@ fn eval_scorebar_status(
     Ok(found)
 }
 
+/// Least time between scorebar rebuilds: 4 Hz on the Switch (the clock shows
+/// seconds; at 15 Hz frames slower than 66 ms rebuilt it every frame), every
+/// frame elsewhere.
+const REBUILD_MS: u32 = if cfg!(target_os = "horizon") { 250 } else { 0 };
+
 fn hide(pass: &mut HudTessPass) {
     pass.scorebar = TessJob::Hide;
 }
@@ -295,6 +300,7 @@ pub(crate) fn update_scorebar(
     mut exprs: ResMut<crate::expr_cache::MenuExprCache>,
     view: Option<Res<frame::ViewSubject>>,
     vis_input: crate::weaponbar::HudPlayerVisInput,
+    mut last_built_ms: Local<Option<u32>>,
 ) {
     if !surface.is_ready() {
         return;
@@ -311,6 +317,15 @@ pub(crate) fn update_scorebar(
         hide(&mut pass);
         return;
     };
+    // Running the menu and its fonts costs the Switch milliseconds a frame;
+    // between rebuilds the last list stays latched (`TessJob::None`).
+    if REBUILD_MS > 0 {
+        let now = milliseconds();
+        if last_built_ms.is_some_and(|built| now.wrapping_sub(built) < REBUILD_MS) {
+            return;
+        }
+        *last_built_ms = Some(now);
+    }
 
     let mut others = [0i32; 18];
     let mut n_others = 0usize;

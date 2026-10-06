@@ -259,7 +259,11 @@ fn share_module(
     let key = assets::fnv1a64(module.source.as_bytes());
     let mut modules = MODULES.lock().unwrap_or_else(|poison| poison.into_inner());
     let same = modules.entry(key).or_default();
-    if let Some(shared) = same.iter().filter_map(Shared::upgrade).find(|m| **m == module) {
+    if let Some(shared) = same
+        .iter()
+        .filter_map(Shared::upgrade)
+        .find(|m| **m == module)
+    {
         return shared;
     }
     let module = std::sync::Arc::new(module);

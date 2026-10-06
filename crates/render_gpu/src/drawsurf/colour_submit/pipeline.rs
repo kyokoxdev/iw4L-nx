@@ -81,10 +81,15 @@ pub(super) fn kick_extracted_colour_pipelines(
 ) {
     registry.poll();
 
-    for key in registry.take_discovered() {
+    let mut learned_new = false;
+    for (key, state) in registry.take_discovered() {
         if pipeline.get(key.port).is_some() {
             request_exact_pipeline(&mut registry, &pipeline, &device, key);
+            learned_new |= learned::remember(&key, state);
         }
+    }
+    if learned_new {
+        learned::save();
     }
     let extracted = world
         .as_deref()
@@ -157,10 +162,19 @@ pub(super) fn kick_admitted_pipelines(
             &mut kicked.scheduled,
             &mut kicked.current,
         );
+        let learned = learned::keys();
+        let learned_n = learned.len();
+        for key in learned {
+            if pipeline.get(key.port).is_some() && kicked.scheduled.insert(key) {
+                kicked
+                    .current
+                    .push(request_exact_pipeline(registry, pipeline, device, key));
+            }
+        }
         kicked.demand_revision = extracted.frame.pipeline_demand_revision;
         diag::info!(
             World,
-            "exact pipelines: working set={} modules held={} tasks in flight={}",
+            "exact pipelines: learned={learned_n} working set={} modules held={} tasks in flight={}",
             kicked.current.len(),
             registry.module_n(),
             registry.building_n()
@@ -288,6 +302,145 @@ fn schedule_admitted_pipelines(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Exact colour pipelines draws discovered, rebuilt with the load's working
+/// set so the overlay holds for them (`drawsurf::learned`). One list for every
+/// map; ports a map never admits are skipped.
+mod learned {
+    use super::*;
+    use asset_core::AssetNamespace;
+    use render_material::{GfxPassStateBits, PortId};
+
+    const RECORD: usize = 43;
+    static LEARNED: crate::drawsurf::learned::Learned<RECORD> =
+        crate::drawsurf::learned::Learned::new("exact-demand-v1");
+    const FORMATS: [TextureFormat; 8] = [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::Bgra8Unorm,
+        TextureFormat::Bgra8UnormSrgb,
+        TextureFormat::Rgba16Float,
+        TextureFormat::R32Float,
+        TextureFormat::Depth24PlusStencil8,
+        TextureFormat::Depth32Float,
+    ];
+
+    pub(super) fn remember(key: &ExactColourPipelineKey, state: GfxPassStateBits) -> bool {
+        encode(key, state).is_some_and(|record| LEARNED.remember(record))
+    }
+
+    pub(super) fn save() {
+        LEARNED.save();
+    }
+
+    pub(super) fn keys() -> Vec<ExactColourPipelineKey> {
+        LEARNED
+            .records()
+            .iter()
+            .filter_map(decode)
+            .collect()
+    }
+
+    fn encode(key: &ExactColourPipelineKey, state: GfxPassStateBits) -> Option<[u8; RECORD]> {
+        let format = |format| FORMATS.iter().position(|&f| f == format).map(|i| i as u8);
+        if key.cached_lighting {
+            return None;
+        }
+        let namespace = match state.namespace {
+            AssetNamespace::Iw4 => 0,
+            AssetNamespace::T5 => 1,
+            AssetNamespace::Iw5 => 2,
+        };
+        let port = key.port;
+        let mut out = [0; RECORD];
+        out[0..8].copy_from_slice(&port.vertex_program_hash.to_le_bytes());
+        out[8..16].copy_from_slice(&port.pixel_program_hash.to_le_bytes());
+        out[16..20].copy_from_slice(&port.vertex_decl_slot.to_le_bytes());
+        out[20..28].copy_from_slice(&port.arguments_hash.to_le_bytes());
+        out[28..32].copy_from_slice(&state.word0.to_le_bytes());
+        out[32..36].copy_from_slice(&state.word1.to_le_bytes());
+        out[36..43].copy_from_slice(&[
+            port.vertex_type,
+            port.custom_sampler_flags,
+            namespace,
+            format(key.target)?,
+            format(key.depth_format)?,
+            u8::try_from(key.samples).ok()?,
+            u8::from(key.mark_mesh) | u8::from(key.forward_z) << 1,
+        ]);
+        Some(out)
+    }
+
+    /// The key as the draw that discovered it built it.
+    fn decode(record: &[u8; RECORD]) -> Option<ExactColourPipelineKey> {
+        let u64_at = |at: usize| u64::from_le_bytes(record[at..at + 8].try_into().unwrap());
+        let u32_at = |at: usize| u32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+        let namespace = match record[38] {
+            0 => AssetNamespace::Iw4,
+            1 => AssetNamespace::T5,
+            2 => AssetNamespace::Iw5,
+            _ => return None,
+        };
+        let host = crate::drawsurf::state::GfxPassState::from_bits(GfxPassStateBits {
+            namespace,
+            word0: u32_at(28),
+            word1: u32_at(32),
+        });
+        Some(ExactColourPipelineKey {
+            target: *FORMATS.get(usize::from(record[39]))?,
+            depth_format: *FORMATS.get(usize::from(record[40]))?,
+            samples: u32::from(record[41]),
+            state0: host.apply_change_state_0_host(AlphaMode::Opaque, false),
+            state1: host.apply_change_state_1_host(),
+            port: PortId {
+                vertex_program_hash: u64_at(0),
+                pixel_program_hash: u64_at(8),
+                vertex_decl_slot: u32_at(16),
+                vertex_type: record[36],
+                custom_sampler_flags: record[37],
+                arguments_hash: u64_at(20),
+            },
+            cached_lighting: false,
+            mark_mesh: record[42] & 1 != 0,
+            forward_z: record[42] & 2 != 0,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn record_round_trips_the_key() {
+            let state = GfxPassStateBits {
+                namespace: AssetNamespace::T5,
+                word0: 0x0001_2345,
+                word1: 0x8000_0040,
+            };
+            let host = crate::drawsurf::state::GfxPassState::from_bits(state);
+            let key = ExactColourPipelineKey {
+                target: TextureFormat::Rgba8UnormSrgb,
+                depth_format: TextureFormat::Depth24PlusStencil8,
+                samples: 1,
+                state0: host.apply_change_state_0_host(AlphaMode::Opaque, false),
+                state1: host.apply_change_state_1_host(),
+                port: PortId {
+                    vertex_program_hash: 1,
+                    pixel_program_hash: u64::MAX,
+                    vertex_decl_slot: 7,
+                    vertex_type: 2,
+                    custom_sampler_flags: 3,
+                    arguments_hash: 0xdead_beef,
+                },
+                cached_lighting: false,
+                mark_mesh: false,
+                forward_z: true,
+            };
+            let record = encode(&key, state).expect("encodable key");
+            assert!(decode(&record) == Some(key));
         }
     }
 }

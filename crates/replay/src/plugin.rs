@@ -129,7 +129,7 @@ fn record_received_ticks(
     role: Res<RuntimeRole>,
     mut ring: ResMut<ClipRing>,
 ) {
-    if role.runs_authority() {
+    if role.runs_authority() || !ClipRing::ENABLED {
         return;
     }
     for tick in &received.0 {
@@ -153,7 +153,7 @@ fn record_server_tick(
     let Some(tick) = server_tick.0.as_ref() else {
         return;
     };
-    if role.runs_authority() {
+    if role.runs_authority() && ClipRing::ENABLED {
         ring.push(tick.input.clone(), tick.snapshot.clone());
     }
     let Some(recording) = session.0.as_mut() else {

@@ -4,7 +4,7 @@ use sim::{ClientId, Snapshot, TickInput};
 use crate::client::predict::CmdSeq;
 use crate::transport::delta::{SnapshotDecoder, SnapshotEncoder};
 use crate::transport::frame::{
-    Frame, LoopbackTransport, Transport, TransportError, frame_from_acked_tick,
+    Frame, LoopbackTransport, Transport, TransportError, frame_without_meta,
 };
 
 #[derive(Resource, Debug, Default)]
@@ -45,7 +45,14 @@ impl ListenLoopback {
         svc_game_notifies: Vec<crate::SvcGameNotify>,
         reliable: crate::ReliablePayload,
     ) -> Result<(), TransportError> {
-        let mut frame = frame_from_acked_tick(&mut self.encoder, input, snapshot, acks);
+        // Meta goes on the wire from `snapshot`, not a per-tick clone of it.
+        let mut frame = frame_without_meta(
+            &mut self.encoder,
+            input,
+            snapshot,
+            acks,
+            crate::ReliablePayload::owes_nothing(),
+        );
         frame.svc_sounds = svc_sounds;
         frame.svc_scores = svc_scores;
         frame.svc_card_slots = svc_card_slots;
@@ -54,17 +61,18 @@ impl ListenLoopback {
         frame.svc_game_notifies = svc_game_notifies;
 
         frame.reliable = reliable;
-        self.transport.send(&frame)?;
+        self.transport.send_with_meta(&frame, &snapshot.meta);
         self.sent = self.sent.saturating_add(1);
         Ok(())
     }
 
     pub fn recv_tick(&mut self) -> Result<Option<ReceivedTick>, TransportError> {
-        let Some(frame) = self.transport.recv()? else {
+        let Some(mut frame) = self.transport.recv()? else {
             return Ok(None);
         };
         let mut snapshot = self.decoder.decode(&frame.snapshot_delta)?;
-        snapshot.meta = frame.snapshot_meta.clone();
+        // Moved, not cloned: nothing reads the frame's copy after this.
+        snapshot.meta = std::mem::take(&mut frame.snapshot_meta);
         self.received = self.received.saturating_add(1);
         Ok(Some(ReceivedTick { snapshot, frame }))
     }

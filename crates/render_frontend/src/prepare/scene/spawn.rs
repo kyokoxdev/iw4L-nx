@@ -324,6 +324,7 @@ pub(crate) fn spawn_world(
 
     if job.phase == WorldSpawnPhase::Programs {
         if !job.compile.armed {
+            crate::assemble::drawsurf::hold_wgsl_cache();
             job.compile
                 .arm(&scene.runtime_material_catalog, progress.as_ref());
             job.admit = crate::assemble::drawsurf::MaterialProgramAdmit::default();
@@ -345,6 +346,7 @@ pub(crate) fn spawn_world(
         if !compile_finished {
             return;
         }
+        crate::assemble::drawsurf::release_wgsl_cache();
         // Both halves publish themselves as they end; anything still open at
         // the phase boundary ends here rather than being dropped unsaid.
         let (compiled, merged) = job.compile.take_stages();
@@ -719,6 +721,7 @@ pub(crate) fn spawn_world_finish(
     mut images: ResMut<Assets<Image>>,
     mut job: ResMut<WorldSpawnJob>,
     mut tess: ResMut<render_scene::TessMaterials>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
     if job.phase != WorldSpawnPhase::WorldTess {
         return;
@@ -736,6 +739,9 @@ pub(crate) fn spawn_world_finish(
         job.images.exact_handles().to_vec(),
         job.images.probe_handles().to_vec(),
         job.images.lightmap_handles().to_vec(),
+        windows
+            .single()
+            .map_or(UVec2::new(1280, 720), |window| window.physical_size()),
     );
     tess.material_images = std::sync::Arc::new(job.images.exact_handles().to_vec());
     job.last_work_ms = frame_started.elapsed().as_secs_f32() * 1000.0;

@@ -1,7 +1,7 @@
 pub use render_scene::{
     LockPvsView, PreparedSceneView, RLockPvs, RSubwindowDvar, RZnearDepthhackDvar, RZnearDvar,
     SmEnableDvar, SmSunEnableDvar, host_clip_from_view, lens_world_from_parent_child,
-    pack_live_view_parms, prepare_scene_view,
+    pack_live_view_parms, prepare_scene_view, widened_cull_view,
 };
 
 use bevy::camera::Viewport;
@@ -89,19 +89,28 @@ pub(crate) fn stamp_prepared_scene_view(
         _ => bevy::camera::ClearColorConfig::Default,
     };
     let dpvs_z_near = hud_iw4::znear_from_refdef(0.0, znear.value);
-    *view = prepare_scene_view(
-        lens_world_from_parent_child(*parent, *child),
-        persp.fov,
-        aspect,
-        persp.near,
-        if fog.zfar > 0.0 { fog.zfar } else { persp.far },
-        rt_w,
-        rt_h,
-        dpvs_z_near,
-        depthhack.value,
-        scene_viewport,
-    );
+    let prepare = |fov: f32, aspect: f32| {
+        prepare_scene_view(
+            lens_world_from_parent_child(*parent, *child),
+            fov,
+            aspect,
+            persp.near,
+            if fog.zfar > 0.0 { fog.zfar } else { persp.far },
+            rt_w,
+            rt_h,
+            dpvs_z_near,
+            depthhack.value,
+            scene_viewport,
+        )
+    };
+    *view = prepare(persp.fov, aspect);
     lock_pvs.apply_after_stamp(&view);
+    // Switch: a cull that follows every turn of the camera changes the world
+    // draw lists each frame, and rebuilding them costs more there than the
+    // extra draws of a wider, held cull.
+    if cfg!(target_os = "horizon") {
+        lock_pvs.hold(&view, |live| widened_cull_view(live, prepare));
+    }
 
     let (rigid, skinned) = &mut lod_parms;
     crate::prepare::scene::smodel_geom_cache::update_lod_parms(

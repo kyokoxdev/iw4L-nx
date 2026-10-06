@@ -850,7 +850,11 @@ struct SmodelLodWalk {
 /// Switch: the static LOD walk reruns only when the eye crosses a 32-unit
 /// grid cell, not on every sub-unit move; LOD and cull distance picks lag by
 /// at most one cell. Exact elsewhere.
-const EYE_LOD_GRID: f32 = if cfg!(target_os = "horizon") { 32.0 } else { 0.0 };
+const EYE_LOD_GRID: f32 = if cfg!(target_os = "horizon") {
+    32.0
+} else {
+    0.0
+};
 
 fn eye_lod_reuse_key(eye: Option<Vec3>, ramp: LodRampArgs) -> EyeLodReuseKey {
     let eye = eye.map(|eye| {

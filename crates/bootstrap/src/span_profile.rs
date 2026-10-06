@@ -16,14 +16,14 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use bevy::log::BoxedLayer;
+use bevy::log::tracing::Subscriber;
 use bevy::log::tracing::field::{Field, Visit};
 use bevy::log::tracing::span::{Attributes, Id};
-use bevy::log::tracing::Subscriber;
 use bevy::log::tracing_subscriber::layer::{Context, Layer};
 use bevy::log::tracing_subscriber::registry::LookupSpan;
 
 const WINDOW: Duration = Duration::from_secs(5);
-const TOP: usize = 60;
+const TOP: usize = 90;
 /// The span `SubApp::update` opens around the main app's schedule: one per frame.
 const FRAME_SPAN: &str = "main app";
 
@@ -36,15 +36,36 @@ pub fn layer(_: &mut bevy::app::App) -> Option<BoxedLayer> {
 
 struct SpanProfile;
 
-/// The span's report name, fixed at creation: `system sim::step`, `schedule Update`.
-struct Name(String);
+/// The span's interned name, fixed at creation: `system sim::step`, `schedule Update`.
+struct Name(usize);
 struct Entered(Instant);
 
+/// Interned once per span creation, so a span exit only adds to a slot:
+/// hashing and cloning the name on every exit cost more than many systems.
 #[derive(Default)]
 struct Totals {
-    by_name: HashMap<String, (Duration, u32)>,
+    ids: HashMap<String, usize>,
+    names: Vec<String>,
+    by_id: Vec<(Duration, u32)>,
+    frame_id: Option<usize>,
     frames: u32,
     since: Option<Instant>,
+}
+
+impl Totals {
+    fn intern(&mut self, name: String) -> usize {
+        if let Some(&id) = self.ids.get(&name) {
+            return id;
+        }
+        let id = self.names.len();
+        if name == FRAME_SPAN {
+            self.frame_id = Some(id);
+        }
+        self.ids.insert(name.clone(), id);
+        self.names.push(name);
+        self.by_id.push(Default::default());
+        id
+    }
 }
 
 static TOTALS: Mutex<Option<Totals>> = Mutex::new(None);
@@ -80,6 +101,11 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
             Some(name) => format!("{kind} {name}"),
             None => kind.to_owned(),
         };
+        let Ok(mut totals) = TOTALS.lock() else {
+            return;
+        };
+        let name = totals.get_or_insert_with(Totals::default).intern(name);
+        drop(totals);
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(Name(name));
         }
@@ -96,17 +122,21 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
         let now = Instant::now();
         let report = {
             let extensions = span.extensions();
-            let (Some(Name(name)), Some(Entered(at))) =
+            let (Some(&Name(name)), Some(Entered(at))) =
                 (extensions.get::<Name>(), extensions.get::<Entered>())
             else {
                 return;
             };
-            let Ok(mut totals) = TOTALS.lock() else { return };
-            let totals = totals.get_or_insert_with(Totals::default);
-            let entry = totals.by_name.entry(name.clone()).or_default();
+            let Ok(mut totals) = TOTALS.lock() else {
+                return;
+            };
+            let Some(totals) = totals.as_mut() else {
+                return;
+            };
+            let entry = &mut totals.by_id[name];
             entry.0 += now - *at;
             entry.1 += 1;
-            if name != FRAME_SPAN {
+            if totals.frame_id != Some(name) {
                 return;
             }
             totals.frames += 1;
@@ -115,7 +145,9 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
                 return;
             }
             let report = render(totals, now - since);
-            *totals = Totals { since: Some(now), ..Totals::default() };
+            totals.by_id.fill(Default::default());
+            totals.frames = 0;
+            totals.since = Some(now);
             report
         };
         // Logged with the lock released: the log writer may itself be traced.
@@ -125,13 +157,34 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
 
 fn render(totals: &Totals, wall: Duration) -> String {
     let frames = totals.frames.max(1) as f64;
-    let mut rows: Vec<_> = totals.by_name.iter().collect();
+    let mut rows: Vec<_> = totals.names.iter().zip(&totals.by_id).collect();
     rows.sort_by(|a, b| b.1.0.cmp(&a.1.0));
     let mut out = format!(
         "span profile: frames={} frame_ms={:.1} (ms/frame, runs/frame; nested, overlapping)",
         totals.frames,
         wall.as_secs_f64() * 1000.0 / frames
     );
+    // Systems summed by crate: the many below the cut add up too.
+    let mut crates: HashMap<&str, (Duration, u32)> = HashMap::new();
+    for (name, (time, _)) in &rows {
+        if let Some(path) = name.strip_prefix("system ")
+            && !time.is_zero()
+        {
+            let entry = crates
+                .entry(path.split("::").next().unwrap_or(path))
+                .or_default();
+            entry.0 += *time;
+            entry.1 += 1;
+        }
+    }
+    let mut crates: Vec<_> = crates.into_iter().collect();
+    crates.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+    for (name, (time, systems)) in crates {
+        out.push_str(&format!(
+            " | crate {name}={:.2} systems={systems}",
+            time.as_secs_f64() * 1000.0 / frames
+        ));
+    }
     for (name, (time, runs)) in rows.into_iter().take(TOP) {
         out.push_str(&format!(
             " | {name}={:.2} x{:.1}",

@@ -67,6 +67,9 @@ struct Pack {
     file: std::fs::File,
     index: std::collections::HashMap<u64, (u64, u32)>,
     end: u64,
+    /// The file as read at open or [`hold`], kept until [`release`]: a seek and read per
+    /// entry cost ~7 ms each on the Switch SD card, ~24 s over a map's passes.
+    resident: Vec<u8>,
 }
 
 impl Pack {
@@ -94,12 +97,24 @@ impl Pack {
         }
         // A torn last record (crash mid-append) is cut so appends stay aligned.
         file.set_len(at as u64)?;
-        Ok(Self { file, index, end: at as u64 })
+        bytes.truncate(at);
+        Ok(Self {
+            file,
+            index,
+            end: at as u64,
+            resident: bytes,
+        })
     }
 
     fn read(&mut self, key: u64) -> Option<Vec<u8>> {
         use std::io::{Read, Seek};
         let &(offset, len) = self.index.get(&key)?;
+        if let Some(bytes) = self
+            .resident
+            .get(offset as usize..offset as usize + len as usize)
+        {
+            return Some(bytes.to_vec());
+        }
         let mut bytes = vec![0; len as usize];
         self.file.seek(std::io::SeekFrom::Start(offset)).ok()?;
         self.file.read_exact(&mut bytes).ok()?;
@@ -121,6 +136,34 @@ impl Pack {
         self.index.insert(key, (self.end + 12, len));
         self.end += record.len() as u64;
         Ok(())
+    }
+}
+
+/// Read the whole pack into memory for a map's passes, as open does.
+pub fn hold() {
+    use std::io::{Read, Seek};
+    if let Ok(mut pack) = pack().lock()
+        && let Some(pack) = pack.as_mut()
+        && pack.resident.is_empty()
+    {
+        let mut bytes = Vec::new();
+        let read = pack
+            .file
+            .seek(std::io::SeekFrom::Start(0))
+            .and_then(|_| (&mut pack.file).take(pack.end).read_to_end(&mut bytes));
+        if read.is_ok() {
+            pack.resident = bytes;
+        }
+    }
+}
+
+/// Drop the resident copy of the pack once the map's passes are loaded;
+/// later lookups read the file.
+pub fn release() {
+    if let Ok(mut pack) = pack().lock()
+        && let Some(pack) = pack.as_mut()
+    {
+        pack.resident = Vec::new();
     }
 }
 
@@ -216,6 +259,10 @@ mod tests {
         let mut pack = Pack::open(&path).unwrap();
         assert_eq!(pack.read(3).as_deref(), Some(&b"third"[..]));
         assert_eq!(pack.read(2).as_deref(), Some(&b"second"[..]));
+        // Released, reads go to the file and still find every record.
+        pack.resident = Vec::new();
+        assert_eq!(pack.read(1).as_deref(), Some(&b"one"[..]));
+        assert_eq!(pack.read(3).as_deref(), Some(&b"third"[..]));
         let _ = std::fs::remove_file(&path);
     }
 }

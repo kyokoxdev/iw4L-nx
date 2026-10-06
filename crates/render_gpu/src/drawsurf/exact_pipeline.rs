@@ -79,7 +79,12 @@ pub(super) struct ExactPipelineRegistry {
 
     layouts: Mutex<HashMap<BindGroupLayoutDescriptor, BindGroupLayout>>,
 
-    discovered: Mutex<Vec<super::colour_submit::ExactColourPipelineKey>>,
+    discovered: Mutex<
+        Vec<(
+            super::colour_submit::ExactColourPipelineKey,
+            render_material::GfxPassStateBits,
+        )>,
+    >,
 }
 
 impl ExactPipelineRegistry {
@@ -98,14 +103,23 @@ impl ExactPipelineRegistry {
             .clone()
     }
 
-    pub(super) fn discover(&self, key: super::colour_submit::ExactColourPipelineKey) {
+    pub(super) fn discover(
+        &self,
+        key: super::colour_submit::ExactColourPipelineKey,
+        state: render_material::GfxPassStateBits,
+    ) {
         self.discovered
             .lock()
             .expect("exact pipeline discovery list is never poisoned")
-            .push(key);
+            .push((key, state));
     }
 
-    pub(super) fn take_discovered(&mut self) -> Vec<super::colour_submit::ExactColourPipelineKey> {
+    pub(super) fn take_discovered(
+        &mut self,
+    ) -> Vec<(
+        super::colour_submit::ExactColourPipelineKey,
+        render_material::GfxPassStateBits,
+    )> {
         std::mem::take(
             &mut *self
                 .discovered
@@ -165,6 +179,27 @@ impl ExactPipelineRegistry {
         }
 
         let pool = assets::load_pool();
+        // Switch: a GL compile holds the context lock. Jobs on several
+        // workers queue on it back to back and starve the render thread for
+        // seconds; one pipeline at a time lets each frame in between.
+        if cfg!(target_os = "horizon") {
+            if !self.jobs.is_empty() {
+                return;
+            }
+            let module = *self.queued.keys().next().expect("queued is not empty");
+            let (source, plans) = self.queued.get_mut(&module).expect("key just read");
+            let plan = plans.pop().expect("a queued module has a plan");
+            let source = source.clone();
+            if plans.is_empty() {
+                self.queued.remove(&module);
+            }
+            let device = device.clone();
+            let existing = self.modules.get(&module).cloned();
+            self.jobs.push(pool.spawn(async move {
+                build_port(&device, module, source, existing, vec![plan])
+            }));
+            return;
+        }
         for (module, (source, plans)) in self.queued.drain() {
             let device = device.clone();
             let existing = self.modules.get(&module).cloned();

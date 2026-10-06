@@ -318,7 +318,9 @@ fn prepare_postfx_gpu(
     mut gpu: ResMut<ExactPostFxGpu>,
     device: Res<RenderDevice>,
     cache: Res<PipelineCache>,
-    views: Query<&ExtractedView>,
+    // Camera3d only: the downscaled lens shares the frame with a 2D presenter
+    // camera at window size, and sizing targets from that refuses every frame.
+    views: Query<&ExtractedView, With<Camera3d>>,
 ) {
     let (Some(sampler), Some(depth_sampler), Some(film)) = (
         extracted.sampler,
