@@ -223,6 +223,12 @@ pub enum PassAbiRefusal {
         destination: u16,
         row_count: u8,
     },
+
+    DxbcProgram,
+
+    DxbcVertexInputUnrouted {
+        register: u32,
+    },
 }
 
 pub fn build_pass_abi(
@@ -266,7 +272,7 @@ pub fn build_pass_abi(
     })
 }
 
-fn routed_attributes(
+pub(crate) fn routed_attributes(
     decl: &RuntimeVertexDecl,
     vertex_type: u8,
 ) -> Result<Vec<VertexAttribute>, PassAbiRefusal> {

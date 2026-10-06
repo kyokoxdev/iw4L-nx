@@ -152,6 +152,7 @@ pub(crate) fn route_weapon_commands(
     mut inbox: ResMut<ClientActionInbox>,
     mut seq: ResMut<net::ActionRequestIds>,
     completions: Res<WeaponArgCompletions>,
+    authority: Option<Res<net::AuthorityWorld>>,
 ) {
     let capacity = settings.log_capacity;
     let echo = |msg: String, console: &mut ConsoleState, line: &mut ConsoleLine| {
@@ -161,6 +162,16 @@ pub(crate) fn route_weapon_commands(
     };
 
     for cmd in events.read() {
+        if matches!(cmd.name.as_str(), "give" | "attach")
+            && authority.as_ref().is_some_and(|a| !a.0.cheats_enabled())
+        {
+            echo(
+                format!("{}: cheats are off", cmd.name),
+                &mut console,
+                &mut line,
+            );
+            continue;
+        }
         match cmd.name.as_str() {
             "give" => {
                 let target = match parse_give_target(&cmd.args) {
@@ -207,12 +218,21 @@ pub(crate) fn route_weapon_commands(
                     );
                     continue;
                 }
-                match resolve_give_id(&weapons.0, arg, &cmd.args[1..]) {
-                    Ok(weapon) => {
+                let (camo, attachments) = split_camo(&cmd.args[1..]);
+                match resolve_give_id(&weapons.0, arg, &attachments).and_then(|weapon| {
+                    let model = camo.map_or(Ok(0), |camo| camo_slot(&weapons.0, weapon, camo))?;
+                    Ok((weapon, model))
+                }) {
+                    Ok((weapon, model)) => {
                         let request_id = seq.allocate();
-                        if let Err(error) =
-                            inbox.push(local.0, ClientAction::GiveWeapon { request_id, weapon })
-                        {
+                        if let Err(error) = inbox.push(
+                            local.0,
+                            ClientAction::GiveWeapon {
+                                request_id,
+                                weapon,
+                                model,
+                            },
+                        ) {
                             echo(format!("give: {error}"), &mut console, &mut line);
                             continue;
                         }
@@ -304,7 +324,45 @@ pub(crate) fn route_weapon_commands(
     }
 }
 
-const GIVE_USAGE: &str = "give ammo | give killstreak/<name> | give weapon/<game:weapon> [attachment...] — resupply ammo, acquire a reward, or equip a weapon";
+const GIVE_USAGE: &str = "give ammo | give killstreak/<name> | give weapon/<game:weapon> [attachment...] [camo=<name|slot>] — resupply ammo, acquire a reward, or equip a weapon";
+
+pub(crate) fn split_camo(args: &[String]) -> (Option<&str>, Vec<String>) {
+    let mut camo = None;
+    let mut attachments = Vec::new();
+    for arg in args {
+        match arg.strip_prefix("camo=") {
+            Some(value) => camo = Some(value),
+            None => attachments.push(arg.clone()),
+        }
+    }
+    (camo, attachments)
+}
+
+pub(crate) fn camo_slot(
+    registry: &asset_game::WeaponRegistry,
+    weapon: u32,
+    camo: &str,
+) -> Result<u8, String> {
+    if camo.eq_ignore_ascii_case("none") {
+        return Ok(0);
+    }
+    let slot = camo
+        .parse::<u8>()
+        .ok()
+        .or_else(|| registry.camouflage_slot(weapon, camo));
+    let choices = registry.camouflage_choices(weapon);
+    slot.filter(|slot| *slot == 0 || choices.iter().any(|(own, _)| own == slot))
+        .ok_or_else(|| {
+            format!(
+                "no camouflage `{camo}` (has {})",
+                choices
+                    .iter()
+                    .map(|(_, name)| *name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
 
 #[derive(Debug, PartialEq)]
 enum GiveTarget<'a> {
@@ -590,7 +648,8 @@ pub(crate) fn resolve_give_id(
     if let Some(family) = family {
         return resolve(WeaponSelection::with(family.key.clone(), attachments));
     }
-    let id = match registry.resolve_index(raw) {
+    let canonical = asset_game::FamilyKey::parse(raw).map(|key| key.asset_key());
+    let id = match registry.resolve_index(canonical.as_deref().unwrap_or(raw)) {
         Ok(Some(id)) => id,
         Ok(None) => return Err("empty weapon name".into()),
         Err(_) => {
@@ -697,6 +756,30 @@ pub fn weapon_completions(weapons: &PreparedWeapons) -> Vec<String> {
         })
         .map(|family| family.key.short())
         .collect();
+    names.extend((1..weapons.0.len() as u32).filter_map(|id| {
+        if weapons.0.describe_configuration(id).is_some()
+            || weapons.0.gun_xmodel_of(id).is_none()
+            || weapons.0.configuration_admission(id).is_err()
+        {
+            return None;
+        }
+        let facts = weapons.0.facts_of(id)?;
+        if facts.inventory_type != 0 || facts.offhand_class != 0 {
+            return None;
+        }
+        let key = asset_game::FamilyKey::new(weapons.0.namespace_of(id)?, weapons.0.name_of(id));
+        if weapons.0.weapon_families().families().iter().any(|family| {
+            family.key.namespace == key.namespace
+                && (key.base == family.key.base
+                    || key
+                        .base
+                        .strip_prefix(&family.key.base)
+                        .is_some_and(|suffix| suffix.starts_with('_') || suffix == "dw"))
+        }) {
+            return None;
+        }
+        Some(key.short())
+    }));
     names.sort();
     names.dedup();
     names

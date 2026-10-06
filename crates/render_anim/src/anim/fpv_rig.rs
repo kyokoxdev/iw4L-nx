@@ -166,12 +166,10 @@ impl PreparedFpvModel {
             if !surface.visible || surface.index_count == 0 {
                 continue;
             }
-            let Some(authored) = skel
-                .surface_materials
+            let Some(authored) = entry
+                .material_edges
                 .get(surface.surface_index)
-                .copied()
-                .flatten()
-                .map(|index| index.get())
+                .and_then(|edge| edge.bound_index())
             else {
                 continue;
             };
@@ -290,6 +288,7 @@ pub struct PreparedFpvGeometry {
     pub index_n: usize,
     pub surface_ranges: Vec<(u32, u32)>,
     pub materials: Vec<SmodelPassMaterial>,
+    pub material_authored: Vec<usize>,
     pub draws: Vec<FpvSurfaceDraw>,
     pub dest_n: usize,
     pub packed_ok: bool,
@@ -379,6 +378,7 @@ impl PreparedFpvRig {
             index_n: 0,
             surface_ranges: Vec::new(),
             materials: Vec::new(),
+            material_authored: Vec::new(),
             draws: Vec::new(),
             dest_n: 0,
             packed_ok: true,
@@ -413,6 +413,7 @@ impl PreparedFpvRig {
                 let material_index = *material_key.entry(surface.authored).or_insert_with(|| {
                     let index = geometry.materials.len() as u32;
                     geometry.materials.push(material.clone());
+                    geometry.material_authored.push(surface.authored);
                     index
                 });
                 geometry.draws.push(FpvSurfaceDraw {
@@ -604,7 +605,17 @@ impl PreparedFpvRig {
             .collect();
         let assembly = &self.composition.assembly;
         let world = assembly.dobj.pose(&instances, &self.parts, Mat4::IDENTITY);
-        let skin = assembly.dobj.skin_matrices(&world);
+        let mut skin = assembly.dobj.skin_matrices(&world);
+        for &bone in &assembly.collapsed_bones {
+            if let (Some(skin), Some(world)) = (skin.get_mut(bone), world.get(bone)) {
+                *skin = Mat4::from_cols(
+                    bevy::math::Vec4::ZERO,
+                    bevy::math::Vec4::ZERO,
+                    bevy::math::Vec4::ZERO,
+                    world.w_axis,
+                );
+            }
+        }
         let eye_from_world = tag_view_to_bevy_camera() * world[assembly.view_bone].inverse();
         let lens = assembly
             .camera_bone

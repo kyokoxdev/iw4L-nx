@@ -171,6 +171,7 @@ fn occupy_remote_scene_ents(
     local: Res<LocalPresentClient>,
     presented: Res<PresentedSnapshot>,
     subject: Option<Res<ViewSubject>>,
+    settings: Res<frame::GameSettings>,
     bodies: Option<Res<PreparedBodies>>,
     weapons: Option<Res<PreparedWeapons>>,
     world_weapons: Option<Res<PreparedWorldWeapons>>,
@@ -215,7 +216,10 @@ fn occupy_remote_scene_ents(
             .map(|ps| ps.other_flags)
             .unwrap_or(0),
         rendering_third_person: crate::occupancy::third_person::presented_is_third_person(
-            &presented, local.0, in_killcam,
+            &presented,
+            local.0,
+            in_killcam,
+            settings.third_person,
         ),
     };
     for (identity, runtime, transform) in &remotes {
@@ -305,6 +309,7 @@ fn sync_remote_bodies(
     local: Res<LocalPresentClient>,
     presented: Res<PresentedSnapshot>,
     subject: Option<Res<ViewSubject>>,
+    settings: Res<frame::GameSettings>,
     bodies: Option<Res<PreparedBodies>>,
     existing: Query<(Entity, &CEntity, &CEntityRuntime, Option<&RemotePlayer>)>,
 ) {
@@ -331,7 +336,10 @@ fn sync_remote_bodies(
             .map(|ps| ps.other_flags)
             .unwrap_or(0),
         rendering_third_person: crate::occupancy::third_person::presented_is_third_person(
-            &presented, local.0, in_killcam,
+            &presented,
+            local.0,
+            in_killcam,
+            settings.third_person,
         ),
     };
 
@@ -421,6 +429,7 @@ struct PendingBodySkin<'a> {
     gun_model: Option<u16>,
     attachments: Vec<(PendingGunSkin<'a>, u16, Option<u8>)>,
 
+    camouflage: Option<&'a asset_game::WeaponCamouflage>,
     dest: CpuBodyGeom,
 }
 
@@ -768,8 +777,15 @@ impl<'a> RemotePoseFrame<'a> {
         let world_gun_gap = &mut self.world_gun_gap;
         let result = (|| {
             let origin = transform.translation.to_array();
-            let model_set =
-                select_remote_models(bodies, weapons, world_weapons, axis, weapon, remote.shield)?;
+            let model_set = select_remote_models(
+                bodies,
+                weapons,
+                world_weapons,
+                axis,
+                weapon,
+                sample.weapon_model,
+                remote.shield,
+            )?;
             let advanced = advance_remote_tree(
                 tree,
                 self.script,
@@ -845,7 +861,7 @@ impl<'a> RemotePoseFrame<'a> {
                     posed_players,
                 )?;
             }
-            let hash = hash_skin_matrices(&skin);
+            let hash = hash_skin_matrices(&skin) ^ u64::from(sample.weapon_model);
             let pose_same = pose_hashes.remember_pose_hash(persist_key, hash);
 
             let skin_models = bind_remote_skin_models(dobj, &model_set)?;
@@ -865,6 +881,13 @@ impl<'a> RemotePoseFrame<'a> {
                     push_cached_surfaces(persist_key, transform, pose_hashes, submit);
                 }
                 RemoteSkinAction::Blend(mut job) => {
+                    job.camouflage = weapons.and_then(|registry| {
+                        registry
+                            .0
+                            .material_camouflages_of(weapon)
+                            .iter()
+                            .find(|camo| camo.slot == sample.weapon_model)
+                    });
                     job.dest = take_unique_geom(pose_hashes, persist_key);
                     pending.push(job);
                 }
@@ -912,6 +935,7 @@ fn remote_skin_action<'a>(
                 .zip(lods.attachments)
                 .map(|((skin, model), lod)| (skin, model, lod))
                 .collect(),
+            camouflage: None,
             dest: CpuBodyGeom::default(),
         }),
     }
@@ -993,13 +1017,13 @@ fn skel_camera_lod(
     smodel_camera_lod(skel.lod, origin, 1.0, eye, ramp)
 }
 
-fn surface_material_name(
+fn surface_material_key(
     surface_index: usize,
     keys: &[Option<asset_core::MaterialKey>],
     edges: &[assets::AssetEdge<assets::MaterialSpace>],
-) -> Option<String> {
+) -> Option<asset_core::MaterialKey> {
     match edges.get(surface_index) {
-        Some(assets::AssetEdge::Bound(_)) => Some(keys.get(surface_index)?.as_ref()?.name.clone()),
+        Some(assets::AssetEdge::Bound(_)) => Some(keys.get(surface_index)?.as_ref()?.clone()),
         _ => None,
     }
 }
@@ -1044,7 +1068,7 @@ fn skin_slot_into(
             geom.surfaces.push(CpuSurfMeta {
                 index_start: 0,
                 index_count: 0,
-                name: surface_material_name(surf.surface_index, keys, edges),
+                material: surface_material_key(surf.surface_index, keys, edges),
             });
             continue;
         }
@@ -1059,7 +1083,7 @@ fn skin_slot_into(
         geom.surfaces.push(CpuSurfMeta {
             index_start,
             index_count: surf.index_count,
-            name: surface_material_name(surf.surface_index, keys, edges),
+            material: surface_material_key(surf.surface_index, keys, edges),
         });
     }
     geom.decoded_n = geom.packed.len();
@@ -1155,6 +1179,7 @@ fn assemble_meshes(job: PendingBodySkin<'_>) -> Result<AssembledMeshes, String> 
             )?;
         }
     }
+    let gun_first = geom.surfaces.len();
     match (&job.gun, job.gun_lod) {
         (None, _) | (Some(_), None) => {}
         (Some(gun), Some(lod)) => {
@@ -1188,6 +1213,17 @@ fn assemble_meshes(job: PendingBodySkin<'_>) -> Result<AssembledMeshes, String> 
             &mut geom,
             true,
         )?;
+    }
+    if let Some(camo) = job.camouflage {
+        for surface in &mut geom.surfaces[gun_first..] {
+            if let Some((_, to)) = camo
+                .materials
+                .iter()
+                .find(|(from, _)| surface.material.as_ref() == Some(from))
+            {
+                surface.material = Some(to.clone());
+            }
+        }
     }
     let (radii, radius_parents) = radii(
         job.body,
@@ -1325,7 +1361,7 @@ fn submit_remote_bodies(
     plan.indices.reserve(idx_n);
     let mut session = take_body_packed_session(&mut plan);
     session.reserve_packed(vert_n);
-    let mut mat_by_name: HashMap<String, u32> = HashMap::new();
+    let mut mat_by_key: HashMap<asset_core::MaterialKey, u32> = HashMap::new();
     let mut submitted_verts = 0usize;
     let mut any_missing_material = false;
     for (item, handle, scene_light, probe) in seated {
@@ -1339,26 +1375,26 @@ fn submit_remote_bodies(
         );
         let index_base = appended.map(|(_, index_base)| index_base);
         for surface in item.geom.surfaces.iter() {
-            let Some(name) = surface.name.as_deref() else {
+            let Some(key) = surface.material.as_ref() else {
                 any_missing_material = true;
                 last_cause = Some(RenderGapCause::RemoteBodyMaterialMissing {
                     name: String::new(),
                 });
                 continue;
             };
-            let mat_idx = if let Some(&idx) = mat_by_name.get(name) {
+            let mat_idx = if let Some(&idx) = mat_by_key.get(key) {
                 idx
             } else {
-                let Some(material) = model_materials.material(&tess.catalog, name).cloned() else {
+                let Some(material) = model_materials.material(&tess.catalog, key).cloned() else {
                     any_missing_material = true;
                     last_cause = Some(RenderGapCause::RemoteBodyMaterialMissing {
-                        name: name.to_owned(),
+                        name: format!("{}:{}", key.namespace.as_str(), key.name),
                     });
                     continue;
                 };
                 let idx = plan.materials.len() as u32;
                 plan.materials.push(material);
-                mat_by_name.insert(name.to_owned(), idx);
+                mat_by_key.insert(key.clone(), idx);
                 idx
             };
             if let Some(index_base) = index_base {

@@ -353,6 +353,7 @@ mod learned {
             AssetNamespace::Iw4 => 0,
             AssetNamespace::T5 => 1,
             AssetNamespace::Iw5 => 2,
+            AssetNamespace::T6 => 3,
         };
         let port = key.port;
         let mut out = [0; RECORD];
@@ -382,6 +383,7 @@ mod learned {
             0 => AssetNamespace::Iw4,
             1 => AssetNamespace::T5,
             2 => AssetNamespace::Iw5,
+            3 => AssetNamespace::T6,
             _ => return None,
         };
         let host = crate::drawsurf::state::GfxPassState::from_bits(GfxPassStateBits {

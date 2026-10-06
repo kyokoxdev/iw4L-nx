@@ -20,6 +20,10 @@ diag.workspace = true
 asset_transport.workspace = true
 bootstrap = { path = "../bootstrap" }
 
+# Community descriptor and self-update; none on Switch.
+[target.'cfg(not(target_os = "horizon"))'.dependencies]
+updater = { path = "../updater" }
+
 # Pins the libc that build-std's std uses to the patched fork (root Cargo.toml).
 [target.'cfg(target_os = "horizon")'.dependencies]
 libc = "=0.2.189"

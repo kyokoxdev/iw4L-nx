@@ -4,6 +4,7 @@ use asset_audio::SoundCatalog;
 use asset_core::AssetNamespace;
 use asset_game::WeaponRegistry;
 use assets::{MapLoadProcess, MatchType10SoundHints, PreparedWeapons};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use frame::{ClientSet, LaunchIdentity, MatchTornDown, ReturnedToMenu};
 
@@ -13,7 +14,7 @@ use crate::clip_store::{ClipKey, ClipStore, clip_keys_for_alias};
 use crate::playback::SoundBank;
 
 #[derive(Resource, Default)]
-pub struct AudioReady(pub bool);
+pub struct AudioReady(pub frame::WorldReadiness);
 
 #[derive(Resource)]
 pub struct AudioSilent;
@@ -27,6 +28,8 @@ impl AudioSilent {
     }
 }
 
+const PREFETCH_PER_PASS: usize = 64;
+
 const MATCH_HUD_PULSE: &[&str] = &["ui_pulse_text_type", "ui_pulse_text_delete"];
 
 const MENU_CODE: [&str; 2] = ["mouse_over", "mouse_click"];
@@ -38,14 +41,15 @@ struct MatchRequests {
     required: HashSet<ClipKey>,
     missing: BTreeSet<String>,
     resolved_aliases: usize,
+    capacity_failure: bool,
 }
 
 #[derive(Resource, Default)]
 struct MatchClipPrep {
+    generation: frame::WorldGeneration,
     submitted: bool,
+    capacity_failure: bool,
     required: HashSet<ClipKey>,
-    /// Clips this match still had to convert when the set was queued — not the
-    /// alias count, and not the whole cache.
     total: usize,
     stage: Option<asset_transport::StageHandle>,
     /// Resident sample bytes this process had already produced when the set
@@ -54,7 +58,25 @@ struct MatchClipPrep {
     sample_bytes_at_queue: u64,
 }
 
-/// Resident `f32` samples every decoder has produced so far.
+#[derive(SystemParam)]
+struct AudioLoadScope<'w> {
+    silent: Option<Res<'w, AudioSilent>>,
+    accepted: Option<Res<'w, assets::MatchLoadAccepted>>,
+    incoming: Option<Res<'w, assets::PreparedMatchReady>>,
+    installed: Res<'w, frame::WorldGeneration>,
+}
+
+impl AudioLoadScope<'_> {
+    fn generation(&self) -> frame::WorldGeneration {
+        self.accepted
+            .as_ref()
+            .map(|accepted| accepted.load_key)
+            .or_else(|| self.incoming.as_ref().map(|incoming| incoming.load_key))
+            .map(|key| frame::WorldGeneration::from_install(key.local_load_request_id))
+            .unwrap_or(*self.installed)
+    }
+}
+
 fn prepared_sample_bytes() -> u64 {
     crate::clip_prep_cost()
         .paths
@@ -89,10 +111,16 @@ fn reset_match_audio_on_match_end(
     mut prep: ResMut<MatchClipPrep>,
     mut announcer: ResMut<crate::match_voices::AnnouncerRoutes>,
 ) {
-    if torn.read().count() == 0 && returned.read().count() == 0 {
+    let retired = torn.read().fold(false, |retired, event| {
+        retired || event.world_generation == prep.generation
+    });
+    let menu = returned.read().fold(false, |menu, event| {
+        menu || (event.had_world && prep.generation.0.is_none())
+    });
+    if !retired && !menu {
         return;
     }
-    *ready = AudioReady(false);
+    *ready = AudioReady::default();
     if let Some(stage) = prep.stage.take() {
         stage.cancel();
     }
@@ -116,13 +144,27 @@ fn queue_match_clips(
     mut prep: ResMut<MatchClipPrep>,
     mut announcer: ResMut<crate::match_voices::AnnouncerRoutes>,
     mut ready: ResMut<AudioReady>,
-    silent: Option<Res<AudioSilent>>,
+    load_scope: AudioLoadScope,
 ) {
-    if ready.0 || prep.submitted {
+    let scope = load_scope.generation();
+    if scope.0.is_none() {
         return;
     }
-    if silent.is_some() {
-        ready.0 = true;
+    if prep.generation != scope {
+        if let Some(stage) = prep.stage.take() {
+            stage.cancel();
+        }
+        *prep = MatchClipPrep {
+            generation: scope,
+            ..Default::default()
+        };
+        ready.0 = frame::WorldReadiness::new(scope, frame::ReadinessState::Pending);
+    }
+    if ready.0.state != frame::ReadinessState::Pending || prep.submitted {
+        return;
+    }
+    if load_scope.silent.is_some() {
+        ready.0.state = frame::ReadinessState::Silent;
         if let Some(loading) = loading.as_ref() {
             loading
                 .progress
@@ -138,18 +180,22 @@ fn queue_match_clips(
         return;
     }
     let Some(clips) = clips.as_mut() else {
-        ready.0 = true;
+        ready.0.state = frame::ReadinessState::Failed;
         if let Some(loading) = loading.as_ref() {
             loading
                 .progress
-                .record_skipped(asset_transport::StageId::Audio);
+                .begin(asset_transport::StageId::Audio, None)
+                .fail();
         }
-        diag::info!(
+        diag::warn!(
             Audio,
-            "audio: AudioReady skipped — sound bank did not install"
+            "audio: preparation failed — sound bank did not install"
         );
         return;
     };
+    if *load_scope.installed != scope {
+        return;
+    }
     let Some(weapons) = weapons else {
         return;
     };
@@ -165,6 +211,9 @@ fn queue_match_clips(
     let Some(script_sound) = script_sound else {
         return;
     };
+    if namespace.generation != scope {
+        return;
+    }
     let mut set = MatchRequests::default();
     let mut aliases = 0usize;
     // Switch: PCM for every weapon's sounds (1194 weapons, ~1750 clips) does
@@ -239,16 +288,17 @@ fn queue_match_clips(
         aliases += 1;
         request_named(clips, &bank.0, AssetNamespace::Iw4, alias, &mut set);
     }
-    let mut breath_namespaces = HashSet::new();
+    let mut breath_policies = HashSet::new();
     for weapon in 1..=weapons.0.len() as u32 {
         if weapons
             .0
             .facts_of(weapon)
             .is_some_and(|facts| facts.can_hold_breath)
-            && let Some(ns) = weapons.0.namespace_of(weapon)
-            && breath_namespaces.insert(ns)
+            && let Some(policy) = weapons.0.semantic_policy_of(weapon)
+            && breath_policies.insert((policy.cue_namespace.namespace(), policy.breath_cues))
         {
-            for alias in crate::breath::aliases(ns) {
+            let ns = policy.cue_namespace.namespace();
+            for alias in policy.breath_cues.aliases() {
                 aliases += 1;
                 request_named(clips, &bank.0, ns, alias, &mut set);
             }
@@ -269,6 +319,7 @@ fn queue_match_clips(
     }
     prep.total = set.required.len();
     prep.required = set.required;
+    prep.capacity_failure = set.capacity_failure;
     prep.submitted = true;
     if let Some(loading) = loading {
         prep.sample_bytes_at_queue = prepared_sample_bytes();
@@ -286,7 +337,7 @@ fn queue_match_clips(
     }
     diag::info!(
         Audio,
-        "audio: match-set queued {} aliases ({} type-10), {} clips still converting ({} workers); resident reused={} clips/{}B",
+        "audio: match-set queued {} aliases ({} type-10), {} required clips ({} workers); resident reused={} clips/{}B",
         aliases,
         type10.0.len(),
         prep.total,
@@ -294,7 +345,9 @@ fn queue_match_clips(
         clips.reused_resident().0,
         clips.reused_resident().1,
     );
-    if prep.total == 0 {
+    if prep.capacity_failure {
+        fail_capacity(&mut ready, &mut prep, Some(&mut **clips));
+    } else if prep.total == 0 {
         mark_ready(&mut ready, &mut prep, Some(&mut **clips));
     }
 }
@@ -303,14 +356,52 @@ fn poll_match_audio_ready(
     mut clips: Option<ResMut<ClipStore>>,
     mut prep: ResMut<MatchClipPrep>,
     mut ready: ResMut<AudioReady>,
+    load_scope: AudioLoadScope,
 ) {
-    if ready.0 || !prep.submitted {
+    let scope = load_scope.generation();
+    if prep.generation != scope
+        || ready.0.generation != scope
+        || ready.0.state != frame::ReadinessState::Pending
+        || !prep.submitted
+        || prep.capacity_failure
+    {
         return;
     }
     let Some(clips) = clips.as_mut() else {
         return;
     };
-    prep.required.retain(|key| clips.ready(key).is_none());
+    let mut capacity_failure = false;
+    let mut submissions = PREFETCH_PER_PASS;
+    prep.required.retain(|key| {
+        if submissions != 0 {
+            match clips.prefetch(key.clone()) {
+                crate::clip_store::MediaRequest::Submitted
+                | crate::clip_store::MediaRequest::Resident => submissions -= 1,
+                crate::clip_store::MediaRequest::Deferred => submissions = 0,
+                crate::clip_store::MediaRequest::Existing => {}
+                crate::clip_store::MediaRequest::Refused => {
+                    capacity_failure = true;
+                    submissions = 0;
+                }
+            }
+        }
+        match clips.ready(key) {
+            Some(Err(
+                crate::clip_store::ClipError::RequestLimit
+                | crate::clip_store::ClipError::InvalidPcm(crate::media::PcmError::MemoryLimit),
+            )) => {
+                capacity_failure = true;
+                false
+            }
+            Some(_) => false,
+            None => true,
+        }
+    });
+    if capacity_failure {
+        prep.capacity_failure = true;
+        fail_capacity(&mut ready, &mut prep, Some(&mut **clips));
+        return;
+    }
     let done = prep.total.saturating_sub(prep.required.len());
     let decoded = prepared_sample_bytes().saturating_sub(prep.sample_bytes_at_queue);
     if let Some(stage) = prep.stage.as_ref() {
@@ -322,14 +413,30 @@ fn poll_match_audio_ready(
     }
 }
 
+fn fail_capacity(ready: &mut AudioReady, prep: &mut MatchClipPrep, clips: Option<&mut ClipStore>) {
+    if let Some(stage) = prep.stage.take() {
+        stage.fail();
+    }
+    diag::warn!(
+        Audio,
+        "audio: match media capacity exceeded; {} of {} clips not prepared",
+        prep.required.len(),
+        prep.total
+    );
+    ready.0.state = frame::ReadinessState::Failed;
+    if let Some(clips) = clips {
+        clips.arm_match_live();
+    }
+}
+
 fn mark_ready(ready: &mut AudioReady, prep: &mut MatchClipPrep, clips: Option<&mut ClipStore>) {
     if let Some(stage) = prep.stage.take() {
         stage.set_completed(prep.total as u64);
         stage.set_bytes(prepared_sample_bytes().saturating_sub(prep.sample_bytes_at_queue));
         stage.done();
     }
-    if !ready.0 {
-        ready.0 = true;
+    if ready.0.generation == prep.generation && ready.0.state == frame::ReadinessState::Pending {
+        ready.0.state = frame::ReadinessState::Ready;
         diag::info!(Audio, "audio: AudioReady ({} clips prepared)", prep.total);
         if let Some(clips) = clips {
             clips.arm_match_live();
@@ -350,10 +457,25 @@ fn request_named(
     } else {
         set.resolved_aliases += 1;
     }
-    for key in keys {
-        clips.request(key.clone());
-        if clips.ready(&key).is_none() {
-            set.required.insert(key);
+    for key in keys
+        .into_iter()
+        .filter(|key| matches!(key, ClipKey::Loaded(_)))
+    {
+        match clips.ready(&key) {
+            Some(Err(
+                crate::clip_store::ClipError::RequestLimit
+                | crate::clip_store::ClipError::InvalidPcm(crate::media::PcmError::MemoryLimit),
+            )) => set.capacity_failure = true,
+            Some(_) => {}
+            None => {
+                if set.required.len() == crate::clip_store::MEDIA_REQUEST_LIMIT
+                    && !set.required.contains(&key)
+                {
+                    set.capacity_failure = true;
+                } else {
+                    set.required.insert(key);
+                }
+            }
         }
     }
 }

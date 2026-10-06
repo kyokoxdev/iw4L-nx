@@ -38,12 +38,11 @@ use render_scene::WorldScriptModelInstance;
 use render_scene::{FlyCamera, FpvLens};
 use render_scene::{HostGfxScene, scene_quat_from_viewmodel_axes};
 use weapon_iw4::{
-    GunKickSpring, GunRecoilPlacementState, PLACEMENT_ASSEMBLE_STEP_COUNT,
-    StanceTransitionFadeGlobals, WeaponBobInputs, WeaponBobWaveformInputs,
-    WeaponMovementKinematics, WeaponPlacementAssembleStep, WeaponPlacementPsInputs,
-    WeaponPlacementState, WeaponStanceStaticOfsInputs, calculate_weapon_movement_bob_waveform,
-    clip_table_key, dual_wield_view_model_origin_add, get_clip_for_hand,
-    get_viewmodel_weapon_index, viewmodel_rocket_should_be_attached,
+    GunRecoilResponse, PLACEMENT_ASSEMBLE_STEP_COUNT, StanceTransitionFadeGlobals, WeaponBobInputs,
+    WeaponBobWaveformInputs, WeaponMovementKinematics, WeaponPlacementAssembleStep,
+    WeaponPlacementPsInputs, WeaponPlacementState, WeaponStanceStaticOfsInputs,
+    calculate_weapon_movement_bob_waveform, clip_table_key, dual_wield_view_model_origin_add,
+    get_clip_for_hand, get_viewmodel_weapon_index, viewmodel_rocket_should_be_attached,
     viewweapon_iron_ads_saves_composed_axis, viewweapon_save_gun_pitch_yaw,
     viewweapon_view_to_world_delta, weapon_placement_assemble,
 };
@@ -93,6 +92,11 @@ fn same_compositions(a: &asset_game::FpvSideAssemblies, b: &asset_game::FpvSideA
             (None, None) => true,
             _ => false,
         }
+        && match (&a.jammed, &b.jammed) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
 }
 
 fn same_material_catalog(
@@ -101,9 +105,6 @@ fn same_material_catalog(
 ) -> bool {
     current.is_some_and(|current| Arc::ptr_eq(owned, &current.catalog))
 }
-
-#[derive(Resource, Default)]
-pub struct LocalSpawnArmed(pub bool);
 
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct FpvStatusGap(pub Option<FpvState>);
@@ -404,15 +405,21 @@ pub fn occupy_fpv_scene(
     mut submissions: MessageWriter<AnimDObjSceneSubmission>,
     presented: Res<PresentedSnapshot>,
     local: Res<LocalPresentClient>,
-    view: Res<ViewSubject>,
+    view_settings: (Res<ViewSubject>, Res<frame::GameSettings>),
     prepared: Res<PreparedFpv>,
     kick: Option<Res<SessionViewKick>>,
     session_vm: Option<Res<SessionViewmodel>>,
     tess: Option<Res<render_scene::TessMaterials>>,
     fpv_meshes: Option<Res<PreparedFpvMeshes>>,
 ) {
+    let (view, settings) = view_settings;
     if presented.viewweapon_player(local.0).is_none()
-        || presented_is_third_person(&presented, local.0, view.in_killcam())
+        || presented_is_third_person(
+            &presented,
+            local.0,
+            view.in_killcam(),
+            settings.third_person,
+        )
     {
         return;
     }
@@ -493,8 +500,12 @@ fn refuse_gap_cause(refuse: FpvPoseRefuse) -> RenderGapCause {
 
 pub fn tick_fpv_viewmodel(
     time: Res<Time>,
-    presented: Res<PresentedSnapshot>,
-    local: Res<LocalPresentClient>,
+    (presented, local, generation, events): (
+        Res<PresentedSnapshot>,
+        Res<LocalPresentClient>,
+        Res<frame::WorldGeneration>,
+        Res<net::EntityEventCursor>,
+    ),
     mut cursor: ResMut<FpvPresentCursor>,
     prepared: Res<PreparedFpv>,
     fpv_meshes: Option<Res<PreparedFpvMeshes>>,
@@ -506,15 +517,20 @@ pub fn tick_fpv_viewmodel(
     mut pending_notes: ResMut<PendingFpvNotetracks>,
     mut bolts: ResMut<FpvBoltTargets>,
     kick: Option<Res<SessionViewKick>>,
-    view: Res<ViewSubject>,
+    view_settings: (Res<ViewSubject>, Res<frame::GameSettings>),
 ) {
+    let (view, settings) = view_settings;
     let table = prepared.table().map(|table| &**table);
-    pending_notes.weapon = 0;
-    pending_notes.names.clear();
+    pending_notes.batch = None;
     bolts.clear();
     *product = FpvPoseProduct::default();
     if let Some(ps) = presented.viewweapon_player(local.0) {
-        if !presented_is_third_person(&presented, local.0, view.in_killcam()) {
+        if !presented_is_third_person(
+            &presented,
+            local.0,
+            view.in_killcam(),
+            settings.third_person,
+        ) {
             product.drawgun = viewweapon_drawgun_value(
                 ps,
                 table,
@@ -547,7 +563,12 @@ pub fn tick_fpv_viewmodel(
         product.kind = FpvPoseKind::Hide;
         return;
     }
-    if presented_is_third_person(&presented, local.0, view.in_killcam()) {
+    if presented_is_third_person(
+        &presented,
+        local.0,
+        view.in_killcam(),
+        settings.third_person,
+    ) {
         product.kind = FpvPoseKind::Hide;
         return;
     }
@@ -699,13 +720,21 @@ pub fn tick_fpv_viewmodel(
         None
     };
     let weapon_id = session.weapon_id;
+    let held = if session.parent_weapon != 0 {
+        session.parent_weapon
+    } else {
+        weapon_id
+    };
+    product.camo = presented.viewweapon_player(local.0).map_or(0, |ps| {
+        weapon_iw4::weapon_model_for_held(&ps.weapons, &ps.weapon_data, held)
+    });
     let SessionFpvMeshesHandles {
         fpv: equipped,
         active_rig,
         view: equipped_view,
         ..
     } = session;
-    let mut kind = generate_fpv_pose(FpvGenerateArgs {
+    let (mut kind, notetracks) = generate_fpv_pose(FpvGenerateArgs {
         dt,
         equipped,
         rigs: &equipped_view.rigs,
@@ -718,16 +747,32 @@ pub fn tick_fpv_viewmodel(
                 Ok(weapon_iw4::WeaponState::MeleeInit | weapon_iw4::WeaponState::MeleeFire)
             )
         }),
+        ads: presented
+            .viewweapon_player(local.0)
+            .is_some_and(|ps| ps.f_weapon_pos_frac >= 1.0),
+        jammed: presented
+            .player(local.0)
+            .is_some_and(|ps| ps.other_flags & playerstate_iw4::other_flags::EMP_JAMMED != 0),
         sample,
         predicted_fire,
         dual,
         dual_offset,
     });
+    if weapon_id != 0
+        && (!notetracks.records.is_empty() || notetracks.discarded != 0)
+        && let Some(snapshot) = presented.snapshot()
+        && let Some(meta) = snapshot.meta.for_client(local.0)
+    {
+        pending_notes.batch = Some(notetracks.into_audio_batch(
+            *generation,
+            events.timeline(),
+            local.0,
+            meta.life_sequence,
+            weapon_id,
+            snapshot.tick,
+        ));
+    }
     if let FpvPoseKind::Posed(frame) = &mut kind {
-        if weapon_id != 0 && !frame.notetracks.is_empty() {
-            pending_notes.weapon = weapon_id;
-            pending_notes.names.clone_from(&frame.notetracks);
-        }
         // Nothing downstream of the bones waits for a vertex.
         if let Some(bolt) = frame.secondary_bolt.take() {
             bolts.set_pose(1, bolt);
@@ -787,9 +832,16 @@ fn skin_fpv_geometry(
                 crate::clear_fpv_draw_plan(&mut fpv_plan, handle);
                 return;
             }
-            if fpv_plan.rig_generation != rig.generation() {
-                crate::install_prepared_fpv_plan(&mut fpv_plan, &rig.geometry, handle);
+            if fpv_plan.rig_generation != rig.generation() || fpv_plan.camo != product.camo {
+                let camo = session.and_then(|session| session.view.camo(product.camo));
+                crate::install_prepared_fpv_plan(
+                    &mut fpv_plan,
+                    &rig.geometry,
+                    camo.map(|swaps| &**swaps),
+                    handle,
+                );
                 fpv_plan.rig_generation = rig.generation();
+                fpv_plan.camo = product.camo;
             }
             if let Some(rows) = fpv_plan.packed_rows_mut() {
                 rig.skin_into(&catalog.0, &frame.poses, rows);
@@ -898,9 +950,10 @@ pub fn apply_fpv_placement(
             Without<WorldScriptModelInstance>,
         ),
     >,
-    view: Res<ViewSubject>,
+    view_settings: (Res<ViewSubject>, Res<frame::GameSettings>),
     mut gfx_scene: ResMut<HostGfxScene>,
 ) {
+    let (view, settings) = view_settings;
     *aim = ViewweaponAim::default();
     let Ok(mut transform) = roots.single_mut() else {
         return;
@@ -908,7 +961,12 @@ pub fn apply_fpv_placement(
     let Some(ps) = presented.player(local.0) else {
         return;
     };
-    if presented_is_third_person(&presented, local.0, view.in_killcam()) {
+    if presented_is_third_person(
+        &presented,
+        local.0,
+        view.in_killcam(),
+        settings.third_person,
+    ) {
         return;
     }
     let Some(table) = prepared.table() else {
@@ -921,12 +979,7 @@ pub fn apply_fpv_placement(
 
     let mut state = WeaponPlacementState {
         sway_springs: kick.sway.springs(),
-        gun_recoil: GunRecoilPlacementState {
-            pitch_offset: kick.state.gun_angles[0],
-            pitch_speed: kick.state.gun_speed[0],
-            yaw_offset: kick.state.gun_angles[1],
-            yaw_speed: kick.state.gun_speed[1],
-        },
+        gun_recoil: kick.state.gun,
         movement_origin: kick.placement_move_origin,
         movement_angles: kick.placement_move_angles,
         weap_idle_time: kick.weap_idle_time,
@@ -986,18 +1039,8 @@ pub fn apply_fpv_placement(
         pm_flags: ps.pm_flags,
         weapon_pos_frac: ps.f_weapon_pos_frac,
     });
-    let hip = GunKickSpring {
-        accel: facts.kick.hip_gun_kick_accel,
-        speed_max: facts.kick.hip_gun_kick_speed_max,
-        speed_decay: facts.kick.hip_gun_kick_speed_decay,
-        static_decay: facts.kick.hip_gun_kick_static_decay,
-    };
-    let ads = GunKickSpring {
-        accel: facts.kick.ads_gun_kick_accel,
-        speed_max: facts.kick.ads_gun_kick_speed_max,
-        speed_decay: facts.kick.ads_gun_kick_speed_decay,
-        static_decay: facts.kick.ads_gun_kick_static_decay,
-    };
+    let hip = GunRecoilResponse::default();
+    let ads = GunRecoilResponse::default();
     let mut steps = [WeaponPlacementAssembleStep::Sway; PLACEMENT_ASSEMBLE_STEP_COUNT];
 
     let mut idle = facts.idle;
@@ -1116,32 +1159,24 @@ fn flush_fpv_spawn(world: &mut World) {
 }
 
 fn publish_fpv_notetracks(
-    generation: Res<frame::WorldGeneration>,
-    presented: Res<PresentedSnapshot>,
-    local: Res<LocalPresentClient>,
     pending: Res<PendingFpvNotetracks>,
     mut notes: MessageWriter<audio::ViewmodelNotetracks>,
 ) {
-    if pending.weapon == 0 || pending.names.is_empty() {
-        return;
+    if let Some(batch) = &pending.batch {
+        notes.write(batch.clone());
     }
-    let Some(meta) = presented
-        .snapshot()
-        .and_then(|snapshot| snapshot.meta.for_client(local.0))
-    else {
-        return;
-    };
-    notes.write(audio::ViewmodelNotetracks {
-        generation: *generation,
-        client: local.0,
-        life: meta.life_sequence,
-        weapon: pending.weapon,
-        names: pending.names.clone(),
-    });
 }
 
 pub fn register_fpv_present_systems(app: &mut App) {
-    app.init_resource::<LocalSpawnArmed>()
+    app.init_resource::<frame::ScreenEffectsView>()
+        .init_resource::<frame::ScreenEffectsDvars>()
+        .add_systems(
+            Update,
+            super::screen_effects::update
+                .in_set(frame::ScreenEffectsPublished)
+                .in_set(LifeFrontPublished)
+                .after(reset_view_kick_on_life_started),
+        )
         .init_resource::<SessionViewmodel>()
         .init_resource::<PreparedFpv>()
         .init_resource::<crate::anim::model_materials::PreparedModelMaterials>()

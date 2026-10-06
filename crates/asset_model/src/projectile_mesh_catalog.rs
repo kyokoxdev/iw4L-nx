@@ -184,11 +184,23 @@ impl ProjectileMeshBuild {
         self.insert_in(self.capture_ns, skel, materials);
     }
 
-    /// `capture_unclassified` for a skeleton the walk already captured.
-    pub fn capture_unclassified_shared(&mut self, skel: &std::sync::Arc<ModelSkel>, materials: &MaterialCatalog) {
+    pub fn capture_shared_unclassified(
+        &mut self,
+        skel: &std::sync::Arc<ModelSkel>,
+        materials: &MaterialCatalog,
+    ) {
         if model_kind(&skel.name).is_none() {
             self.insert_in(self.capture_ns, skel.clone(), Some(materials));
         }
+    }
+
+    pub fn capture_shared(
+        &mut self,
+        ns: AssetNamespace,
+        skel: &std::sync::Arc<ModelSkel>,
+        materials: &MaterialCatalog,
+    ) {
+        self.insert_in(ns, skel.clone(), Some(materials));
     }
 
     fn insert_in(

@@ -186,10 +186,14 @@ impl WorldWeaponBuild {
         self.insert_in(self.capture_ns, skel, materials);
     }
 
-    /// `capture` for a skeleton the walk already captured.
-    pub fn capture_shared(&mut self, skel: &std::sync::Arc<ModelSkel>, materials: &MaterialCatalog) {
+    pub fn capture_shared(
+        &mut self,
+        ns: Option<AssetNamespace>,
+        skel: &std::sync::Arc<ModelSkel>,
+        materials: &MaterialCatalog,
+    ) {
         if crate::model_kind(&skel.name) == Some(crate::ModelKind::WorldWeapon) {
-            self.insert_in(self.capture_ns, skel.clone(), Some(materials));
+            self.insert_in(ns.unwrap_or(self.capture_ns), skel.clone(), Some(materials));
         }
     }
 
@@ -313,6 +317,7 @@ impl WorldWeaponCatalog {
                 AssetNamespace::Iw4 => 1,
                 AssetNamespace::T5 => 2,
                 AssetNamespace::Iw5 => 4,
+                AssetNamespace::T6 => 8,
             };
         }
         seen.values().filter(|bits| bits.count_ones() >= 2).count()

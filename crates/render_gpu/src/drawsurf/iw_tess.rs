@@ -96,6 +96,7 @@ struct ExtractedTessFrame {
     surface_h: f32,
     visible: bool,
     saved_screen_sequence: u64,
+    shellshock_screen: Option<hud::ShellshockScreen>,
 }
 
 #[derive(Resource, Default)]
@@ -268,6 +269,7 @@ fn extract_iw_tess(mut extracted: ResMut<ExtractedIwTess>, frame: Extract<Res<Hu
         surface_h: frame.surface_h,
         visible: frame.visible,
         saved_screen_sequence: frame.saved_screen_sequence,
+        shellshock_screen: frame.shellshock_screen,
     };
 }
 
@@ -472,6 +474,12 @@ fn draw_iw_tess(
     mut texture_table: ResMut<super::texture_table::ExactTextureTable>,
     mut blood: ResMut<HudBloodGpu>,
     mut saved: ResMut<SavedScreenGpu>,
+    // Paired: one system takes at most 16 parameters.
+    (mut temporal, mut temporal_pipeline): (
+        ResMut<super::shellshock_screen::TemporalScreenGpu>,
+        ResMut<super::shellshock_screen::TemporalScreenPipeline>,
+    ),
+    queue: Res<RenderQueue>,
     mut context: RenderContext,
     stages: Option<Res<SharedRenderStagesSlot>>,
     mut learned: Local<LearnedTess>,
@@ -492,6 +500,17 @@ fn draw_iw_tess(
         }
     }
     let scene_size = target.main_texture().size();
+    temporal.draw(super::shellshock_screen::TemporalScreenDraw {
+        frame: extracted.0.shellshock_screen,
+        texture: target.main_texture(),
+        view: target.main_texture_view(),
+        format,
+        device: &device,
+        queue: &queue,
+        cache: &cache,
+        pipeline: &mut temporal_pipeline,
+        context: &mut context,
+    });
     if extracted.0.saved_screen_sequence != saved.sequence {
         saved.captured = false;
         if let Some(copy) = saved
@@ -787,6 +806,7 @@ fn prepare_hud_blood(
 }
 
 pub(super) fn register(app: &mut App) {
+    super::shellshock_screen::register(app);
     bevy::asset::embedded_asset!(app, "iw_tess.wgsl");
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;

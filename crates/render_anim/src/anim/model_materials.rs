@@ -15,7 +15,7 @@ type ModelMaterialsOwner = (
 #[derive(Resource, Default)]
 pub struct PreparedModelMaterials {
     owner: Option<ModelMaterialsOwner>,
-    by_name: HashMap<String, SmodelPassMaterial>,
+    by_key: HashMap<asset_core::MaterialKey, SmodelPassMaterial>,
     by_authored: HashMap<assets::MaterialIndex, SmodelPassMaterial>,
     scene_dobjs: HashMap<String, Arc<xmodel_runtime::DObj>>,
     projectile_materials: HashMap<assets::MaterialIndex, SmodelPassMaterial>,
@@ -43,12 +43,12 @@ impl PreparedModelMaterials {
     pub fn material(
         &self,
         catalog: &Arc<RuntimeMaterialCatalog>,
-        name: &str,
+        key: &asset_core::MaterialKey,
     ) -> Option<&SmodelPassMaterial> {
         if !self.settled_for(catalog) {
             return None;
         }
-        self.by_name.get(name)
+        self.by_key.get(key)
     }
 
     pub fn authored(
@@ -90,22 +90,22 @@ impl PreparedModelMaterials {
     }
 }
 
-fn admit_names<'a>(
-    names: impl IntoIterator<Item = &'a str>,
+fn admit_keys<'a>(
+    keys: impl IntoIterator<Item = &'a asset_core::MaterialKey>,
     atlas: &WorldModelLightingAtlas,
     catalog: &RuntimeMaterialCatalog,
-    by_name: &mut HashMap<String, SmodelPassMaterial>,
-    refused: &mut Vec<String>,
+    by_key: &mut HashMap<asset_core::MaterialKey, SmodelPassMaterial>,
+    refused: &mut Vec<asset_core::MaterialKey>,
 ) {
-    for name in names {
-        if by_name.contains_key(name) || refused.iter().any(|seen| seen == name) {
+    for key in keys {
+        if by_key.contains_key(key) || refused.iter().any(|seen| seen == key) {
             continue;
         }
-        match crate::body_lit_pass_material(atlas, catalog, name) {
+        match crate::body_lit_pass_material(atlas, catalog, key) {
             Some(material) => {
-                by_name.insert(name.to_owned(), material);
+                by_key.insert(key.clone(), material);
             }
-            None => refused.push(name.to_owned()),
+            None => refused.push(key.clone()),
         }
     }
 }
@@ -146,14 +146,14 @@ pub fn scene_lit_pass_material(
     })
 }
 
-fn present_names<'a>(
+fn present_keys<'a>(
     keys: &'a [Option<asset_core::MaterialKey>],
     edges: &'a [assets::AssetEdge<assets::MaterialSpace>],
-) -> impl Iterator<Item = &'a str> {
+) -> impl Iterator<Item = &'a asset_core::MaterialKey> {
     keys.iter()
         .zip(edges)
         .filter(|(_, edge)| edge.is_bound())
-        .filter_map(|(key, _)| Some(key.as_ref()?.name.as_str()))
+        .filter_map(|(key, _)| key.as_ref())
 }
 
 pub fn prepare_model_materials(
@@ -161,6 +161,7 @@ pub fn prepare_model_materials(
     atlas: Option<Res<WorldModelLightingAtlas>>,
     bodies: Option<Res<assets::PreparedBodies>>,
     world_weapons: Option<Res<assets::PreparedWorldWeapons>>,
+    weapons: Option<Res<assets::PreparedWeapons>>,
     scene_models: Option<Res<asset_world::MapXModelSceneCatalog>>,
     projectiles: Option<Res<assets::PreparedProjectileMeshes>>,
     mut prepared: ResMut<PreparedModelMaterials>,
@@ -191,28 +192,49 @@ pub fn prepare_model_materials(
         return;
     };
     let started = std::time::Instant::now();
-    let mut by_name = HashMap::new();
+    let mut by_key = HashMap::new();
     let mut refused = Vec::new();
     for name in bodies.0.names() {
         if let Some(entry) = bodies.0.get(name) {
-            admit_names(
-                present_names(&entry.material_keys, &entry.material_edges),
+            admit_keys(
+                present_keys(&entry.material_keys, &entry.material_edges),
                 &atlas,
                 &tess.catalog,
-                &mut by_name,
+                &mut by_key,
                 &mut refused,
             );
         }
     }
     for index in 0..world.0.len() {
         if let Some(entry) = world.0.get_at(index) {
-            admit_names(
-                present_names(&entry.material_keys, &entry.material_edges),
+            admit_keys(
+                present_keys(&entry.material_keys, &entry.material_edges),
                 &atlas,
                 &tess.catalog,
-                &mut by_name,
+                &mut by_key,
                 &mut refused,
             );
+        }
+    }
+    if let Some(weapons) = weapons.as_deref() {
+        for id in 1..=weapons.0.len() as u32 {
+            for camo in weapons.0.material_camouflages_of(id) {
+                for (_, key) in &camo.materials {
+                    if by_key.contains_key(key) {
+                        continue;
+                    }
+                    let Some(authored) = tess.catalog.material_for_key(key) else {
+                        continue;
+                    };
+                    if let Some(material) = scene_lit_pass_material(
+                        &atlas,
+                        &tess,
+                        assets::MaterialIndex::from_order(usize::from(authored.asset_id.0)),
+                    ) {
+                        by_key.insert(key.clone(), material);
+                    }
+                }
+            }
         }
     }
     let mut by_authored = HashMap::new();
@@ -250,15 +272,9 @@ pub fn prepare_model_materials(
             let Some(entry) = projectiles.0.get_at(index) else {
                 continue;
             };
-            let key =
-                projectiles
-                    .0
-                    .key_at(index)
-                    .cloned()
-                    .unwrap_or(asset_model::ProjectileMeshKey::new(
-                        entry.namespace,
-                        &entry.skel.name,
-                    ));
+            let key = projectiles.0.key_at(index).cloned().unwrap_or(
+                asset_model::ProjectileMeshKey::new(entry.namespace, &entry.skel.name),
+            );
             for surface in 0..entry.material_edges.len() {
                 let Some(authored) = entry.material_index(surface) else {
                     continue;
@@ -285,7 +301,7 @@ pub fn prepare_model_materials(
     diag::info!(
         World,
         "model materials prepared before Ready: admitted={} map_model_materials={} map_model_dobjs={} projectile_materials={} projectile_dobjs={} refused={} elapsed={:.1}ms{}",
-        by_name.len(),
+        by_key.len(),
         by_authored.len(),
         scene_dobjs.len(),
         projectile_materials.len(),
@@ -300,7 +316,7 @@ pub fn prepare_model_materials(
                 refused
                     .iter()
                     .take(8)
-                    .cloned()
+                    .map(|key| format!("{}:{}", key.namespace.as_str(), key.name))
                     .collect::<Vec<_>>()
                     .join(",")
             )
@@ -308,7 +324,7 @@ pub fn prepare_model_materials(
     );
     *prepared = PreparedModelMaterials {
         owner: Some(owner),
-        by_name,
+        by_key,
         by_authored,
         scene_dobjs,
         projectile_materials,

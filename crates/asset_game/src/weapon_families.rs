@@ -96,6 +96,16 @@ pub struct WeaponFamily {
     pub attachments: Vec<AttachmentChoice>,
 }
 
+impl WeaponFamily {
+    pub fn name_key(&self) -> String {
+        let key = self.display_key.trim_start_matches('@');
+        match self.key.namespace {
+            AssetNamespace::Iw4 => key.to_owned(),
+            namespace => format!("{}:localize/{key}", namespace.as_str()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct WeaponSelection {
     pub family: Option<FamilyKey>,
@@ -211,7 +221,7 @@ const IW_OFFERED_COLS: std::ops::RangeInclusive<i32> = 11..=21;
 
 fn schema(namespace: AssetNamespace) -> Schema {
     match namespace {
-        AssetNamespace::T5 => Schema::Treyarch,
+        AssetNamespace::T5 | AssetNamespace::T6 => Schema::Treyarch,
         _ => Schema::Infinity,
     }
 }
@@ -391,6 +401,9 @@ impl WeaponFamilies {
             if !group.starts_with("weapon_") || base.is_empty() || base == "weapon_null" {
                 continue;
             }
+            if namespace == AssetNamespace::T6 && table.cell(row, 12) == "-1" {
+                continue;
+            }
             let key = FamilyKey::new(namespace, base);
             if known.attachments.contains_key(&key.base) || self.by_key.contains_key(&key) {
                 continue;
@@ -418,6 +431,15 @@ impl WeaponFamilies {
                         .cell(row, 8)
                         .split_ascii_whitespace()
                         .map(str::to_ascii_lowercase)
+                        .map(|name| match name.rsplit_once('_') {
+                            Some((attachment, _))
+                                if namespace == AssetNamespace::T6
+                                    && !known.attachments.contains_key(&name) =>
+                            {
+                                attachment.to_owned()
+                            }
+                            _ => name,
+                        })
                         .collect(),
                 ),
             };
@@ -499,9 +521,7 @@ impl WeaponFamilies {
             return Some(Vec::new());
         }
         let tables = self.tables.get(&family.key.namespace)?;
-        if schema(family.key.namespace) == Schema::Treyarch
-            && name == format!("{}dw", family.key.base)
-        {
+        if family.key.namespace == AssetNamespace::T5 && name == format!("{}dw", family.key.base) {
             return Some(vec!["dw".to_owned()]);
         }
         let rest = name.strip_prefix(&family.key.base)?.strip_prefix('_')?;
@@ -541,11 +561,15 @@ impl WeaponFamilies {
         out
     }
 
-    fn configuration_name(&self, family: &WeaponFamily, attachments: &[String]) -> String {
+    pub(crate) fn configuration_name(
+        &self,
+        family: &WeaponFamily,
+        attachments: &[String],
+    ) -> String {
         if attachments.is_empty() {
             return family.key.base.clone();
         }
-        if schema(family.key.namespace) == Schema::Treyarch && attachments == ["dw"] {
+        if family.key.namespace == AssetNamespace::T5 && attachments == ["dw"] {
             return format!("{}dw", family.key.base);
         }
         format!("{}_{}", family.key.base, attachments.join("_"))
@@ -588,10 +612,17 @@ impl WeaponFamilies {
     }
 
     pub(crate) fn iw5_candidate_selections(&self) -> Vec<(u32, WeaponSelection)> {
+        self.candidate_selections(AssetNamespace::Iw5)
+    }
+
+    pub(crate) fn candidate_selections(
+        &self,
+        namespace: AssetNamespace,
+    ) -> Vec<(u32, WeaponSelection)> {
         let mut families: Vec<&WeaponFamily> = self
             .families
             .iter()
-            .filter(|family| family.key.namespace == AssetNamespace::Iw5 && family.base.is_some())
+            .filter(|family| family.key.namespace == namespace && family.base.is_some())
             .collect();
         families.sort_by_key(|family| family.key.asset_key());
         let mut out = Vec::new();
@@ -611,7 +642,7 @@ impl WeaponFamilies {
                     WeaponSelection::with(family.key.clone(), std::slice::from_ref(name)),
                 ));
                 for other in &names[i + 1..] {
-                    if self.compatible(AssetNamespace::Iw5, name, other) {
+                    if self.compatible(namespace, name, other) {
                         out.push((
                             base,
                             WeaponSelection::with(

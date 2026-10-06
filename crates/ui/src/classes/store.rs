@@ -45,10 +45,60 @@ impl SessionClassStore {
                         "specialty_bulletaccuracy".into(),
                     ],
                     deathstreak: "specialty_copycat".into(),
+                    camos: Default::default(),
                 };
                 if available(&slot) {
                     slots.push(slot);
                 }
+                if slots.len() == PERSONAL_CLASS_SLOTS {
+                    break;
+                }
+            }
+        }
+        if slots.len() < PERSONAL_CLASS_SLOTS {
+            let families: Vec<_> = registry.weapon_families().offered().collect();
+            for primary in families
+                .iter()
+                .filter(|family| family.slot == asset_game::FamilySlot::Primary)
+            {
+                let mut slot = HostClassSlot {
+                    name: format!("custom_{}", slots.len() + 1),
+                    primary: primary.key.asset_key(),
+                    primary_attachments: Vec::new(),
+                    secondary: String::new(),
+                    secondary_attachments: Vec::new(),
+                    lethal: String::new(),
+                    tactical: String::new(),
+                    perks: Default::default(),
+                    deathstreak: String::new(),
+                    camos: Default::default(),
+                };
+                if !available(&slot) {
+                    continue;
+                }
+                for role in [
+                    asset_game::FamilySlot::Secondary,
+                    asset_game::FamilySlot::Lethal,
+                    asset_game::FamilySlot::Tactical,
+                ] {
+                    for family in families.iter().filter(|family| {
+                        family.slot == role && family.key.namespace == primary.key.namespace
+                    }) {
+                        let mut candidate = slot.clone();
+                        let reference = family.key.asset_key();
+                        match role {
+                            asset_game::FamilySlot::Secondary => candidate.secondary = reference,
+                            asset_game::FamilySlot::Lethal => candidate.lethal = reference,
+                            asset_game::FamilySlot::Tactical => candidate.tactical = reference,
+                            _ => unreachable!(),
+                        }
+                        if available(&candidate) {
+                            slot = candidate;
+                            break;
+                        }
+                    }
+                }
+                slots.push(slot);
                 if slots.len() == PERSONAL_CLASS_SLOTS {
                     break;
                 }
@@ -90,6 +140,7 @@ impl From<&ClassSlotState> for HostClassSlot {
             tactical: slot.tactical.clone(),
             perks: [slot.perk1.clone(), slot.perk2.clone(), slot.perk3.clone()],
             deathstreak: slot.deathstreak.clone(),
+            camos: slot.camos.clone(),
         }
     }
 }
@@ -142,6 +193,12 @@ fn encode_slots(slots: &[ClassSlotState]) -> String {
             clean_field(&slot.deathstreak),
         ];
         out.push_str(&fields.join("\t"));
+        if slot.camos.iter().any(|camo| !camo.is_empty()) {
+            for camo in &slot.camos {
+                out.push('\t');
+                out.push_str(&clean_field(camo));
+            }
+        }
         out.push('\n');
     }
     out
@@ -161,7 +218,15 @@ fn decode_slots(text: &str) -> Option<Vec<ClassSlotState>> {
     };
     let mut slots = Vec::new();
     for line in lines.filter(|line| !line.is_empty()) {
-        let fields: Vec<&str> = line.split('\t').collect();
+        let mut fields: Vec<&str> = line.split('\t').collect();
+        let camos = match fields.as_slice() {
+            [.., primary, secondary] if fields.len() == 13 => {
+                let camos = [(*primary).to_owned(), (*secondary).to_owned()];
+                fields.truncate(11);
+                camos
+            }
+            _ => Default::default(),
+        };
         let [
             name,
             primary,
@@ -193,6 +258,7 @@ fn decode_slots(text: &str) -> Option<Vec<ClassSlotState>> {
             perk2: (*perk2).to_owned(),
             perk3: (*perk3).to_owned(),
             deathstreak: (*deathstreak).to_owned(),
+            camos,
             lock_reason: None,
         });
     }

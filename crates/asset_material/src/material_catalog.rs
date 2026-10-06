@@ -72,6 +72,13 @@ pub struct AuthoredImage {
     pub pending_decode: Option<u64>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct StandInTextures {
+    pub color: Option<(String, Arc<Image>, bool)>,
+    pub normal: Option<(String, Arc<Image>, bool)>,
+    pub specular: Option<(String, Arc<Image>, bool)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MaterialTextureBinding {
     pub name_hash: u32,
@@ -248,6 +255,7 @@ pub struct OwnedMaterialPass {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnedTechnique {
+    pub source_selection: Option<render_material::SourceTechniqueSelection>,
     pub flags: u16,
     pub passes: Vec<OwnedMaterialPass>,
     pub body_scanned: bool,
@@ -574,6 +582,49 @@ impl MaterialCatalog {
         self.link_reused_images = 0;
     }
 
+    pub fn stand_in_material(
+        &mut self,
+        donor: usize,
+        name: &str,
+        textures: StandInTextures,
+    ) -> Option<usize> {
+        let mut material = self.materials.get(donor)?.clone();
+        material.name = AssetRef::Real(name.to_owned());
+        let namespace = material.namespace;
+        for binding in &mut material.textures {
+            let slot = match binding.semantic {
+                TS_COLOR_MAP => &textures.color,
+                TS_NORMAL_MAP => &textures.normal,
+                TS_SPECULAR_MAP => &textures.specular,
+                _ => continue,
+            };
+            let Some((image_name, image, srgb)) = slot else {
+                continue;
+            };
+            let incoming = AuthoredImage {
+                namespace,
+                name: AssetRef::Real(image_name.clone()),
+                map_type: 3,
+                semantic: binding.semantic,
+                category: 0,
+                use_srgb_reads: *srgb,
+                width: image.width() as u16,
+                height: image.height() as u16,
+                depth: 1,
+                level_count: image.texture_descriptor.mip_level_count as u8,
+                format: 0,
+                payload: Arc::new(Vec::new()),
+                decoded: Some(image.clone()),
+                common_owned: false,
+                decoded_variant: None,
+                decoded_by: None,
+                pending_decode: None,
+            };
+            binding.image = Some(self.link_image(incoming));
+        }
+        Some(self.link_material(material))
+    }
+
     pub fn link_image(&mut self, incoming: AuthoredImage) -> usize {
         if let Some(index) = self.images.iter().position(|owned| {
             owned.namespace == incoming.namespace && owned.name.same_name(&incoming.name)
@@ -658,7 +709,7 @@ impl MaterialCatalog {
         }
     }
 
-    fn link_shader(&mut self, incoming: AuthoredShader) -> usize {
+    pub(crate) fn link_shader(&mut self, incoming: AuthoredShader) -> usize {
         if let Some(index) = self.shaders.iter().position(|owned| {
             owned.namespace == incoming.namespace
                 && owned.kind == incoming.kind
@@ -687,7 +738,7 @@ impl MaterialCatalog {
         }
     }
 
-    fn link_vertex_decl(&mut self, incoming: AuthoredVertexDecl) -> usize {
+    pub(crate) fn link_vertex_decl(&mut self, incoming: AuthoredVertexDecl) -> usize {
         if let Some(index) = self.vertex_decls.iter().position(|owned| {
             owned.family == incoming.family
                 && if incoming.name.is_empty() {
@@ -1623,6 +1674,7 @@ impl MaterialCatalog {
             let scanned = geometry.technique_slots_scanned & (1u64 << tech_slot) != 0;
             let technique = if scanned {
                 Some(OwnedTechnique {
+                    source_selection: None,
                     flags: geometry.technique_flags_by_slot[tech_slot],
                     passes,
                     body_scanned: true,
@@ -1903,7 +1955,7 @@ fn argument_is_model_lighting_const(argument: &OwnedShaderArgument) -> bool {
     )
 }
 
-fn graph_slots_bind_model_lighting_const(slots: &[Option<OwnedTechnique>]) -> bool {
+pub(crate) fn graph_slots_bind_model_lighting_const(slots: &[Option<OwnedTechnique>]) -> bool {
     slots.iter().flatten().any(|technique| {
         technique
             .passes
@@ -1920,6 +1972,30 @@ fn read_state_bits(mut word: impl FnMut(usize) -> Option<u32>, count: usize) -> 
             break;
         };
         table.push([low, high]);
+    }
+    table
+}
+
+fn t5_colour_keeps_prepass_depth(
+    entry: Option<&[u8; fastfile_t5::TECHNIQUE_SLOT_COUNT]>,
+    mut table: Vec<[u32; 2]>,
+) -> Vec<[u32; 2]> {
+    const DEPTH_PREPASS: usize = 0;
+    let prepass_writes_depth = entry
+        .map(|entry| usize::from(entry[DEPTH_PREPASS]))
+        .and_then(|row| table.get(row))
+        .is_some_and(|bits| bits[1] & asset_iw4::GFXS1_DEPTHWRITE != 0);
+    if !prepass_writes_depth {
+        return table;
+    }
+    for bits in &mut table {
+        let unblended = matches!(
+            crate::MaterialDrawMode::from_state_bits(*bits),
+            crate::MaterialDrawMode::Opaque | crate::MaterialDrawMode::AlphaTest { .. }
+        );
+        if unblended && bits[1] & asset_iw4::GFXS1_DEPTHTEST_DISABLE == 0 {
+            bits[1] |= asset_iw4::GFXS1_DEPTHWRITE;
+        }
     }
     table
 }
@@ -2460,9 +2536,12 @@ impl MaterialCatalog {
                 t5_layered_surface_types: Some(geometry.layered_surface_types),
                 state_flags: geometry.state_flags,
                 camera_region: geometry.camera_region,
-                state_bits: read_state_bits(
-                    |offset| s.u32_at(geometry.state_bits?, offset).ok(),
-                    geometry.state_bits_count,
+                state_bits: t5_colour_keeps_prepass_depth(
+                    geometry.state_bits_entry.as_ref(),
+                    read_state_bits(
+                        |offset| s.u32_at(geometry.state_bits?, offset).ok(),
+                        geometry.state_bits_count,
+                    ),
                 ),
 
                 state_bits_entry: geometry
@@ -2602,6 +2681,7 @@ impl MaterialCatalog {
             let t5_slot = crate::t5_tech_map::iw4_slot_to_t5(iw4_slot);
             let technique = if scanned {
                 Some(OwnedTechnique {
+                    source_selection: None,
                     flags: flags_by_slot[iw4_slot],
                     passes,
                     body_scanned: true,
@@ -2922,6 +3002,7 @@ impl MaterialCatalog {
             let iw5_slot = crate::iw5_tech_map::iw4_slot_to_iw5(iw4_slot);
             let technique = if scanned {
                 Some(OwnedTechnique {
+                    source_selection: None,
                     flags: flags_by_slot[iw4_slot],
                     passes,
                     body_scanned: true,

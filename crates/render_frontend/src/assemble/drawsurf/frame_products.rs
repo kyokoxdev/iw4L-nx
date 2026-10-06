@@ -313,6 +313,7 @@ struct ProductBindPersist {
     compact_remap: Vec<u32>,
     compacted: bool,
     compact_tech: Vec<TechType>,
+    last_refusals: Vec<render_frame::FrameMaterialRefusal>,
     last_mask: u64,
     last_has_codemesh: bool,
     last_world_pretess_id: u64,
@@ -326,6 +327,7 @@ impl ProductBindPersist {
 
     fn remember_compacted(&mut self, product: &FrameProduct) {
         self.compact_tech.clone_from(&product.draw_tech);
+        self.last_refusals.clone_from(&product.material_refusals);
         self.last_mask = product.code_sampler_mask;
         self.last_has_codemesh = product.has_codemesh;
         self.last_world_pretess_id = product.world_pretess_id;
@@ -340,6 +342,7 @@ impl ProductBindPersist {
         product.ordered_draws.clone_from(&previous.ordered_draws);
         product.draw_tech.clone_from(&self.compact_tech);
         product.code_sampler_mask = self.last_mask;
+        product.material_refusals.clone_from(&self.last_refusals);
         product.has_codemesh = self.last_has_codemesh;
         product.world_pretess_id = self.last_world_pretess_id;
         product.sun_near_n = self.last_sun_near_n;
@@ -464,6 +467,8 @@ fn mix_surface_sampler_inputs(id: &mut u64, samplers: SurfaceSamplerInputs) {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct LogicalInputKey {
+    material_id: Option<render_material::MaterialAssetId>,
+    material_rank: u32,
     packed: u64,
     tech: u8,
     kind_tag: u8,
@@ -500,6 +505,8 @@ fn logical_input_key(draw: &RetainedDrawItem, tech: TechType) -> LogicalInputKey
         } => (6, draw, lighting_handle),
     };
     LogicalInputKey {
+        material_id: draw.material_id,
+        material_rank: draw.material_rank,
         packed: draw.key,
         tech: tech.0,
         kind_tag,
@@ -540,6 +547,7 @@ fn apply_payload_update(product: &mut FrameProduct, persist: &mut ProductBindPer
             product.ordered_draws.truncate(persist.compact_tech.len());
             product.draw_tech.clone_from(&persist.compact_tech);
             product.code_sampler_mask = persist.last_mask;
+            product.material_refusals.clone_from(&persist.last_refusals);
             product.has_codemesh = persist.last_has_codemesh;
             product.world_pretess_id = persist.last_world_pretess_id;
             product.sun_near_n = persist.last_sun_near_n;
@@ -588,6 +596,15 @@ fn apply_camera_list(
     );
 }
 
+fn t6_sky_draws_unlit(material: &render_material::RuntimeMaterial) -> bool {
+    material.namespace == asset_core::AssetNamespace::T6
+        && material.unlit
+        && matches!(
+            material.sort_key,
+            asset_iw4::SORT_KEY_SKY | asset_iw4::SORT_KEY_SKYBOX
+        )
+}
+
 fn compact_product_draws(
     product: &mut FrameProduct,
     tech_type: TechType,
@@ -607,6 +624,7 @@ fn compact_product_draws(
     product.draw_tech.clear();
     product.draw_tech.reserve(product.ordered_draws.len());
     product.code_sampler_mask = 0;
+    product.material_refusals.clear();
     product.has_codemesh = false;
 
     let input_len = product.ordered_draws.len();
@@ -627,6 +645,16 @@ fn compact_product_draws(
                 light_type,
                 spot_shadowed.contains(&index),
             ))
+        } else if remap_lit
+            && tech_type.0 == lighting_iw4::GFX_DRAW_METHOD_LIT_BEGIN
+            && render_material::resolve_sorted_material(
+                catalog,
+                render_material::MaterialDrawKey::new(draw.key, draw.material_rank)
+                    .with_material_id(draw.material_id),
+            )
+            .is_ok_and(t6_sky_draws_unlit)
+        {
+            TechType(asset_iw4::TECHNIQUE_UNLIT as u8 + u8::from(dfog))
         } else if remap_lit {
             super::colour_lit_technique(
                 tech_type,
@@ -644,18 +672,29 @@ fn compact_product_draws(
             persist.compact_remap.push(compact);
             continue;
         }
+        let material_key = render_material::MaterialDrawKey::new(draw.key, draw.material_rank)
+            .with_material_id(draw.material_id);
+        let mask = match super::draw_code_sampler_mask(catalog, prepared, material_key, draw_tech) {
+            Ok(mask) => mask,
+            Err(cause) => {
+                product
+                    .material_refusals
+                    .push(render_frame::FrameMaterialRefusal {
+                        key: material_key,
+                        tech_type: draw_tech,
+                        cause,
+                    });
+                persist.compact_seen.insert(key, u32::MAX);
+                persist.compact_remap.push(u32::MAX);
+                continue;
+            }
+        };
         let compact = u32::try_from(output).unwrap_or(u32::MAX);
         persist.compact_seen.insert(key, compact);
         persist.compact_remap.push(compact);
         product.ordered_draws[output] = draw;
         product.draw_tech.push(draw_tech);
-        product.code_sampler_mask |= super::draw_code_sampler_mask(
-            catalog,
-            prepared,
-            render_material::MaterialDrawKey::new(draw.key, draw.material_rank)
-                .with_material_id(draw.material_id),
-            draw_tech,
-        );
+        product.code_sampler_mask |= mask;
         product.has_codemesh |= matches!(draw.kind, RetainedDrawKind::CodeMesh { .. });
         output += 1;
     }
@@ -807,6 +846,7 @@ fn commit_compacted_payload(
     product.ordered_draws.truncate(persist.compact_tech.len());
     product.draw_tech.clone_from(&persist.compact_tech);
     product.code_sampler_mask = persist.last_mask;
+    product.material_refusals.clone_from(&persist.last_refusals);
     product.has_codemesh = persist.last_has_codemesh;
     product.world_pretess_id = persist.last_world_pretess_id;
     product.sun_near_n = persist.last_sun_near_n;
@@ -864,6 +904,7 @@ pub struct FrameAssemblyInputs {
     pub map_light_n: usize,
     pub attenuation: Vec<LightAttenuationBind>,
     pub t5_falloff: Vec<T5LightFalloffPack>,
+    pub reflection_probe_sh: Vec<Option<[[f32; 4]; 3]>>,
 }
 
 pub(crate) fn open_frame_products(
@@ -895,7 +936,11 @@ pub(crate) fn open_frame_products(
     inputs.primary_lights.clear();
     inputs.attenuation.clear();
     inputs.t5_falloff.clear();
+    inputs.reflection_probe_sh.clear();
     if let Some(map) = primary_lights.as_ref() {
+        inputs
+            .reflection_probe_sh
+            .extend_from_slice(&map.reflection_probe_sh);
         inputs.primary_lights.extend_from_slice(&map.lights);
         inputs.attenuation.extend_from_slice(&map.attenuation);
         inputs.t5_falloff.extend_from_slice(&map.t5_falloff);
@@ -1512,7 +1557,7 @@ pub(crate) fn execute_sun_product(
 }
 
 pub(crate) fn bake_spot_shadow_casters(
-    inputs: Res<FrameAssemblyInputs>,
+    inputs: (Res<FrameAssemblyInputs>, Res<MaterialGeneration>),
     retained: Res<StaticDrawLane>,
     scene: Option<Res<crate::prepare::scene::world::WorldScene>>,
     world_plan: Option<Res<WorldDrawGpuPlan>>,
@@ -1532,6 +1577,7 @@ pub(crate) fn bake_spot_shadow_casters(
     mut spot_lights: ResMut<super::SpotShadowMapLights>,
     mut mat_frame: ResMut<MaterialFrameInputs>,
 ) {
+    let (inputs, generation) = inputs;
     let (smodel_plan, lod_ramp) = smodel_plan;
     let (sm_enable, sm_sun_enable) = sm;
     let Some(world) = scene.as_deref() else {
@@ -1548,6 +1594,7 @@ pub(crate) fn bake_spot_shadow_casters(
         world,
         prepared.as_deref(),
         xmodel_plan.as_deref(),
+        &generation.catalog,
         retained_items,
         world_run_surfs,
         world_plan

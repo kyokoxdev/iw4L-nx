@@ -32,6 +32,8 @@ pub struct PlayerState {
     pub corpse_index: i32,
     pub movement_dir: i32,
     pub e_flags: u32,
+    pub viewlocked: i32,
+    pub viewlocked_ent_num: i32,
     pub event_sequence: i32,
     pub events_0: i32,
     pub events_1: i32,
@@ -128,6 +130,8 @@ pub mod eflags {
 
     pub const PRONE: u32 = 0x8;
 
+    pub const NODRAW: u32 = 0x20;
+
     pub const KILLCAM_PRESERVED: u32 = 0x80;
 
     pub const TURRET_ACTIVE_PRONE: u32 = 0x400;
@@ -139,6 +143,8 @@ pub mod eflags {
 
 pub mod other_flags {
     pub const AC130: u32 = 0x8000;
+
+    pub const EMP_JAMMED: u32 = 0x400;
 
     pub const DEAD_KILLCAM_TPV: u32 = 0x800;
 
@@ -245,6 +251,8 @@ impl PlayerState {
         corpse_index: 0,
         movement_dir: 0,
         e_flags: 0,
+        viewlocked: 0,
+        viewlocked_ent_num: ENTITYNUM_NONE,
         event_sequence: 0,
         events_0: 0,
         events_1: 0,

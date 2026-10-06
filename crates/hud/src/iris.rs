@@ -238,7 +238,9 @@ pub(crate) fn update_iris(
 
     let weapon_ns = weapons
         .0
-        .namespace_of(viewmodel_index)
+        .identity_namespace_of(viewmodel_index)
+        .filter(|ns| *ns == asset_core::AssetNamespace::T6)
+        .or_else(|| weapons.0.namespace_of(viewmodel_index))
         .unwrap_or(crate::images::HUD_CHROME_NAMESPACE);
     let Some(handle) = hud_images.get(weapon_ns, image_name, &mut images) else {
         gaps.raise(GapCause::AdsOverlayImageMissing {

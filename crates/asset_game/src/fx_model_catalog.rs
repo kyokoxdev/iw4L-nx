@@ -6,11 +6,11 @@ use std::{
 use asset_material::MaterialDefinitions;
 use fastfile_iw4::{ScriptStrings, ZoneStream};
 
-use asset_model::link::{capture_xmodel_material_slots, stamp_xmodel_material_edges};
 use crate::{
     AssetEdge, AssetEdgeCensus, MaterialCatalog, MaterialIndex, MaterialSpace, ModelSkel,
     ZoneOwner, capture_xmodel_skel,
 };
+use asset_model::link::{capture_xmodel_material_slots, stamp_xmodel_material_edges};
 
 #[derive(Clone, Debug)]
 pub struct FxModelEntry {
@@ -80,11 +80,10 @@ impl FxModelCatalog {
         else {
             return;
         };
-        self.capture_shared(&Arc::new(skel), materials);
+        self.capture_shared(Arc::new(skel), materials);
     }
 
-    /// `capture` for a skeleton the walk already captured.
-    pub fn capture_shared(&mut self, skel: &Arc<ModelSkel>, materials: &MaterialCatalog) {
+    pub fn capture_shared(&mut self, skel: Arc<ModelSkel>, materials: &MaterialCatalog) {
         let key = (self.capture_ns, skel.name.clone());
         if !self.entries.contains_key(&key) {
             self.order.push(key.clone());
@@ -92,7 +91,7 @@ impl FxModelCatalog {
         }
         self.entries
             .entry(key)
-            .or_insert_with(|| FxModelEntry::capture(skel.clone(), materials));
+            .or_insert_with(|| FxModelEntry::capture(skel, materials));
     }
 
     pub fn absorb(&mut self, other: Self) -> usize {

@@ -11,6 +11,23 @@ use asset_transport::{ensure_artifacts_dir, games_root_from_env};
 #[global_allocator]
 static PROCESS_ALLOCATOR: diag::ProcessCountingAllocator = diag::ProcessCountingAllocator;
 
+const LICENSES: [(&str, &str); 5] = [
+    ("LICENSE", include_str!("../../../LICENSE")),
+    ("NOTICE", include_str!("../../../NOTICE")),
+    (
+        "OFL-Oxanium.txt",
+        include_str!("../../ui/assets/OFL-Oxanium.txt"),
+    ),
+    (
+        "OFL-FiraMono.txt",
+        include_str!("../../console/assets/OFL-FiraMono.txt"),
+    ),
+    (
+        "THIRD-PARTY-LICENSES.txt",
+        include_str!("../../../THIRD-PARTY-LICENSES.txt"),
+    ),
+];
+
 fn main() {
     // panic=abort on Switch shows only hbmenu's generic error; keep the message.
     #[cfg(target_os = "horizon")]
@@ -50,6 +67,26 @@ fn main() {
             std::process::abort()
         });
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "licenses")
+    {
+        for (name, text) in LICENSES {
+            println!("==> {name} <==\n\n{text}\n");
+        }
+        return;
+    }
+    // Switch: no community descriptor or self-update; argv is taken as is.
+    #[cfg(target_os = "horizon")]
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(not(target_os = "horizon"))]
+    let mut args = match updater::startup().unwrap_or_else(|e| launch_error(&e)) {
+        Some(args) => args,
+        None => return,
+    };
+    if args.is_empty() {
+        args.push("menu".into());
+    }
     step("bench arm");
     bootstrap::bench::arm();
     step("process root");
@@ -61,8 +98,11 @@ fn main() {
     step(&format!("log at {}", log.display()));
     announce_log(log);
     step("log ready");
-    let (mode, acceptance) =
-        bootstrap::parse_cli(std::env::args().skip(1)).unwrap_or_else(|e| launch_error(&e));
+    let (mode, acceptance, cheats) = bootstrap::parse_cli(
+        args.into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned()),
+    )
+    .unwrap_or_else(|e| launch_error(&e));
     step(&format!("mode {mode:?}"));
     #[cfg(target_os = "horizon")]
     spawn_heap_sampler();
@@ -77,7 +117,7 @@ fn main() {
         #[cfg(not(target_os = "horizon"))]
         Err(e) => launch_error(&e),
     };
-    bootstrap::launch(games, artifacts, mode, acceptance);
+    bootstrap::launch(games, artifacts, mode, acceptance, cheats);
 }
 
 /// Switch boot trace (see `platform_nx::breadcrumb`); no-op elsewhere.

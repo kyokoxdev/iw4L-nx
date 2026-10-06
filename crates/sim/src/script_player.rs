@@ -95,6 +95,7 @@ pub(crate) fn spawn(
         meta.burst_latch_secondary = false;
         meta.rechamber_pending = false;
         meta.rechamber_pending_secondary = false;
+        meta.pending_brass = [None; 2];
         meta.life_sequence
     };
     let class_id = world
@@ -260,12 +261,20 @@ pub(crate) enum Finish {
     Killed,
 }
 
+pub(crate) fn god_mode(world: &FrameWorld, id: ClientId) -> bool {
+    world.bootstrap_ref().allow_debug_actions
+        && world.client_meta(id).is_some_and(|meta| meta.god_mode)
+}
+
 pub(crate) fn finish_damage(
     world: &mut FrameWorld,
     id: ClientId,
     amount: i32,
     dir: Option<[f32; 3]>,
 ) -> Finish {
+    if god_mode(world, id) {
+        return Finish::Hurt;
+    }
     if !world
         .client_meta(id)
         .is_some_and(|m| m.lifecycle == ClientLifecycle::Alive)
@@ -486,6 +495,12 @@ pub(crate) fn give_weapon(
     Ok(())
 }
 
+pub(crate) fn set_weapon_model(world: &mut FrameWorld, id: ClientId, weapon: u32, model: u8) {
+    if let Some(ps) = world.player_mut(id) {
+        weapon_iw4::set_weapon_model_for_held(&ps.weapons, &mut ps.weapon_data, weapon, model);
+    }
+}
+
 pub(crate) fn take_weapon(world: &mut FrameWorld, id: ClientId, weapon: u32) {
     let Some(ps) = world.player_mut(id) else {
         return;
@@ -579,6 +594,7 @@ pub(crate) fn switch_to_weapon_immediate(
     meta.burst_latch_secondary = false;
     meta.rechamber_pending = false;
     meta.rechamber_pending_secondary = false;
+    meta.pending_brass = [None; 2];
     Ok(())
 }
 
@@ -758,10 +774,10 @@ pub(crate) fn buttons(world: &mut FrameWorld, id: ClientId) -> u32 {
     let mut commands = input
         .cmds
         .iter()
-        .filter(|(client, _)| *client == id)
+        .filter(|command| command.client == id)
         .peekable();
     if commands.peek().is_some() {
-        return commands.fold(0, |buttons, (_, cmd)| buttons | cmd.buttons);
+        return commands.fold(0, |buttons, command| buttons | command.command.buttons);
     }
     world
         .old_buttons_mut()

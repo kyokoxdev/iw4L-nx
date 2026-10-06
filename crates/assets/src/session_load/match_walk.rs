@@ -218,7 +218,11 @@ pub(super) async fn walk_prepared_match(
 
     if matches!(
         map_namespace,
-        Some(asset_core::AssetNamespace::T5 | asset_core::AssetNamespace::Iw5)
+        Some(
+            asset_core::AssetNamespace::T5
+                | asset_core::AssetNamespace::Iw5
+                | asset_core::AssetNamespace::T6
+        )
     ) && !foreign_faction_rows(&mut iw4_scripts, &facts.team_settings)
     {
         report.push(format!(
@@ -226,7 +230,7 @@ pub(super) async fn walk_prepared_match(
         ));
     }
     let map_scripts = match map_namespace {
-        Some(asset_core::AssetNamespace::T5) => {
+        Some(asset_core::AssetNamespace::T5 | asset_core::AssetNamespace::T6) => {
             let scripts = t5_map_under_iw4_rules(&map_scripts, &zone_name, &facts);
             report.push(format!(
                 "map script: maps/mp/{zone_name} written from the T5 map's declarations; T5 map scripts left out"
@@ -237,6 +241,10 @@ pub(super) async fn walk_prepared_match(
     };
     let mut scripts = iw4_scripts;
     scripts.overlay(map_scripts);
+    scripts.insert_source(
+        "iw4l_t6/equipment",
+        crate::map_scripts::T6_EQUIPMENT.to_owned(),
+    );
     report.push(format!(
         "GSC source assets: {} (map overrides common_mp)",
         scripts.len()
@@ -281,6 +289,10 @@ pub(super) async fn walk_prepared_match(
             xanims.name_at(*index).unwrap_or("<unknown>")
         ));
     }
+    let t6_alt_raises = weapons.time_t6_alternate_raises(&xanims);
+    report.push(format!(
+        "T6 alternate raises timed by their clips: {t6_alt_raises}"
+    ));
     let (note_actions, inline_note_actions) = weapons.resolve_notetrack_actions(&xanims);
     report.push(format!(
         "weapon notetrack actions linked: {note_actions} ({inline_note_actions} T5 inline)"
@@ -552,7 +564,7 @@ pub(super) async fn walk_prepared_match(
     }
     if let Ok(path) = &zone_ff {
         let stage = progress.begin_scoped(StageId::Images, "tracers", None);
-        let decoded = asset_material::material_images::decode_color_or_2d_for_keys(
+        let decoded = asset_material::material_images::decode_images_for_keys(
             path,
             &mut global,
             common_tracers.material_keys(),
@@ -561,9 +573,7 @@ pub(super) async fn walk_prepared_match(
         );
         stage.finish_from(&decoded);
         match decoded {
-            Ok(n) => report.push(format!(
-                "tracer beam images after absorb: {n} TS_COLOR_MAP/TS_2D decoded"
-            )),
+            Ok(n) => report.push(format!("tracer beam images after absorb: {n} decoded")),
             Err(error) => report.push(format!("tracer beam images after absorb: {error}")),
         }
     }
@@ -1032,7 +1042,7 @@ fn decode_fx_colour_maps(
     if !missing.is_empty() {
         if let Ok(path) = zone_ff {
             let stage = progress.begin_scoped(StageId::Images, "fx_elem", None);
-            let decoded = asset_material::material_images::decode_color_or_2d_for_keys(
+            let decoded = asset_material::material_images::decode_images_for_keys(
                 path,
                 global,
                 missing,
@@ -1041,9 +1051,7 @@ fn decode_fx_colour_maps(
             );
             stage.finish_from(&decoded);
             match decoded {
-                Ok(n) => report.push(format!(
-                    "fx elem 2d images after absorb: {n} TS_COLOR_MAP/TS_2D decoded"
-                )),
+                Ok(n) => report.push(format!("fx elem 2d images after absorb: {n} decoded")),
                 Err(error) => report.push(format!("fx elem 2d images after absorb: {error}")),
             }
         }

@@ -24,11 +24,20 @@ mod lochit;
 mod menu_catalog;
 mod menu_source;
 mod penetration;
+pub mod structured_data;
 mod tracer_catalog;
 mod weapon_anim_dispatch;
 mod weapon_animations;
+mod weapon_camo;
 mod weapon_catalog;
+pub use weapon_camo::WeaponCamouflage;
 mod weapon_families;
+mod weapon_semantics;
+mod weapon_t6;
+pub use weapon_t6::{
+    MELEE_WEAPON as T6_MELEE_WEAPON, T6_EFFECTS, T6_EQUIPMENT_SOUNDS, capture_t6_string_table,
+    planted_model as t6_planted_model, stand_in_for as t6_stand_in_for,
+};
 
 pub use arena::*;
 pub use attachment_hide::*;
@@ -47,7 +56,11 @@ pub use weapon_anim_dispatch::*;
 pub use weapon_animations::*;
 pub use weapon_catalog::*;
 pub use weapon_families::*;
+pub use weapon_semantics::*;
 
 pub mod asset_graph {
     pub(crate) use crate::graph_support::*;
 }
+
+mod team_t6;
+pub use team_t6::t6_team_properties;

@@ -51,6 +51,17 @@ pub struct HudTessBatch {
     pub vertex_count: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShellshockScreen {
+    pub world_generation: Option<u64>,
+    pub client: u32,
+    pub view_client: u32,
+    pub life_sequence: u64,
+    pub authoritative_life: u32,
+    pub time_ms: i32,
+    pub blend_ms: i32,
+}
+
 #[derive(Resource, Clone, Debug, Default)]
 pub struct HudTessGpuFrame {
     pub vertices: Vec<HudTessVertex>,
@@ -62,6 +73,7 @@ pub struct HudTessGpuFrame {
     pub visible: bool,
 
     pub saved_screen_sequence: u64,
+    pub shellshock_screen: Option<ShellshockScreen>,
 }
 
 impl HudTessGpuFrame {
@@ -177,6 +189,7 @@ pub struct HudTessPass {
     pub scoreboard: TessJob,
     pub killcam_skip: TessJob,
     pub targetmap: TessJob,
+    pub emp_static: TessJob,
     pub mantle_hint: TessJob,
     pub breath_hint: TessJob,
     pub use_hint: TessJob,

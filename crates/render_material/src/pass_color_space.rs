@@ -29,5 +29,6 @@ pub fn pass_color_space(namespace: AssetNamespace, tech_slot: u8) -> PassColorSp
                 PassColorSpace::Unknown
             }
         }
+        AssetNamespace::T6 => PassColorSpace::Unknown,
     }
 }

@@ -1,5 +1,5 @@
 use bevy::prelude::Resource;
-use sim::{ClientId, Snapshot, TickInput};
+use sim::{ClientId, Snapshot};
 
 use crate::client::predict::CmdSeq;
 use crate::transport::delta::{SnapshotDecoder, SnapshotEncoder};
@@ -34,7 +34,6 @@ impl ListenLoopback {
     #[allow(clippy::too_many_arguments)]
     pub fn send_tick(
         &mut self,
-        input: &TickInput,
         snapshot: &Snapshot,
         acks: Vec<(ClientId, CmdSeq)>,
         svc_sounds: Vec<crate::SvcSound>,
@@ -48,7 +47,6 @@ impl ListenLoopback {
         // Meta goes on the wire from `snapshot`, not a per-tick clone of it.
         let mut frame = frame_without_meta(
             &mut self.encoder,
-            input,
             snapshot,
             acks,
             crate::ReliablePayload::owes_nothing(),

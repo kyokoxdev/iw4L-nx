@@ -37,13 +37,49 @@ pub struct FpvAssemblyTags {
 
 #[derive(Debug)]
 pub struct FpvAssembly {
-    pub dobj: DObj,
+    pub dobj: Arc<DObj>,
     pub parts: Vec<FpvAssemblyPart>,
     pub view_bone: usize,
     pub camera_bone: Option<usize>,
     pub paired_bones: usize,
     pub combined_hands: bool,
     pub tags: FpvAssemblyTags,
+    pub collapsed_bones: Vec<usize>,
+}
+
+#[derive(Default)]
+pub struct FpvSkeletons(HashMap<SkeletonModels, Arc<DObj>>);
+
+type SkeletonModels = Vec<(usize, Option<(usize, String)>)>;
+
+impl FpvSkeletons {
+    fn build(
+        &mut self,
+        specs: &[(&ModelPoseSrc, Option<Attach>)],
+    ) -> Result<Arc<DObj>, FpvAssemblyError> {
+        let key = specs
+            .iter()
+            .map(|(model, attach)| {
+                (
+                    std::ptr::from_ref(*model) as usize,
+                    attach.as_ref().map(|a| (a.parent_model, a.tag.clone())),
+                )
+            })
+            .collect();
+        if let Some(dobj) = self.0.get(&key) {
+            return Ok(Arc::clone(dobj));
+        }
+        let dobj = Arc::new(DObj::build(specs).map_err(FpvAssemblyError::Skeleton)?);
+        self.0.insert(key, Arc::clone(&dobj));
+        Ok(dobj)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum FpvHideMode {
+    #[default]
+    Surfaces,
+    Bones,
 }
 
 #[derive(Debug)]
@@ -72,6 +108,8 @@ pub struct FpvAssemblyKey {
     pub rocket: Option<FpvMeshIndex>,
     pub knife: Option<FpvMeshIndex>,
     pub hide_tags: Vec<String>,
+    pub hide_mode: FpvHideMode,
+    pub jammed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +117,17 @@ pub struct FpvSideAssemblies {
     pub bare: Arc<FpvAssembly>,
     pub rocket: Option<Arc<FpvAssembly>>,
     pub melee: Option<Arc<FpvAssembly>>,
+    pub ads: Option<Arc<FpvAssembly>>,
+    pub jammed: Option<Arc<FpvAssembly>>,
 }
+
+pub const EMP_RETICLE_TAGS: [&str; 5] = [
+    "tag_reticle_acog",
+    "tag_reticle_red_dot",
+    "tag_eotech_reticle",
+    "tag_reticle_tavor_scope",
+    "tag_reticle_thermal_scope",
+];
 
 impl FpvSideAssemblies {
     pub fn pick(&self, rocket: bool) -> &Arc<FpvAssembly> {
@@ -116,8 +164,21 @@ impl FpvAssembly {
         mounts: &FpvMountPlan,
         rocket: bool,
         knife: Option<FpvMeshIndex>,
+        ads: bool,
         hide_tags: &[String],
+        hide_mode: FpvHideMode,
+        jammed: bool,
+        skeletons: &mut FpvSkeletons,
     ) -> Result<Self, FpvAssemblyError> {
+        let reticle_tags: Vec<String> = if jammed {
+            EMP_RETICLE_TAGS
+                .iter()
+                .map(|tag| (*tag).to_owned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let gun_tags: Vec<String> = hide_tags.iter().chain(&reticle_tags).cloned().collect();
         let pose_of = |model: FpvMeshIndex| -> Result<&ModelPoseSrc, FpvAssemblyError> {
             catalog
                 .get_at(model.order())
@@ -145,9 +206,9 @@ impl FpvAssembly {
                 }),
             ));
         }
-        for mount in &mounts.attachments {
+        for (mount, model) in mounts.attachments.iter().zip(mounts.attachment_models(ads)) {
             parts.push((
-                mount.model,
+                model,
                 FpvPartRole::Attachment,
                 Some(Attach {
                     parent_model: mount.parent_model
@@ -184,7 +245,7 @@ impl FpvAssembly {
         for (model, _, attach) in &parts {
             specs.push((pose_of(*model)?, attach.clone()));
         }
-        let dobj = DObj::build(&specs).map_err(FpvAssemblyError::Skeleton)?;
+        let dobj = skeletons.build(&specs)?;
 
         let view_bone = dobj.find("tag_view").ok_or(FpvAssemblyError::NoTagView)?;
         let camera_bone = dobj.find("tag_camera");
@@ -203,18 +264,37 @@ impl FpvAssembly {
             tracker_light: tag("tag_motion_tracker_fx"),
         };
         let paired_bones = specs[0].0.num_bones + specs[1].0.num_bones;
+        let mut collapsed_bones = Vec::new();
         let parts = parts
             .into_iter()
             .zip(&dobj.models)
-            .map(|((model, role, _), slot)| FpvAssemblyPart {
-                model,
-                role,
-                bone_base: slot.base,
-                hide: if role == FpvPartRole::Gun {
-                    hide_words(catalog, model, hide_tags)
-                } else {
-                    None
-                },
+            .map(|((model, role, _), slot)| {
+                let hide = match role {
+                    FpvPartRole::Gun => hide_words(catalog, model, &gun_tags),
+                    FpvPartRole::Attachment => {
+                        hide_words(catalog, model, &reticle_tags).filter(|words| *words != [0; 6])
+                    }
+                    _ => None,
+                };
+                let hide = match (hide_mode, hide) {
+                    (FpvHideMode::Bones, Some(words)) => {
+                        collapsed_bones.extend(
+                            (0..slot.bone_count)
+                                .filter(|&bone| {
+                                    words[bone >> 5] & (0x8000_0000u32 >> (bone & 31)) != 0
+                                })
+                                .map(|bone| slot.base + bone),
+                        );
+                        None
+                    }
+                    (_, hide) => hide,
+                };
+                FpvAssemblyPart {
+                    model,
+                    role,
+                    bone_base: slot.base,
+                    hide,
+                }
             })
             .collect();
         Ok(Self {
@@ -225,6 +305,7 @@ impl FpvAssembly {
             paired_bones,
             combined_hands: mounts.secondary_gun.is_some(),
             tags,
+            collapsed_bones,
         })
     }
 

@@ -864,6 +864,10 @@ impl ZoneLane for Iw4Lane {
         weapons.resolve_fpv_mesh_edges(&sink.fpv_meshes);
         weapons.resolve_world_model_edges(&sink.world_weapons);
         let gun_named = weapons.gun_xmodel_count();
+        let (camo_weapons, camo_view, camo_world) = weapons.camo_census();
+        report.push(format!(
+            "common_mp camouflage: {camo_weapons} weapons; {camo_view} view and {camo_world} world models bound"
+        ));
         report.push(format!(
         "common_mp weapons: {captured} captures → {} unique catalog ids (sorted); {gun_named} with gunXModel[0]; {} with szXAnims[IDLE]; {} with any szXAnims slot",
         weapons.len(),
@@ -1012,7 +1016,7 @@ impl ZoneLane for Iw4Lane {
                 inline.missing,
                 inline.unsupported
             ));
-            let tracer_inline = asset_material::material_images::plan_color_or_2d_for_keys(
+            let tracer_inline = asset_material::material_images::plan_images_for_keys(
                 &mut plan,
                 &mut material_population,
                 sink.tracers.material_keys(),
@@ -1020,9 +1024,9 @@ impl ZoneLane for Iw4Lane {
                 crate::session_load::load_pool(),
             );
             report.push(format!(
-                "common_mp tracer beam images: {tracer_inline} in-zone TS_COLOR_MAP/TS_2D decoded, rest claimed"
+                "common_mp tracer beam images: {tracer_inline} in-zone images decoded, rest claimed"
             ));
-            let fx_inline = asset_material::material_images::plan_color_or_2d_for_keys(
+            let fx_inline = asset_material::material_images::plan_images_for_keys(
                 &mut plan,
                 &mut material_population,
                 sink.fx.unique_material_keys(),
@@ -1030,7 +1034,7 @@ impl ZoneLane for Iw4Lane {
                 crate::session_load::load_pool(),
             );
             report.push(format!(
-                "common_mp fx elem 2d images: {fx_inline} in-zone TS_COLOR_MAP/TS_2D decoded, rest claimed"
+                "common_mp fx elem 2d images: {fx_inline} in-zone images decoded, rest claimed"
             ));
             // The planning phase is over and it succeeded: what is left of the
             // plan is decoded later, under its own stage. Dropping the handle
@@ -1117,6 +1121,7 @@ impl ZoneLane for Iw4Lane {
                 teamsets: std::collections::HashMap::new(),
                 scripts: sink.scripts,
                 film_visions: sink.film_visions,
+                t6_content: None,
             }
         } else {
             let memory = sink.materials.image_memory();
@@ -1153,6 +1158,7 @@ impl ZoneLane for Iw4Lane {
                 teamsets: std::collections::HashMap::new(),
                 scripts: sink.scripts,
                 film_visions: sink.film_visions,
+                t6_content: None,
             }
         }
     }
@@ -1270,7 +1276,7 @@ fn decode_map_material_images(
         namespace: asset_core::AssetNamespace::Iw4,
         name: name.clone(),
     }));
-    match asset_material::material_images::decode_color_or_2d_for_keys(
+    match asset_material::material_images::decode_images_for_keys(
         path,
         catalog,
         keys,
@@ -1278,7 +1284,7 @@ fn decode_map_material_images(
         crate::session_load::load_pool(),
     ) {
         Ok(n) => report.push(format!(
-            "fx elem 2d images: {n} TS_COLOR_MAP/TS_2D decoded (unique Bound names)"
+            "fx elem 2d images: {n} decoded (unique Bound names)"
         )),
         Err(error) => report.push(format!("fx elem 2d image gap: {error}")),
     }

@@ -1,6 +1,7 @@
 pub mod argument;
 pub mod catalog;
 pub mod code_sources;
+pub mod dxbc_abi;
 pub mod execute;
 pub mod pass_color_space;
 pub mod prepared;
@@ -17,9 +18,14 @@ pub use catalog::{
     RuntimeImageId, RuntimeMaterial, RuntimeMaterialCatalog, RuntimePass, RuntimeProgramIdentity,
     RuntimeShaderPair, RuntimeShaderProgram, RuntimeShaderProgramId, RuntimeSortedMaterialTable,
     RuntimeTechnique, RuntimeTechniqueSet, RuntimeTechniqueSetId, RuntimeTextureBinding,
-    SortedMaterialOrdinal, TECHNIQUE_SLOT_COUNT, sort_band, sort_pass_args,
+    SortedMaterialOrdinal, SourceTechniqueSelection, TECHNIQUE_SLOT_COUNT,
+    TechniqueSelectionPolicy, sort_band, sort_pass_args,
 };
 pub use code_sources::{CodeSourceError, CodeSourceLookup, LayeredCodeSources, RuntimeCodeSources};
+pub use dxbc_abi::{
+    CODE_T6_REFLECTION_SH, build_dxbc_pass_abi, dxbc_constant_rows, dxbc_texture_slots,
+    is_dxbc_program,
+};
 pub use execute::{
     ExecutablePass, ExecutablePassView, MaterialDrawKey, MaterialExecution, MaterialRefusal,
     PackedCodeConstantLane, PackedCodeConstants, PackedCodeSamplerLane, PackedCodeSamplers,

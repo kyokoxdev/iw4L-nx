@@ -6,6 +6,7 @@ license.workspace = true
 description = "Our wire: frames, deltas, prediction, interpolation. Not retail's netcode."
 
 [dependencies]
+structured_data_iw4.workspace = true
 diag.workspace = true
 math_iw4.workspace = true
 frame.workspace = true
@@ -30,11 +31,23 @@ zstd = { version = "0.13", default-features = false }
 # Master server QUIC transport. Horizon (Switch) is offline-only: no mio/ring
 # backend there, so the master bridge reports "online unavailable" instead.
 [target.'cfg(not(target_os = "horizon"))'.dependencies]
-quinn = { version = "0.11.11", default-features = false, features = ["platform-verifier", "runtime-tokio", "rustls-ring"] }
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rustls = { version = "0.23.31", default-features = false, features = ["ring", "std"] }
-rustls-pemfile = "2.2.0"
-rustls-platform-verifier = "0.7.0"
+ring = "0.17.14"
 tokio = { version = "1.47", features = ["net"] }
+updater = { path = "../updater" }
+
+# Account identity without ring, which builds no aarch64 assembly for Horizon.
+# Ed25519 is deterministic: same keys, account ids and signatures as ring.
+[target.'cfg(target_os = "horizon")'.dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
+getrandom = "0.3"
+sha2.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
+getrandom = "0.3"
+sha2.workspace = true
 
 [lints]
 workspace = true

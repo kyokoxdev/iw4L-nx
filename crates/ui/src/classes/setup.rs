@@ -124,6 +124,20 @@ impl Default for ClassLoadoutCatalog {
     }
 }
 
+fn localized_preview_key(namespace: asset_core::AssetNamespace, reference: &str) -> String {
+    let reference = reference.trim_start_matches('@');
+    if reference.is_empty() {
+        return String::new();
+    }
+    if namespace == asset_core::AssetNamespace::Iw4
+        || asset_core::AssetKey::parse(reference).is_ok()
+    {
+        format!("@{reference}")
+    } else {
+        format!("@{}:localize/{reference}", namespace.as_str())
+    }
+}
+
 impl ClassLoadoutCatalog {
     pub fn from_weapon_registry(registry: std::sync::Arc<asset_game::WeaponRegistry>) -> Self {
         let families = registry.weapon_families();
@@ -134,7 +148,7 @@ impl ClassLoadoutCatalog {
                 key.clone(),
                 asset_game::CacWeaponPreview {
                     reference: family.key.base.clone(),
-                    name_key: format!("@{}", family.display_key.trim_start_matches('@')),
+                    name_key: format!("@{}", family.name_key()),
                     image: family.image.clone(),
                     ..Default::default()
                 },
@@ -144,9 +158,9 @@ impl ClassLoadoutCatalog {
                     attachment_preview_key(&key, &choice.name),
                     asset_game::CacWeaponPreview {
                         reference: choice.name.clone(),
-                        name_key: format!("@{}", choice.caption_key),
+                        name_key: localized_preview_key(family.key.namespace, &choice.caption_key),
                         image: choice.icon.clone(),
-                        desc_key: format!("@{}", choice.desc_key),
+                        desc_key: localized_preview_key(family.key.namespace, &choice.desc_key),
                         bars: Vec::new(),
                     },
                 );
@@ -183,8 +197,10 @@ impl ClassLoadoutCatalog {
             }
             for (key, preview) in &mut self.previews {
                 if asset_core::AssetKey::parse(key).is_ok_and(|key| key.namespace == *namespace)
-                    && let Some(authored) = asset_game::weapon_preview(table, key)
+                    && let Some(mut authored) = asset_game::weapon_preview(table, key)
                 {
+                    authored.name_key = localized_preview_key(*namespace, &authored.name_key);
+                    authored.desc_key = localized_preview_key(*namespace, &authored.desc_key);
                     *preview = authored;
                 }
             }
@@ -428,6 +444,7 @@ pub struct ClassSlotState {
     pub perk2: String,
     pub perk3: String,
     pub deathstreak: String,
+    pub camos: [String; 2],
 
     pub lock_reason: Option<String>,
 }
@@ -446,6 +463,7 @@ impl ClassSlotState {
             perk2: slot.perks[1].clone(),
             perk3: slot.perks[2].clone(),
             deathstreak: slot.deathstreak.clone(),
+            camos: slot.camos.clone(),
             lock_reason: None,
         }
     }
@@ -475,6 +493,7 @@ impl ClassSlotState {
             perk2: perk(1),
             perk3: perk(2),
             deathstreak: preset.deathstreak.to_owned(),
+            camos: Default::default(),
             lock_reason: None,
         }
     }

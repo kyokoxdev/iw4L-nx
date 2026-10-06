@@ -148,6 +148,7 @@ pub const SMODEL_LIGHTING_MAX_CLIENT_VIEWS: u32 = 1;
 
 #[derive(Resource, Default)]
 pub struct WorldScene {
+    pub readiness: frame::WorldReadiness,
     pub sky_model: Option<WorldStaticModelMesh>,
     pub batches: Vec<WorldBatchGeometry>,
 
@@ -249,8 +250,9 @@ pub struct WorldScene {
     pub active_sun_light: Option<u8>,
 
     pub t5_sun_parse_exposure: Option<f32>,
+    pub t6_exposure: Option<f32>,
 
-    pub t5_sky_dynamic_intensity: Option<[f32; 4]>,
+    pub sky_dynamic_intensity: Option<[f32; 4]>,
 
     pub t5_tree_scatter_intensity: Option<f32>,
 
@@ -271,6 +273,8 @@ pub struct WorldScene {
     pub primary_light_def_names: Vec<Option<String>>,
 
     pub primary_light_t5_falloff: Vec<T5LightFalloffPack>,
+
+    pub reflection_probe_sh: Vec<Option<[[f32; 4]; 3]>>,
 
     pub sun_primary_light_count: u32,
 
@@ -731,7 +735,8 @@ impl WorldScene {
             sun_lights: Vec::new(),
             active_sun_light: None,
             t5_sun_parse_exposure: None,
-            t5_sky_dynamic_intensity: None,
+            t6_exposure: None,
+            sky_dynamic_intensity: None,
             t5_tree_scatter_intensity: None,
             t5_tree_scatter_amount: None,
             t5_exposure_volume_count: 0,
@@ -742,6 +747,7 @@ impl WorldScene {
             dynamic_light: None,
             primary_light_def_names: Vec::new(),
             primary_light_t5_falloff: Vec::new(),
+            reflection_probe_sh: Vec::new(),
             sun_primary_light_count: 0,
             light_region_hulls: None,
             shadow_geometry: Vec::new(),
@@ -755,6 +761,7 @@ impl WorldScene {
             exact_ifc_n: None,
             exact_opcode: None,
             spawned: false,
+            readiness: frame::WorldReadiness::default(),
             asset_ref: asset_material::AssetRefDumpCensus::default(),
         }
     }
@@ -825,7 +832,8 @@ impl WorldScene {
             sun_lights: Vec::new(),
             active_sun_light: None,
             t5_sun_parse_exposure: None,
-            t5_sky_dynamic_intensity: None,
+            t6_exposure: None,
+            sky_dynamic_intensity: None,
             t5_tree_scatter_intensity: None,
             t5_tree_scatter_amount: None,
             t5_exposure_volume_count: 0,
@@ -836,6 +844,7 @@ impl WorldScene {
             dynamic_light: None,
             primary_light_def_names: Vec::new(),
             primary_light_t5_falloff: Vec::new(),
+            reflection_probe_sh: Vec::new(),
             sun_primary_light_count: 0,
             light_region_hulls: None,
             shadow_geometry: Vec::new(),
@@ -849,6 +858,7 @@ impl WorldScene {
             exact_ifc_n: None,
             exact_opcode: None,
             spawned: false,
+            readiness: frame::WorldReadiness::default(),
             asset_ref: asset_material::AssetRefDumpCensus::default(),
         };
         let batch_count = scene.batches.len() as u32;
@@ -1571,7 +1581,8 @@ pub fn world_scene_from_draw(
     scene.sun_stages = draw.sun_stages;
     scene.sun_lights = sun_lights;
     scene.t5_sun_parse_exposure = draw.t5_sun_parse_exposure;
-    scene.t5_sky_dynamic_intensity = draw.t5_sky_dynamic_intensity;
+    scene.t6_exposure = draw.t6_exposure;
+    scene.sky_dynamic_intensity = draw.sky_dynamic_intensity;
     scene.t5_tree_scatter_intensity = draw.t5_tree_scatter_intensity;
     scene.t5_tree_scatter_amount = draw.t5_tree_scatter_amount;
     scene.t5_exposure_volume_count = draw.t5_exposure_volume_count;
@@ -1629,6 +1640,11 @@ pub fn world_scene_from_draw(
             cookie1: light.t5_cookie1,
             cookie2: light.t5_cookie2,
         })
+        .collect();
+    scene.reflection_probe_sh = draw
+        .reflection_probes
+        .iter()
+        .map(|probe| probe.lighting_sh)
         .collect();
     scene.sun_primary_light_count = draw.sun_primary_light_count;
     scene.light_region_hulls = draw.light_region_hulls;

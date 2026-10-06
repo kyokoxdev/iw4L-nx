@@ -72,14 +72,17 @@ impl Drop for DiagnosticStamp {
     }
 }
 
-static NO_DIAGNOSTIC: OnceLock<bool> = OnceLock::new();
+static DIAGNOSTIC: OnceLock<bool> = OnceLock::new();
 
 /// Off on Switch: exact pipelines build on demand there, so props whose
 /// pipeline is still compiling flashed as this pass's checker in play, and its
 /// second copy of all world/model geometry costs GPU heap and render time.
 pub fn geometry_diagnostic_enabled() -> bool {
     !cfg!(target_os = "horizon")
-        && !*NO_DIAGNOSTIC.get_or_init(|| std::env::var_os("IW4L_NO_DIAGNOSTIC").is_some())
+        && *DIAGNOSTIC.get_or_init(|| {
+            std::env::var_os("IW4L_GEOMETRY_DIAGNOSTIC").is_some()
+                && std::env::var_os("IW4L_NO_DIAGNOSTIC").is_none()
+        })
 }
 
 #[derive(Default)]

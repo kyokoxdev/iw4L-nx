@@ -28,16 +28,29 @@ pub struct FpvRigSet {
     bare: [Option<Arc<PreparedFpvRig>>; 2],
     rocket: [Option<Arc<PreparedFpvRig>>; 2],
     melee: [Option<Arc<PreparedFpvRig>>; 2],
+    ads: [Option<Arc<PreparedFpvRig>>; 2],
+    jammed: [Option<Arc<PreparedFpvRig>>; 2],
 }
 
 impl FpvRigSet {
-    pub fn pick(&self, rocket: bool, dual: bool, melee: bool) -> Option<&Arc<PreparedFpvRig>> {
+    pub fn pick(
+        &self,
+        rocket: bool,
+        dual: bool,
+        melee: bool,
+        ads: bool,
+        jammed: bool,
+    ) -> Option<&Arc<PreparedFpvRig>> {
         let hand = usize::from(dual);
         if melee && let Some(rig) = &self.melee[hand] {
             return Some(rig);
         }
+        if ads && let Some(rig) = &self.ads[hand] {
+            return Some(rig);
+        }
         match (rocket, &self.rocket[hand]) {
             (true, Some(rig)) => Some(rig),
+            _ if jammed && let Some(rig) = &self.jammed[hand] => Some(rig),
             _ => self.bare[hand].as_ref(),
         }
     }
@@ -62,6 +75,16 @@ pub struct FpvWeaponView {
     pub idle_name: Option<String>,
     pub rigs: FpvRigSet,
     pub census: FpvViewCensus,
+    pub camos: Vec<(u8, Arc<HashMap<usize, SmodelPassMaterial>>)>,
+}
+
+impl FpvWeaponView {
+    pub fn camo(&self, slot: u8) -> Option<&Arc<HashMap<usize, SmodelPassMaterial>>> {
+        self.camos
+            .iter()
+            .find(|(own, _)| *own == slot)
+            .map(|(_, swaps)| swaps)
+    }
 }
 
 pub enum FpvWeaponSlot {
@@ -174,6 +197,8 @@ struct FpvPreparationJob {
 
     models: Vec<usize>,
     next_model: usize,
+    camouflage_materials: Vec<usize>,
+    next_camouflage: usize,
     admission: FpvMaterialAdmission,
     image_cache: HashMap<u32, Handle<Image>>,
 
@@ -241,11 +266,6 @@ fn admit_surface(
     admission: &mut FpvMaterialAdmission,
     image_cache: &mut HashMap<u32, Handle<Image>>,
 ) -> FpvSurfaceVerdict {
-    use lighting_iw4::{
-        MODEL_LIGHTING_INV_ATLAS_WIDTH, MODEL_LIGHTING_VOLUME_W, model_lighting_inv_image_height,
-        model_lighting_lookup_scale,
-    };
-
     let edge = entry
         .material_edges
         .get(surface_index)
@@ -271,23 +291,42 @@ fn admit_surface(
     let Some(present_name) = entry.material_present_name(surface_index) else {
         return refused(leftover, "bound material has no name");
     };
-    let Some(mat_i) = entry
-        .skel
-        .surface_materials
-        .get(surface_index)
-        .copied()
-        .flatten()
-        .map(|index| index.get())
-    else {
-        return refused(present_name, "surface carries no authored material");
+    admit_material(
+        global,
+        images,
+        bound,
+        present_name,
+        lighting,
+        admission,
+        image_cache,
+    )
+}
+
+fn admit_material(
+    global: &RuntimeMaterialCatalog,
+    images: &[Option<Handle<Image>>],
+    mat_i: usize,
+    present_name: &str,
+    lighting: &WorldModelLightingAtlas,
+    admission: &mut FpvMaterialAdmission,
+    image_cache: &mut HashMap<u32, Handle<Image>>,
+) -> FpvSurfaceVerdict {
+    use lighting_iw4::{
+        MODEL_LIGHTING_INV_ATLAS_WIDTH, MODEL_LIGHTING_VOLUME_W, model_lighting_inv_image_height,
+        model_lighting_lookup_scale,
+    };
+
+    let refused = |material: &str, cause: &'static str| FpvSurfaceVerdict::Refused {
+        material: material.to_owned(),
+        cause,
     };
     if let Some(&row) = admission.by_authored.get(&mat_i) {
         return FpvSurfaceVerdict::Admitted(row);
     }
-    let Some(authored) = global.materials.get(bound) else {
+    let Some(authored) = global.materials.get(mat_i) else {
         return refused(present_name, "material outside the session catalog");
     };
-    let Some(ordinal) = global.ordinal_for_asset_id(assets::MaterialIndex::from_order(bound))
+    let Some(ordinal) = global.ordinal_for_asset_id(assets::MaterialIndex::from_order(mat_i))
     else {
         return refused(present_name, "material has no sorted ordinal");
     };
@@ -390,6 +429,8 @@ impl FpvPreparationJob {
                 for assembly in std::iter::once(&sides.bare)
                     .chain(&sides.rocket)
                     .chain(&sides.melee)
+                    .chain(&sides.ads)
+                    .chain(&sides.jammed)
                 {
                     if !seen_assemblies.insert(assembly_key(assembly)) {
                         continue;
@@ -409,9 +450,33 @@ impl FpvPreparationJob {
                 }
             }
         }
-        let work_total =
-            (models.len() + layouts_queue.len() + registry.alternate_fpv_pairs().count()) as u64
-                + u64::from(weapon_n);
+        for id in 1..=weapon_n {
+            for (_, edge) in registry.camo_view_edges_of(id) {
+                if let Some(order) = edge.bound_index()
+                    && fpv.get_at(order).is_some()
+                    && seen_models.insert(order)
+                {
+                    models.push(order);
+                }
+            }
+        }
+        let mut camouflage_materials = HashSet::new();
+        for id in 1..=weapon_n {
+            for camo in registry.material_camouflages_of(id) {
+                for (_, key) in &camo.materials {
+                    if let Some(material) = owner.materials.material_for_key(key) {
+                        camouflage_materials.insert(usize::from(material.asset_id.0));
+                    }
+                }
+            }
+        }
+        let mut camouflage_materials: Vec<_> = camouflage_materials.into_iter().collect();
+        camouflage_materials.sort_unstable();
+        let work_total = (models.len()
+            + camouflage_materials.len()
+            + layouts_queue.len()
+            + registry.alternate_fpv_pairs().count()) as u64
+            + u64::from(weapon_n);
         if let Some(stage) = &progress {
             stage.set_total(work_total);
         }
@@ -424,6 +489,8 @@ impl FpvPreparationJob {
             work_done: 0,
             models,
             next_model: 0,
+            camouflage_materials,
+            next_camouflage: 0,
             admission: FpvMaterialAdmission::default(),
             image_cache: HashMap::new(),
             layouts_queue,
@@ -484,7 +551,22 @@ impl FpvPreparationJob {
         lighting: &WorldModelLightingAtlas,
     ) {
         let Some(&order) = self.models.get(self.next_model) else {
-            self.stage = FpvPreparationStage::Layout;
+            if let Some(&bound) = self.camouflage_materials.get(self.next_camouflage) {
+                self.next_camouflage += 1;
+                let name = tess.catalog.materials[bound].name.as_str();
+                admit_material(
+                    &tess.catalog,
+                    &tess.material_images,
+                    bound,
+                    name,
+                    lighting,
+                    &mut self.admission,
+                    &mut self.image_cache,
+                );
+                self.tick();
+            } else {
+                self.stage = FpvPreparationStage::Layout;
+            }
             return;
         };
         self.next_model += 1;
@@ -634,6 +716,79 @@ impl FpvPreparationJob {
         census
     }
 
+    fn camo_swaps(
+        &self,
+        fpv: &FpvMeshCatalog,
+        id: u32,
+        gun: FpvMeshIndex,
+    ) -> Vec<(u8, Arc<HashMap<usize, SmodelPassMaterial>>)> {
+        let Some(base) = fpv.get_at(gun.order()) else {
+            return Vec::new();
+        };
+        let authored = |entry: &asset_model::FpvMeshEntry, surface: usize| {
+            entry
+                .material_edges
+                .get(surface)
+                .and_then(|edge| edge.bound_index())
+        };
+        let mut out = Vec::new();
+        for (slot, edge) in self.owner.weapons.camo_view_edges_of(id) {
+            let Some(order) = edge.bound_index() else {
+                continue;
+            };
+            let Some(camo) = fpv.get_at(order) else {
+                continue;
+            };
+            if camo.skel.surfaces_for_lod(0) != base.skel.surfaces_for_lod(0) {
+                continue;
+            }
+            let mut swaps = HashMap::new();
+            for surface in base.skel.surfaces_for_lod(0) {
+                let (Some(from), Some(to)) = (authored(base, surface), authored(camo, surface))
+                else {
+                    continue;
+                };
+                if from == to {
+                    continue;
+                }
+                if let Some(FpvSurfaceVerdict::Admitted(row)) =
+                    self.admission.verdict(order, surface)
+                    && let Some(material) = self.admission.materials.get(*row as usize)
+                {
+                    swaps.entry(from).or_insert_with(|| material.clone());
+                }
+            }
+            if !swaps.is_empty() {
+                out.push((*slot, Arc::new(swaps)));
+            }
+        }
+        for camo in self.owner.weapons.material_camouflages_of(id) {
+            let mut swaps = HashMap::new();
+            for (from, to) in &camo.materials {
+                let Some(source) = self.owner.materials.material_for_key(from) else {
+                    continue;
+                };
+                let Some(target) = self.owner.materials.material_for_key(to) else {
+                    continue;
+                };
+                let Some(row) = self
+                    .admission
+                    .by_authored
+                    .get(&usize::from(target.asset_id.0))
+                else {
+                    continue;
+                };
+                if let Some(material) = self.admission.materials.get(*row as usize) {
+                    swaps.insert(usize::from(source.asset_id.0), material.clone());
+                }
+            }
+            if !swaps.is_empty() {
+                out.push((camo.slot, Arc::new(swaps)));
+            }
+        }
+        out
+    }
+
     fn prepare_next_weapon(&mut self, fpv: &FpvMeshCatalog, xanims: &XAnimCatalog) {
         let registry = Arc::clone(&self.owner.weapons);
         let (id, parent) = if self.next_weapon as usize > registry.len() {
@@ -707,6 +862,7 @@ impl FpvPreparationJob {
             .map(|entry| entry.skel.name.clone())
             .unwrap_or_else(String::new);
         let census = self.census_of(fpv, gun_index);
+        let camos = self.camo_swaps(fpv, id, gun_index);
         let right_orders: Vec<Option<usize>> = right.clip_orders().to_vec();
         let left_orders: Vec<Option<usize>> = left
             .as_ref()
@@ -773,7 +929,44 @@ impl FpvPreparationJob {
                     name: refusal.to_string(),
                 });
             }
+            let ads = match assemblies
+                .ads
+                .as_ref()
+                .map(|assembly| self.composition(assembly))
+                .transpose()
+            {
+                Ok(ads) => ads,
+                Err(error) => {
+                    return FpvWeaponSlot::Refused(RenderGapCause::FpvDependencyUnresolved {
+                        weapon_id: id,
+                        role: "ADS FPV layout",
+                        name: error,
+                    });
+                }
+            };
+            if let Some(refusal) = ads.as_ref().and_then(|composition| composition.refusal()) {
+                return FpvWeaponSlot::Refused(RenderGapCause::FpvDependencyUnresolved {
+                    weapon_id: id,
+                    role: "ADS FPV material",
+                    name: refusal.to_string(),
+                });
+            }
+            let jammed = match assemblies
+                .jammed
+                .as_ref()
+                .map(|assembly| self.composition(assembly))
+                .transpose()
+            {
+                Ok(jammed) => jammed.filter(|composition| composition.refusal().is_none()),
+                Err(_) => None,
+            };
             let mut rigs = FpvRigSet::default();
+            if let Some(jammed) = &jammed {
+                rigs.jammed[0] = Some(self.rig(jammed, false, &right_orders, &[]));
+                if left.is_some() {
+                    rigs.jammed[1] = Some(self.rig(jammed, true, &right_orders, &left_orders));
+                }
+            }
             rigs.bare[0] = Some(self.rig(&bare, false, &right_orders, &[]));
             if left.is_some() {
                 rigs.bare[1] = Some(self.rig(&bare, true, &right_orders, &left_orders));
@@ -790,6 +983,12 @@ impl FpvPreparationJob {
                     rigs.melee[1] = Some(self.rig(melee, true, &right_orders, &left_orders));
                 }
             }
+            if let Some(ads) = &ads {
+                rigs.ads[0] = Some(self.rig(ads, false, &right_orders, &[]));
+                if left.is_some() {
+                    rigs.ads[1] = Some(self.rig(ads, true, &right_orders, &left_orders));
+                }
+            }
             FpvWeaponSlot::Ready(Arc::new(FpvWeaponView {
                 gun_name: gun_name.clone(),
                 gun_index,
@@ -802,6 +1001,7 @@ impl FpvPreparationJob {
                 idle_name: idle_name.clone(),
                 rigs,
                 census: census.clone(),
+                camos: camos.clone(),
             }))
         });
         for (axis, side) in sides.iter().enumerate() {
