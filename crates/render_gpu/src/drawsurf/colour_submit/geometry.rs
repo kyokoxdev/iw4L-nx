@@ -9,16 +9,17 @@ pub(super) fn upload_exact_geometry(
     mut census: ResMut<ExactColourSubmitCensus>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
+    mut patch_stats: Local<SmcPatchStats>,
 ) {
     let source = ExtractedColourRefs::new(&world, &frame);
     let geometry = geometry.into_inner();
     smodel_cache_gpu.ensure(&device);
-    for (lock, bytes) in &source.frame.smc_vb_patches {
-        let _ = smodel_cache_gpu.patch(&queue, *lock, bytes);
-    }
-    for (off, bytes) in &source.frame.smc_ib_patches {
-        let _ = smodel_cache_gpu.patch_indices(&queue, *off, bytes);
-    }
+    let written = smodel_cache_gpu.write_patches(
+        &queue,
+        &source.frame.smc_vb_patches,
+        &source.frame.smc_ib_patches,
+    );
+    patch_stats.add(written);
     if geometry.world_cpu_indices.is_empty()
         && !source.world.static_geometry.world_indices.is_empty()
     {
@@ -615,4 +616,49 @@ fn coalesce_stream_spans(spans: &mut [(usize, usize)]) -> &[(usize, usize)] {
         }
     }
     &spans[..merged + 1]
+}
+
+/// Static-model cache patches vs the writes they merged into, logged every
+/// 5 s while any arrive: says whether merging adjacent patches pays.
+#[derive(Default)]
+pub(super) struct SmcPatchStats {
+    since: Option<std::time::Instant>,
+    frames: u32,
+    /// (patches, writes) summed, then the most patches in one frame.
+    vb: (usize, usize, usize),
+    ib: (usize, usize, usize),
+}
+
+impl SmcPatchStats {
+    fn add(&mut self, [vb, ib]: [(usize, usize); 2]) {
+        let now = std::time::Instant::now();
+        let since = *self.since.get_or_insert(now);
+        self.frames += 1;
+        for (sum, (patches, writes)) in [(&mut self.vb, vb), (&mut self.ib, ib)] {
+            sum.0 += patches;
+            sum.1 += writes;
+            sum.2 = sum.2.max(patches);
+        }
+        if now - since < std::time::Duration::from_secs(5) {
+            return;
+        }
+        if self.vb.0 + self.ib.0 > 0 {
+            let per = |n: usize| n as f64 / f64::from(self.frames);
+            diag::info!(
+                World,
+                "smc patches: frames={} vb={:.1}->{:.1} writes/frame (max {}) ib={:.1}->{:.1} (max {})",
+                self.frames,
+                per(self.vb.0),
+                per(self.vb.1),
+                self.vb.2,
+                per(self.ib.0),
+                per(self.ib.1),
+                self.ib.2,
+            );
+        }
+        *self = Self {
+            since: Some(now),
+            ..Default::default()
+        };
+    }
 }

@@ -116,8 +116,56 @@ pub fn release_freed_heap() -> std::time::Duration {
 
 #[cfg(windows)]
 static BACKING: mimalloc::MiMalloc = mimalloc::MiMalloc;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "horizon")))]
 static BACKING: std::alloc::System = std::alloc::System;
+/// newlib's malloc (dlmalloc 2.6) keeps large bins sorted, so on a fragmented
+/// match heap each free walked a bin: retiring a match's assets took 13–27 s
+/// of frees, and every thread queued behind those walks on newlib's one lock.
+/// Talc frees in O(1); it takes 16 MiB blocks from newlib and hands a block
+/// back once everything in it is freed.
+#[cfg(target_os = "horizon")]
+static BACKING: talc::TalcLock<nx_mutex::NxMutex, talc::source::GlobalAllocSource<std::alloc::System>> =
+    talc::TalcLock::new(talc::source::GlobalAllocSource::with_block_size(
+        std::alloc::System,
+        16 << 20,
+    ));
+
+/// libnx's kernel-arbitrated mutex: no allocation, and a waiter sleeps
+/// instead of spinning against a holder on its own core.
+#[cfg(target_os = "horizon")]
+mod nx_mutex {
+    use std::cell::UnsafeCell;
+
+    unsafe extern "C" {
+        fn mutexLock(m: *mut u32);
+        fn mutexTryLock(m: *mut u32) -> bool;
+        fn mutexUnlock(m: *mut u32);
+    }
+
+    pub struct NxMutex(UnsafeCell<u32>);
+
+    // SAFETY: the word is only touched through libnx's atomic mutex calls.
+    unsafe impl Sync for NxMutex {}
+
+    unsafe impl talc::lock_api::RawMutex for NxMutex {
+        #[allow(clippy::declare_interior_mutable_const)]
+        const INIT: Self = Self(UnsafeCell::new(0));
+        // libnx tags the word with the owning thread's handle.
+        type GuardMarker = talc::lock_api::GuardNoSend;
+
+        fn lock(&self) {
+            unsafe { mutexLock(self.0.get()) }
+        }
+
+        fn try_lock(&self) -> bool {
+            unsafe { mutexTryLock(self.0.get()) }
+        }
+
+        unsafe fn unlock(&self) {
+            unsafe { mutexUnlock(self.0.get()) }
+        }
+    }
+}
 
 pub struct ProcessCountingAllocator;
 
@@ -183,11 +231,9 @@ unsafe impl GlobalAlloc for ProcessCountingAllocator {
     }
 }
 
-/// Per-thread free lists of small blocks in front of newlib's malloc. newlib
-/// takes one process-wide lock per call and keeps its large bins sorted on
-/// free, so with a fragmented match heap every small alloc/free from the main,
-/// render and pool threads queued on that lock and walked bins. A cached block
-/// is a whole malloc'd block of its class size, so any thread may cache it.
+/// Per-thread free lists of small blocks in front of the shared allocator, so
+/// small allocs/frees from the main, render and pool threads skip its lock.
+/// A cached block is a whole block of its class size, so any thread may cache it.
 mod tcache {
     use std::alloc::{GlobalAlloc, Layout};
     use std::cell::Cell;
@@ -226,26 +272,6 @@ mod tcache {
         unsafe { Layout::from_size_align_unchecked((class + 1) * STEP, STEP) }
     }
 
-    /// Runs `f` under one hold of newlib's malloc lock (recursive, so the
-    /// mallocs and frees inside take it again for free).
-    fn locked<R>(f: impl FnOnce() -> R) -> R {
-        #[cfg(target_os = "horizon")]
-        unsafe extern "C" {
-            fn __malloc_lock(reent: *mut core::ffi::c_void);
-            fn __malloc_unlock(reent: *mut core::ffi::c_void);
-        }
-        #[cfg(target_os = "horizon")]
-        unsafe {
-            __malloc_lock(null_mut())
-        };
-        let out = f();
-        #[cfg(target_os = "horizon")]
-        unsafe {
-            __malloc_unlock(null_mut())
-        };
-        out
-    }
-
     unsafe fn pop(list: &mut List) -> *mut u8 {
         let head = list.head;
         if !head.is_null() {
@@ -266,15 +292,13 @@ mod tcache {
         let cached = LISTS.try_with(|lists| {
             let mut list = lists[class].get();
             if list.head.is_null() {
-                locked(|| {
-                    for _ in 0..REFILL {
-                        let ptr = unsafe { BACKING.alloc(block(class)) };
-                        if ptr.is_null() {
-                            break;
-                        }
-                        unsafe { push(&mut list, ptr) };
+                for _ in 0..REFILL {
+                    let ptr = unsafe { BACKING.alloc(block(class)) };
+                    if ptr.is_null() {
+                        break;
                     }
-                });
+                    unsafe { push(&mut list, ptr) };
+                }
             }
             let ptr = unsafe { pop(&mut list) };
             lists[class].set(list);
@@ -293,11 +317,9 @@ mod tcache {
             let mut list = lists[class].get();
             unsafe { push(&mut list, ptr) };
             if list.len > CAP {
-                locked(|| {
-                    while list.len > CAP / 2 {
-                        unsafe { BACKING.dealloc(pop(&mut list), block(class)) };
-                    }
-                });
+                while list.len > CAP / 2 {
+                    unsafe { BACKING.dealloc(pop(&mut list), block(class)) };
+                }
             }
             lists[class].set(list);
         });

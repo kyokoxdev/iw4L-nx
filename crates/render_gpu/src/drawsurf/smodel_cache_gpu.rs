@@ -17,12 +17,6 @@ pub struct SmodelCacheGpu {
     uploaded_revision: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SmcPatchWriteRefuse {
-    NoBuffer,
-    LockRejected,
-}
-
 impl SmodelCacheGpu {
     pub fn ensure(&mut self, device: &RenderDevice) {
         if self.vb.is_none() {
@@ -94,36 +88,82 @@ impl SmodelCacheGpu {
         Some((start, start + u64::from(SMC_BANK_VB_BYTES)))
     }
 
-    pub fn patch(
+    /// Writes this frame's cache patches, one `write_buffer` per run of
+    /// byte-adjacent patches: wgpu's GL backend makes (and drops) a staging
+    /// buffer per write, 0.1–0.5 ms each on Switch. Returns (patches, writes)
+    /// for the vertex and index buffers.
+    pub fn write_patches(
         &self,
         queue: &RenderQueue,
-        lock: SmcPatchLock,
-        bytes: &[u8],
-    ) -> Result<(), SmcPatchWriteRefuse> {
-        let Some(vb) = self.vb.as_ref() else {
-            return Err(SmcPatchWriteRefuse::NoBuffer);
-        };
-        if !lock.accepts_bytes(bytes.len()) {
-            return Err(SmcPatchWriteRefuse::LockRejected);
-        }
-        queue.write_buffer(vb, u64::from(lock.byte_offset), bytes);
-        Ok(())
+        vb_patches: &[(SmcPatchLock, Vec<u8>)],
+        ib_patches: &[(u32, Vec<u8>)],
+    ) -> [(usize, usize); 2] {
+        let vb = self.vb.as_ref().map_or((0, 0), |vb| {
+            let patches: Vec<_> = vb_patches
+                .iter()
+                .filter(|(lock, bytes)| lock.accepts_bytes(bytes.len()))
+                .map(|(lock, bytes)| (u64::from(lock.byte_offset), bytes.as_slice()))
+                .collect();
+            (patches.len(), write_runs(queue, vb, &patches))
+        });
+        let ib = self.ib.as_ref().map_or((0, 0), |ib| {
+            let patches: Vec<_> = ib_patches
+                .iter()
+                .filter(|(off, bytes)| {
+                    (*off as usize).saturating_add(bytes.len()) <= SMC_INDEX_U16_N * 2
+                })
+                .map(|(off, bytes)| (u64::from(*off), bytes.as_slice()))
+                .collect();
+            (patches.len(), write_runs(queue, ib, &patches))
+        });
+        [vb, ib]
     }
+}
 
-    pub fn patch_indices(
-        &self,
-        queue: &RenderQueue,
-        byte_offset: u32,
-        bytes: &[u8],
-    ) -> Result<(), SmcPatchWriteRefuse> {
-        let Some(ib) = self.ib.as_ref() else {
-            return Err(SmcPatchWriteRefuse::NoBuffer);
-        };
-        let end = (byte_offset as usize).saturating_add(bytes.len());
-        if end > SMC_INDEX_U16_N * 2 {
-            return Err(SmcPatchWriteRefuse::LockRejected);
+/// Writes `patches`, merging runs that are byte-adjacent once sorted by
+/// offset. Overlapping patches are written as given: sorting would reorder
+/// writes to the same bytes. Returns the number of writes.
+fn write_runs(queue: &RenderQueue, buffer: &Buffer, patches: &[(u64, &[u8])]) -> usize {
+    let mut sorted = patches.to_vec();
+    sorted.sort_by_key(|&(offset, _)| offset);
+    if sorted
+        .windows(2)
+        .any(|w| w[1].0 < w[0].0 + w[0].1.len() as u64)
+    {
+        for &(offset, bytes) in patches {
+            queue.write_buffer(buffer, offset, bytes);
         }
-        queue.write_buffer(ib, u64::from(byte_offset), bytes);
-        Ok(())
+        return patches.len();
+    }
+    let runs = merge_runs(&sorted);
+    for (offset, bytes) in &runs {
+        queue.write_buffer(buffer, *offset, bytes);
+    }
+    runs.len()
+}
+
+/// Sorted, non-overlapping patches joined where one ends at the next's start.
+fn merge_runs(sorted: &[(u64, &[u8])]) -> Vec<(u64, Vec<u8>)> {
+    let mut runs: Vec<(u64, Vec<u8>)> = Vec::new();
+    for &(offset, bytes) in sorted {
+        match runs.last_mut() {
+            Some((start, run)) if *start + run.len() as u64 == offset => {
+                run.extend_from_slice(bytes)
+            }
+            _ => runs.push((offset, bytes.to_vec())),
+        }
+    }
+    runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_runs;
+
+    #[test]
+    fn adjacent_patches_merge() {
+        let (a, b, c) = ([1u8; 4], [2u8; 8], [3u8; 4]);
+        let runs = merge_runs(&[(0, &a), (4, &b), (16, &c)]);
+        assert_eq!(runs, vec![(0, [&a[..], &b[..]].concat()), (16, c.to_vec())]);
     }
 }
