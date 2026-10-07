@@ -50,7 +50,10 @@ fn emit_feel(
     let Some(clock) = clock else {
         return;
     };
-    let auth_ps = authority_world.as_ref().and_then(|w| w.0.player(local.0));
+    // A diagnostic: a frame with a step in flight reports no authority state
+    // rather than wait for it.
+    let authority_world = authority_world.as_ref().and_then(|w| w.try_lock());
+    let auth_ps = authority_world.as_deref().and_then(|w| w.player(local.0));
     let adopted_ps = last_adopted.as_ref().and_then(|a| {
         a.next().and_then(|snap| {
             snap.players

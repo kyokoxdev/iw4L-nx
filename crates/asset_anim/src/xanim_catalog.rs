@@ -9,7 +9,9 @@ use fastfile_iw4::{
 
 use crate::asset_graph::ZoneOwner;
 use crate::asset_key::AssetNamespace;
-use crate::xanim_clip::{AnimClip, ClipNotify, RawDeltaTrans, RawXAnimParts};
+use crate::xanim_clip::{
+    AnimClip, ClipNotify, RawDeltaTrans, RawXAnimParts, intern_bone_name,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct XAnimKey {
@@ -313,7 +315,7 @@ impl XAnimBuild {
         if let Some(arr) = geometry.names {
             for i in 0..track_count {
                 let sid = s.u16_at(arr, i * 2).unwrap_or(0);
-                names.push(strings.get(s, sid).unwrap_or("").to_owned());
+                names.push(intern_bone_name(strings.get(s, sid).unwrap_or("")));
             }
         } else if track_count > 0 {
             self.capture_gaps += 1;
@@ -406,7 +408,7 @@ impl XAnimBuild {
         if let Some(arr) = geometry.names {
             for i in 0..track_count {
                 let sid = s.u16_at(arr, i * 2).unwrap_or(0);
-                names.push(strings.get(s, sid).unwrap_or("").to_owned());
+                names.push(intern_bone_name(strings.get(s, sid).unwrap_or("")));
             }
         } else if track_count > 0 {
             self.capture_gaps += 1;
@@ -532,7 +534,7 @@ impl XAnimBuild {
         bone_count.copy_from_slice(&h[24..34]);
         let names = words(64, usize::from(bone_count[9]))
             .into_iter()
-            .map(|id| load.script_string(id).unwrap_or("").to_owned())
+            .map(|id| intern_bone_name(load.script_string(id).unwrap_or("")))
             .collect();
         let notifies = bytes(96, 8 * usize::from(h[34]))
             .as_chunks::<8>()
@@ -629,7 +631,7 @@ impl AssetLinkSink for XAnimBuild {
         if let Some(arr) = geometry.names {
             for i in 0..track_count {
                 let sid = s.u16_at(arr, i * 2).unwrap_or(0);
-                names.push(self.strings.get(s, sid).unwrap_or("").to_owned());
+                names.push(intern_bone_name(self.strings.get(s, sid).unwrap_or("")));
             }
         } else if track_count > 0 {
             self.capture_gaps += 1;

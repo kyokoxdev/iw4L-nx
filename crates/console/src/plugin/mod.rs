@@ -2035,7 +2035,7 @@ fn dispatch_console_command(
     if dispatch.wait_playing {
         if authority
             .as_ref()
-            .is_some_and(|w| w.0.phase() == sim::MatchPhase::Playing)
+            .is_some_and(|w| w.lock().phase() == sim::MatchPhase::Playing)
         {
             dispatch.wait_playing = false;
             diag::info!(
@@ -2062,8 +2062,11 @@ fn dispatch_console_command(
     if let Some((client, life)) = dispatch.wait_alive {
         let alive = authority
             .as_ref()
-            .and_then(|w| w.0.client_meta(client))
-            .is_some_and(|m| m.lifecycle == sim::ClientLifecycle::Alive && m.life_sequence != life);
+            .is_some_and(|w| {
+                w.lock().client_meta(client).is_some_and(|m| {
+                    m.lifecycle == sim::ClientLifecycle::Alive && m.life_sequence != life
+                })
+            });
         if alive {
             dispatch.wait_alive = None;
             diag::info!(
@@ -2300,7 +2303,7 @@ fn mark_match_facts(
         }
         return out;
     };
-    let board = authority.0.clients_scoreboard();
+    let board = authority.lock().clients_scoreboard();
     let alive = board
         .iter()
         .filter(|(_, m)| m.lifecycle == sim::ClientLifecycle::Alive)
@@ -2320,7 +2323,8 @@ fn mark_match_facts(
                 id.0, meta.input_receipt.applied_cmds, id.0, meta.input_receipt.path_units
             ));
         }
-        let meta = authority.0.client_meta(local.0);
+        let world = authority.lock();
+        let meta = world.client_meta(local.0);
         let life = meta
             .map(|m| format!("{:?}", m.lifecycle))
             .unwrap_or_else(|| "absent".into());

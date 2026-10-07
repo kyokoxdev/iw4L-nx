@@ -25,6 +25,9 @@ pub(crate) struct AccountPersistence {
     saved: Option<AccountSnapshot>,
     retry_at: Option<Instant>,
     last_error: Option<(io::ErrorKind, String)>,
+    /// The write in flight: `sync_all` + rename on the Switch SD card cost tens
+    /// of ms, and match scripts bump the stats every second.
+    writing: Option<(AccountSnapshot, std::thread::JoinHandle<io::Result<()>>)>,
 }
 
 pub(crate) fn load(
@@ -66,6 +69,7 @@ pub(crate) fn save(
     account: Option<ResMut<LocalAccount>>,
     mut persistence: ResMut<AccountPersistence>,
     mut receipt: Option<ResMut<net::AccountSaveReceipt>>,
+    exiting: Option<Res<crate::feature_dispatch::PendingExit>>,
 ) {
     if !matches!(
         *role,
@@ -76,12 +80,48 @@ pub(crate) fn save(
     let (Some(mut account), Some(path)) = (account, persistence.path.clone()) else {
         return;
     };
+    let mut authority = authority;
+    // The process leaves after this system: the last write must land first.
+    let exiting = exiting.is_some();
+    if persistence
+        .writing
+        .as_ref()
+        .is_some_and(|(_, handle)| !handle.is_finished() && !exiting)
+    {
+        return;
+    }
+    if let Some((snapshot, handle)) = persistence.writing.take() {
+        let result = handle
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("account writer panicked")));
+        finish_write(
+            result,
+            snapshot,
+            *role,
+            &path,
+            &mut persistence,
+            authority.as_deref_mut(),
+            &mut account,
+            receipt.as_deref_mut(),
+        );
+    }
+    // A step in flight holds the world: leave the save to a frame without one,
+    // except the last before exit, which waits for it. Steps start only on
+    // this thread, so a world free here stays free for the rest of the system.
+    if *role == frame::RuntimeRole::Listen
+        && !exiting
+        && authority
+            .as_ref()
+            .is_some_and(|authority| authority.try_lock().is_none())
+    {
+        return;
+    }
     // Every frame: skip the account-buffer clone and compare once the live
     // revision is the one already saved and receipted.
     if *role == frame::RuntimeRole::Listen
         && let (Some(saved), Some(authority)) = (persistence.saved.as_ref(), authority.as_ref())
         && saved.account == account.id
-        && authority.0.persistent_data().revision(account.id) == Some(saved.revision)
+        && authority.lock().persistent_data().revision(account.id) == Some(saved.revision)
         && receipt.as_ref().is_none_or(|receipt| {
             receipt
                 .0
@@ -91,11 +131,10 @@ pub(crate) fn save(
     {
         return;
     }
-    let mut authority = authority;
     let snapshot = if *role == frame::RuntimeRole::Listen {
         authority
             .as_ref()
-            .and_then(|authority| authority.0.persistent_data().snapshot(account.id))
+            .and_then(|authority| authority.lock().persistent_data().snapshot(account.id))
     } else {
         account.snapshot.clone()
     };
@@ -112,7 +151,7 @@ pub(crate) fn save(
             && let Some(authority) = authority.as_mut()
         {
             authority
-                .0
+                .lock()
                 .persistent_data_mut()
                 .acknowledge_saved(account.id, snapshot.revision);
         }
@@ -130,19 +169,59 @@ pub(crate) fn save(
         key: account.key.clone(),
         snapshot: Some(snapshot.clone()),
     };
-    match save_current(&path, &next, persistence.saved.as_ref()) {
+    let expected = persistence.saved.clone();
+    let writer_path = path.clone();
+    let spawned = std::thread::Builder::new()
+        .name("account-save".into())
+        .stack_size(256 * 1024)
+        .spawn(move || save_current(&writer_path, &next, expected.as_ref()));
+    let result = match spawned {
+        Ok(handle) if !exiting => {
+            persistence.writing = Some((snapshot, handle));
+            return;
+        }
+        Ok(handle) => handle
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("account writer panicked"))),
+        Err(error) => Err(error),
+    };
+    finish_write(
+        result,
+        snapshot,
+        *role,
+        &path,
+        &mut persistence,
+        authority.as_deref_mut(),
+        &mut account,
+        receipt.as_deref_mut(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_write(
+    result: io::Result<()>,
+    snapshot: AccountSnapshot,
+    role: frame::RuntimeRole,
+    path: &Path,
+    persistence: &mut AccountPersistence,
+    authority: Option<&mut net::AuthorityWorld>,
+    account: &mut LocalAccount,
+    receipt: Option<&mut net::AccountSaveReceipt>,
+) {
+    match result {
         Ok(()) => {
             persistence.retry_at = None;
             persistence.last_error = None;
-            if *role == frame::RuntimeRole::Listen
-                && let Some(authority) = authority.as_mut()
+            // A no-op once the live revision moved on during the write.
+            if role == frame::RuntimeRole::Listen
+                && let Some(authority) = authority
             {
                 authority
-                    .0
+                    .lock()
                     .persistent_data_mut()
                     .acknowledge_saved(account.id, snapshot.revision);
             }
-            if let Some(receipt) = receipt.as_mut() {
+            if let Some(receipt) = receipt {
                 receipt.0 = Some(snapshot.clone());
             }
             persistence.saved = Some(snapshot.clone());

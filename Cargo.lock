@@ -2043,6 +2043,7 @@ dependencies = [
  "net",
  "perf",
  "platform_nx",
+ "profiling",
  "render",
  "render_frontend",
  "render_gpu",

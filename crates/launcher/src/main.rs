@@ -137,7 +137,24 @@ fn spawn_heap_sampler() {
         .stack_size(64 * 1024)
         .spawn(move || {
             let mut last = 0usize;
+            let mut cpu = (std::time::Instant::now(), platform_nx::core_ticks());
             loop {
+                // Per-core busy share: main on 0, render on 1, pools on 2.
+                if cpu.0.elapsed() >= std::time::Duration::from_secs(5) {
+                    let now = (std::time::Instant::now(), platform_nx::core_ticks());
+                    let wall = (now.0 - cpu.0).as_secs_f64() * 19_200_000.0;
+                    let pct =
+                        |c: usize| now.1.0[c].saturating_sub(cpu.1.0[c]) as f64 / wall * 100.0;
+                    diag::info!(
+                        Launch,
+                        "cpu busy: core0={:.0}% core1={:.0}% core2={:.0}% rc={:#x}",
+                        pct(0),
+                        pct(1),
+                        pct(2),
+                        now.1.1
+                    );
+                    cpu = now;
+                }
                 let (used, ..) = platform_nx::heap_mb();
                 if used.abs_diff(last) >= 64 {
                     last = used;

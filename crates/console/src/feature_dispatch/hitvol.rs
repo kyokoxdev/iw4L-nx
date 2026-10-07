@@ -18,7 +18,7 @@ pub(crate) fn route_hitvol_commands(
             echo.write("hitvol: no authority world on this client");
             continue;
         };
-        for line in hitvol_report(&authority.0) {
+        for line in hitvol_report(&authority.lock()) {
             echo.write(line);
         }
     }

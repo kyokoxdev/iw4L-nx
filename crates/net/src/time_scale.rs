@@ -19,6 +19,7 @@ pub(crate) fn apply_time_scale(
     inputs: TimeScaleInputs,
     fixed: Res<Time<Fixed>>,
     mut time: ResMut<Time<Virtual>>,
+    mut authority_plan: Local<Option<sim::ScriptSlowMotion>>,
 ) {
     let TimeScaleInputs {
         authority,
@@ -29,7 +30,14 @@ pub(crate) fn apply_time_scale(
     } = inputs;
     let (plan, game_ms) = if role.runs_authority() {
         (
-            authority.as_ref().and_then(|world| world.0.slow_motion()),
+            // With a step in flight, the plan as of the last frame that saw the
+            // world: scripts change it a few times a match, never per frame.
+            {
+                if let Some(world) = authority.as_ref().and_then(|world| world.try_lock()) {
+                    *authority_plan = world.slow_motion();
+                }
+                *authority_plan
+            },
             authority_clock
                 .as_ref()
                 .map_or(0.0, |clock| f64::from(clock.time_ms))

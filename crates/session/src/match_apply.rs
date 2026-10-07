@@ -312,12 +312,12 @@ pub fn apply_prepared_match(
         if role.runs_authority()
             && let Some(previous) = previous.as_ref()
         {
-            sim.set_persistent_data(previous.0.persistent_data().for_new_match());
+            sim.set_persistent_data(previous.lock().persistent_data().for_new_match());
         }
         if *role == frame::RuntimeRole::Listen {
             let profile = previous
                 .as_ref()
-                .map(|authority| authority.0.local_player_profile())
+                .map(|authority| authority.lock().local_player_profile())
                 .or_else(|| profile.as_deref().copied())
                 .unwrap_or(sim::LocalPlayerProfile::default());
             sim.set_local_player_profile(profile);
@@ -639,7 +639,7 @@ pub fn apply_prepared_match(
                 state.arm_from_content(&sim);
                 stage_resource(&mut install, net::ClientPredictionState(state));
             }
-            stage_resource(&mut install, AuthorityWorld(sim));
+            stage_resource(&mut install, AuthorityWorld::new(sim));
         } else if let Some(prediction) = prediction.as_ref() {
             install.push(|world: &mut World| {
                 world.remove_resource::<AuthorityWorld>();

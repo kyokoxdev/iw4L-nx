@@ -22,7 +22,7 @@ mod ui;
 pub(crate) use capture::route_capture_commands;
 pub(crate) use echo::ConsoleEcho;
 pub(crate) use hitvol::route_hitvol_commands;
-pub(crate) use process::{exit_process, request_exit};
+pub(crate) use process::{PendingExit, exit_process, request_exit};
 pub(crate) use replay::route_replay_commands;
 pub(crate) use session::route_session_commands;
 pub(crate) use state_dump::route_state_dump_commands;
@@ -66,7 +66,7 @@ pub(crate) fn route_debug_feature_commands(
             "bot" => match parse_bot_args(&cmd.args) {
                 Err(msg) => echo(msg, console, line),
                 Ok(BotVerb::Hold(_) | BotVerb::Tp(_) | BotVerb::Fire(_) | BotVerb::Give { .. })
-                    if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) =>
+                    if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) =>
                 {
                     echo("bot: cheats are off".into(), console, line);
                 }

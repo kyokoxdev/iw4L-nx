@@ -230,6 +230,8 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
     let needs_floatz = installed.camera.needs_floatz;
     let needs_resolved_scene = installed.camera.needs_resolved_scene;
 
+    // Phase spans for the Switch span profile (`colour pack`, ...).
+    let mut phase = bevy::log::info_span!(target: "iw4l", "colour", name = "pack").entered();
     let focused_object_id = products.0.focus().and_then(|focus| focus.object_id);
 
     let world_run_surfs = products.0.world_run_surfs.as_slice();
@@ -301,6 +303,8 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
         census.frame.end_depth_restore_n = Some(pack_plan.work.end_restore_n);
         census.frame.end_depth_range_type = Some(pack_plan.work.end_depth_range_type);
     }
+    drop(phase);
+    phase = bevy::log::info_span!(target: "iw4l", "colour", name = "gather").entered();
     let gather_started = colour_census_clock(census_on);
     let world_ib_skip = pretess.layout.as_ref().is_some_and(|layout| {
         layout.key == pretess_key && (layout.index.is_some() || layout.logical_index_count == 0)
@@ -370,6 +374,8 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
         census.frame.smodel_pretess_length1 = Some(0);
         census.frame.submit_gather_ms = colour_census_ms(gather_started);
     }
+    drop(phase);
+    phase = bevy::log::info_span!(target: "iw4l", "colour", name = "rows").entered();
     let prepare_started = colour_census_clock(census_on);
     let exec_frame = &extracted.frame.exec_frame;
     let exec_view = exec_tables(extracted)
@@ -446,6 +452,8 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
     for lane_tally in tallies.into_iter().flatten() {
         tally.absorb(lane_tally);
     }
+    drop(phase);
+    let _phase = bevy::log::info_span!(target: "iw4l", "colour", name = "finish").entered();
     let mut prepared = std::mem::take(&mut scratch.prepared);
     let mut submitted_keys = std::mem::take(&mut scratch.submitted_keys);
     let mut world_exec_ready_keys = std::mem::take(&mut scratch.world_exec_ready_keys);

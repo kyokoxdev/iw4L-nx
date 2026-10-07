@@ -2,6 +2,7 @@ use bevy::app::{RunFixedMainLoop, RunFixedMainLoopSystems};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use crate::authority::inbox::{AuthorityClock, ClientActionInbox, ClientCommandInbox};
 use crate::client::predict::CmdSeq;
@@ -14,12 +15,55 @@ use crate::transport::loopback_live::ListenLoopback;
 use frame::{ExitLevelCalled, MatchTornDown, RuntimeRole, register_script_notify};
 use sim::{ClientId, ClientLifecycle, DamageSource, SimEvent};
 
-#[derive(Resource)]
-pub struct AuthorityWorld(pub sim::SimWorld);
+/// The authority's sim world, behind a lock: each tick's step runs on a worker
+/// thread while the main thread runs the client frame (`step_authority`), and
+/// a system that locks while a step is in flight waits for it to finish.
+#[derive(Resource, Clone)]
+pub struct AuthorityWorld(Arc<Mutex<sim::SimWorld>>);
 
 impl Default for AuthorityWorld {
     fn default() -> Self {
-        Self(sim::SimWorld::new())
+        Self::new(sim::SimWorld::new())
+    }
+}
+
+impl AuthorityWorld {
+    pub fn new(world: sim::SimWorld) -> Self {
+        Self(Arc::new(Mutex::new(world)))
+    }
+
+    /// The world, once no step is running on it. A wait shows in the span
+    /// profile as `authority world wait <caller>`.
+    #[track_caller]
+    pub fn lock(&self) -> MutexGuard<'_, sim::SimWorld> {
+        match self.0.try_lock() {
+            Ok(world) => world,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                let caller = std::panic::Location::caller();
+                let _wait = bevy::log::info_span!(
+                    target: "iw4l",
+                    "authority world wait",
+                    name = %format_args!("{}:{}", caller.file(), caller.line())
+                )
+                .entered();
+                self.0.lock().unwrap_or_else(PoisonError::into_inner)
+            }
+        }
+    }
+
+    /// The world, or `None` while a step is running on it: for a reader that
+    /// can skip a frame rather than wait.
+    pub fn try_lock(&self) -> Option<MutexGuard<'_, sim::SimWorld>> {
+        match self.0.try_lock() {
+            Ok(world) => Some(world),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    fn same_world(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -426,7 +470,13 @@ pub fn authority_should_tick(
     hold: Option<Res<AuthorityLoadHold>>,
 ) -> bool {
     role.runs_authority()
-        && world.is_some_and(|world| world.0.clip_brush_count() > 0)
+        // Busy = a step is running on it, so the world is loaded; waiting here
+        // would serialise main behind the whole step.
+        && world.is_some_and(|world| {
+            world
+                .try_lock()
+                .is_none_or(|world| world.clip_brush_count() > 0)
+        })
         && hold.is_some_and(|h| !h.0)
 }
 
@@ -444,11 +494,15 @@ fn reset_authority_on_match_torn_down(
     mut pending_acks: ResMut<PendingAcks>,
     mut pending_step: ResMut<PendingStepResult>,
     mut server_tick: ResMut<ServerTick>,
+    mut inflight: ResMut<AuthorityStepInFlight>,
 ) {
     if torn.read().count() == 0 {
         return;
     }
     *clock = AuthorityClock::default();
+    // Its result belongs to the match being torn down; `shutdown_game` below
+    // waits for it to finish.
+    inflight.0 = None;
 
     inbox.clear();
     transactions.open_new_scope();
@@ -460,7 +514,7 @@ fn reset_authority_on_match_torn_down(
     server_tick.0 = None;
 
     if let Some(world) = world.as_mut() {
-        world.0.shutdown_game();
+        world.lock().shutdown_game();
     }
     if let Some(loopback) = loopback.as_mut() {
         loopback.reset();
@@ -469,10 +523,10 @@ fn reset_authority_on_match_torn_down(
         archive.clear();
     }
     perf::sim_hold(
-        i64::from(world.as_ref().is_some_and(|world| world.0.is_running())),
+        i64::from(world.as_ref().is_some_and(|world| world.lock().is_running())),
         world
             .as_ref()
-            .map_or(0, |world| world.0.script_mover_count() as i64),
+            .map_or(0, |world| world.lock().script_mover_count() as i64),
         loopback.as_ref().map(|l| l.pending() as i64).unwrap_or(0),
     );
 }
@@ -493,7 +547,7 @@ fn apply_connection_faults(
         if let Some(hub) = hub.as_mut() {
             hub.retire_client_with_reason(client, &reason);
         }
-        world.0.retire_client(client);
+        world.lock().retire_client(client);
     }
 }
 
@@ -602,7 +656,7 @@ fn ingress_authority(
             Some(&mut samples),
             Some(&mut reliable),
             Some((
-                &mut world.0,
+                &mut world.lock(),
                 bridge
                     .as_ref()
                     .map(|bridge| bridge.state().identity().match_key())
@@ -709,42 +763,148 @@ fn gather_authority_input(
     });
 }
 
+/// A step running on the worker: the world it steps, and the acks gathered
+/// for its tick, which go out with its snapshot.
+pub struct InflightStep {
+    world: AuthorityWorld,
+    acks: Vec<(ClientId, CmdSeq)>,
+    done: Mutex<std::sync::mpsc::Receiver<StepOutcome>>,
+}
+
+#[derive(Resource, Default)]
+pub struct AuthorityStepInFlight(pub Option<InflightStep>);
+
+/// `Err` carries the script fault a failed step left, if it reported one.
+type StepOutcome = std::thread::Result<Result<ServerTickData, Option<sim::script::Fault>>>;
+
+const SIM_THREAD_ENV: &str = "IW4L_SIM_THREAD";
+
+/// Whether the step runs on the worker thread, overlapping the client frame.
+/// On by default on Switch (`IW4L_SIM_THREAD=0` steps inline, the old way);
+/// off elsewhere unless asked for.
+fn sim_thread() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| match std::env::var_os(SIM_THREAD_ENV) {
+        None => cfg!(target_os = "horizon"),
+        Some(_) => perf::switch(SIM_THREAD_ENV),
+    })
+}
+
+type StepJob = Box<dyn FnOnce() + Send>;
+
+/// The one thread steps run on. Horizon places it on core 2
+/// (`__wrap_threadCreate`); the main thread keeps core 0.
+fn step_worker() -> &'static std::sync::mpsc::Sender<StepJob> {
+    static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<StepJob>> =
+        std::sync::OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (jobs, inbox) = std::sync::mpsc::channel::<StepJob>();
+        std::thread::Builder::new()
+            .name("authority-step".into())
+            // GSC and collision recurse; the main thread they used to run on
+            // has megabytes.
+            .stack_size(4 * 1024 * 1024)
+            .spawn(move || {
+                for job in inbox {
+                    job();
+                }
+            })
+            .expect("spawn authority-step thread");
+        jobs
+    })
+}
+
+fn run_step(world: &mut sim::SimWorld, tick: u32, input: &sim::TickInput) -> Result<ServerTickData, Option<sim::script::Fault>> {
+    sim::try_step(
+        world,
+        sim::Tick(tick),
+        input,
+        crate::AUTHORITY_MS,
+        sim::StepReason::AuthorityFrame,
+    )
+    .map_err(|_| world.take_script_fault())
+}
+
+/// Steps this tick's input. On the worker (`sim_thread`), the step overlaps
+/// the client frame and its result is published one tick later: this system
+/// first collects the previous tick's step, then hands this tick's off.
 fn step_authority(
-    mut world: ResMut<AuthorityWorld>,
+    world: Res<AuthorityWorld>,
     clock: Res<AuthorityClock>,
     mut pending: ResMut<PendingAuthorityInput>,
+    mut pending_acks: ResMut<PendingAcks>,
     mut pending_step: ResMut<PendingStepResult>,
     mut pending_svc: ResMut<crate::PendingSvcSounds>,
+    mut inflight: ResMut<AuthorityStepInFlight>,
     mut exit_level: MessageWriter<ExitLevelCalled>,
     trace: Option<ResMut<AuthorityPhaseTrace>>,
 ) {
     push_phase(trace, "Step");
-    pending_svc.occupy_cs(&mut world.0);
-    let Some(input) = pending.0.take() else {
+    let input = pending.0.take();
+    let threaded = sim_thread();
+    // This tick's acks leave with this tick's snapshot, which is next tick's
+    // publish on the worker path.
+    let acks = if threaded && input.is_some() {
+        std::mem::take(&mut pending_acks.0)
+    } else {
+        Vec::new()
+    };
+    let previous = inflight.0.take().and_then(|step| {
+        let outcome = step.done.into_inner().unwrap_or_else(PoisonError::into_inner).recv();
+        // A step of a world since replaced belongs to no match still running.
+        step.world.same_world(&world).then_some((outcome, step.acks))
+    });
+    let outcome = match previous {
+        Some((outcome, acks)) => {
+            // Ahead of any acks this tick left in place (no input, so no step).
+            let current = std::mem::replace(&mut pending_acks.0, acks);
+            pending_acks.0.extend(current);
+            outcome.ok()
+        }
+        None => None,
+    };
+    pending_svc.occupy_cs(&mut world.lock());
+    let outcome = match input {
+        Some(input) if threaded => {
+            let (done, receive) = std::sync::mpsc::sync_channel(1);
+            let shared = world.clone();
+            let tick = clock.tick;
+            let job: StepJob = Box::new(move || {
+                let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_step(&mut shared.lock(), tick, &input)
+                }));
+                let _ = done.send(stepped);
+            });
+            step_worker().send(job).expect("authority-step thread is gone");
+            inflight.0 = Some(InflightStep {
+                world: world.clone(),
+                acks,
+                done: Mutex::new(receive),
+            });
+            outcome
+        }
+        Some(input) => Some(Ok(run_step(&mut world.lock(), clock.tick, &input))),
+        None => outcome,
+    };
+    let Some(stepped) = outcome else {
         return;
     };
-
-    let stepped = sim::try_step(
-        &mut world.0,
-        sim::Tick(clock.tick),
-        &input,
-        crate::AUTHORITY_MS,
-        sim::StepReason::AuthorityFrame,
-    );
+    let stepped = stepped.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     // A terminal script error drops the match to the lobby;
     // the world stays frozen until the swap replaces it.
-    let Ok(result) = stepped else {
-        if let Some(fault) = world.0.take_script_fault() {
-            diag::error!(Sim, "GSC execution failed: {fault}");
-            diag::script_boundary(
-                "fault",
-                &format!(" fault=\"{}\"", fault.message.replace('"', "'")),
-            );
-            exit_level.write(ExitLevelCalled);
+    match stepped {
+        Ok(result) => pending_step.0 = Some(result),
+        Err(fault) => {
+            if let Some(fault) = fault {
+                diag::error!(Sim, "GSC execution failed: {fault}");
+                diag::script_boundary(
+                    "fault",
+                    &format!(" fault=\"{}\"", fault.message.replace('"', "'")),
+                );
+                exit_level.write(ExitLevelCalled);
+            }
         }
-        return;
-    };
-    pending_step.0 = Some(result);
+    }
 }
 
 fn publish_server_tick(
@@ -1103,6 +1263,7 @@ pub fn register_listen_runtime(app: &mut App) {
         .init_resource::<PendingAuthorityInput>()
         .init_resource::<PendingAcks>()
         .init_resource::<PendingStepResult>()
+        .init_resource::<AuthorityStepInFlight>()
         .init_resource::<ServerTick>()
         .init_resource::<FrameArchive>()
         .init_resource::<ActiveKillcams>()

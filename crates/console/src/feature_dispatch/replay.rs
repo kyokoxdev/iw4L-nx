@@ -175,7 +175,7 @@ pub(crate) fn route_replay_commands(
                 };
                 let requested = cmd.args.first().map(String::as_str).unwrap_or("");
                 let record_identity =
-                    MatchRecordIdentity::from_world_on_zone(&authority.0, &identity.zone);
+                    MatchRecordIdentity::from_world_on_zone(&authority.lock(), &identity.zone);
                 match Recording::start_with_identity(
                     &identity.artifacts,
                     requested,
@@ -318,10 +318,14 @@ fn save_clip_package(
     let result = (|| {
         let demo_path = dir.join(CLIP_DEMO_FILE);
         let dump_path = dir.join(CLIP_DUMP_FILE);
-        let record_identity = MatchRecordIdentity::from_world_on_zone(
-            world.map(|world| &world.0).unwrap_or(prediction),
-            &identity.zone,
-        );
+        // Released before `state_dump_body`, which locks the world itself.
+        let record_identity = {
+            let authority = world.map(|world| world.lock());
+            MatchRecordIdentity::from_world_on_zone(
+                authority.as_deref().unwrap_or(prediction),
+                &identity.zone,
+            )
+        };
         let mut recording = Recording::start_at_path(demo_path.clone(), record_identity)
             .map_err(|error| error.to_string())?;
         recording

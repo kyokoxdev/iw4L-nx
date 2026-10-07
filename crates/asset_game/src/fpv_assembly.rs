@@ -439,7 +439,7 @@ impl FpvClipTracks {
             .iter()
             .map(|track| {
                 first_by_name
-                    .get(track.name.as_str())
+                    .get(&*track.name)
                     .copied()
                     .unwrap_or(Self::NONE)
             })

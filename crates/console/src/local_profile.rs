@@ -40,7 +40,7 @@ pub(crate) fn load(
     }
     persistence.saved = *profile;
     if let Some(mut authority) = authority {
-        authority.0.set_local_player_profile(*profile);
+        authority.lock().set_local_player_profile(*profile);
     }
 }
 
@@ -54,7 +54,11 @@ pub(crate) fn save(
         return;
     }
     if let Some(authority) = authority {
-        let current = authority.0.local_player_profile();
+        // A step in flight holds the world: compare on a frame without one.
+        let Some(world) = authority.try_lock() else {
+            return;
+        };
+        let current = world.local_player_profile();
         if *profile != current {
             *profile = current;
         }

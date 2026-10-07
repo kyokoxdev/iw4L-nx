@@ -161,7 +161,7 @@ fn drain_bot_add_queue(
     }
     let mut taken = vec![local.0];
     if let Some(world) = world.as_ref() {
-        taken.extend(world.0.clients_scoreboard().into_iter().map(|(id, _)| id));
+        taken.extend(world.lock().clients_scoreboard().into_iter().map(|(id, _)| id));
     }
     if let Some(hub) = hub.as_ref() {
         taken.extend(hub.connections.clients().map(sim::ClientId));
@@ -218,9 +218,9 @@ fn boot_bots(
         if bot.joined {
             continue;
         }
-        if world.0.gsc_realm() == Some(sim::script::Realm::Iw4)
+        if world.lock().gsc_realm() == Some(sim::script::Realm::Iw4)
             && let Err(error) = world
-                .0
+                .lock()
                 .persistent_data_mut()
                 .admit_temporary(bot.id, bot.account)
         {
@@ -286,7 +286,7 @@ fn apply_bot_tp(
     let Some(world) = world else {
         return;
     };
-    let snapshot = world.0.snapshot(Tick(0));
+    let snapshot = world.lock().snapshot(Tick(0));
     let local_ps = snapshot
         .meta
         .for_client(local.0)
@@ -391,12 +391,17 @@ fn think_bots(mut p: ThinkBots) {
         return;
     }
 
+    let mut world = p.world.lock();
     // Last tick's published snapshot is already in the killcam archive;
     // rebuilding it here cost as much as the publish itself (~2.5 ms a tick).
+    // With the step on its worker thread the archive runs one tick behind
+    // (`step_authority`), and a snapshot a tick older still does for a bot.
     let last = Tick(p.clock.tick.saturating_sub(1));
     let snapshot = match p.archive.newest() {
-        Some(frame) if frame.tick == last => std::borrow::Cow::Borrowed(&frame.snapshot),
-        _ => std::borrow::Cow::Owned(p.world.0.snapshot(last)),
+        Some(frame) if last.0.saturating_sub(frame.tick.0) <= 1 => {
+            std::borrow::Cow::Borrowed(&frame.snapshot)
+        }
+        _ => std::borrow::Cow::Owned(world.snapshot(last)),
     };
     let fires = p.fire.drain();
     let mut budget = TraceBudget::new(TRACE_QUOTA);
@@ -446,7 +451,7 @@ fn think_bots(mut p: ThinkBots) {
                 ..playerstate_iw4::UserCmd::default()
             }
         } else if let Some(brain) = bot.brain.as_mut() {
-            let mut queried = Budgeted::new(&mut p.world.0, &mut budget);
+            let mut queried = Budgeted::new(&mut *world, &mut budget);
             let observe = bevy::log::info_span!(target: "iw4l", "bots", name = "observe").entered();
             let Some(obs) =
                 sensor::observe_focused(&snapshot, bot.id, &mut queried, brain.focus_target())
@@ -526,6 +531,7 @@ fn prepare_navigation(
     mut nav: ResMut<BotNav>,
     mut ready: ResMut<BotNavigationReady>,
     load: Option<Res<assets::MapLoadProcess>>,
+    mut last: Local<Option<frame::ReadinessState>>,
 ) {
     ready.0 = frame::WorldReadiness::new(*generation, frame::ReadinessState::Pending);
     if !matches!(*role, RuntimeRole::Listen | RuntimeRole::Dedicated) {
@@ -538,9 +544,18 @@ fn prepare_navigation(
     let Some(world) = world else {
         return;
     };
-    if refresh_nav(&world.0, &mut nav, load.as_deref()) {
+    // A step in flight means the match is running on content already baked:
+    // keep the last frame's answer rather than wait for the step.
+    let Some(world) = world.try_lock() else {
+        if let Some(state) = *last {
+            ready.0.state = state;
+        }
+        return;
+    };
+    if refresh_nav(&world, &mut nav, load.as_deref()) {
         ready.0.state = frame::ReadinessState::Ready;
     }
+    *last = Some(ready.0.state);
 }
 
 fn refresh_nav(world: &SimWorld, nav: &mut BotNav, load: Option<&assets::MapLoadProcess>) -> bool {

@@ -385,10 +385,15 @@ pub fn arm_listen_prediction(
     let Some(authority) = authority else {
         return;
     };
-    if !listen_prediction_needs_content(&prediction.0, &authority.0) {
+    // Content only changes while the match loads, when no step runs; a frame
+    // with a step in flight has nothing to arm.
+    let Some(authority) = authority.try_lock() else {
+        return;
+    };
+    if !listen_prediction_needs_content(&prediction.0, &authority) {
         return;
     }
-    prediction.0.arm_from_content(&authority.0);
+    prediction.0.arm_from_content(&authority);
 }
 
 pub fn advance_cls_realtime(mut cls: ResMut<ClientRealtime>, time: Res<Time<Real>>) {

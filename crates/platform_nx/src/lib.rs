@@ -16,6 +16,8 @@ unsafe extern "C" {
     fn appletSetMediaPlaybackState(state: bool) -> u32;
     fn svcSetThreadCoreMask(handle: u32, preferred_core: i32, affinity_mask: u32) -> u32;
     fn svcGetCurrentProcessorNumber() -> u32;
+    fn envGetMainThreadHandle() -> u32;
+    fn svcGetThreadCoreMask(core: *mut i32, mask: *mut u64, handle: u32) -> u32;
     fn clkrstInitialize() -> u32;
     fn clkrstExit();
     fn clkrstOpenSession(session: *mut ClkrstSession, module: u32, unk: u32) -> u32;
@@ -105,11 +107,52 @@ unsafe extern "C" fn __wrap_threadCreate(
     let moved = if cpuid == DEFAULT_CORE { 2 } else { cpuid };
     // SAFETY: arguments forwarded unchanged apart from the core.
     let rc = unsafe { __real_threadCreate(t, entry, arg, stack_mem, stack_sz, prio, moved) };
+    if rc == 0 {
+        // SAFETY: libnx `Thread` starts with its kernel handle, set on success.
+        let handle = unsafe { *(t as *const u32) };
+        if let Ok(mut threads) = THREADS.lock()
+            && !threads.contains(&handle)
+        {
+            threads.push(handle);
+        }
+    }
     breadcrumb(&format!(
         "threadCreate: cpuid={cpuid} -> {moved} prio={prio:#x} stack={}K rc={rc:#x}",
         stack_sz >> 10
     ));
     rc
+}
+
+/// Kernel handles of every thread `threadCreate` made, for `core_ticks`.
+static THREADS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// Kernel ticks (19.2 MHz) this process's threads have run, by each thread's
+/// preferred core 0..3, and the first failing SVC's rc (0 if none).
+// ponytail: a thread's whole run time goes to its current preferred core (the
+// per-core `ThreadTickCount` subtype failed on hardware); a closed thread's
+// handle drops out or gets reused. Fine for in-match windows.
+pub fn core_ticks() -> ([u64; 3], u32) {
+    const INFO_THREAD_TICK_COUNT: u32 = 25;
+    let mut handles = THREADS.lock().map(|t| t.clone()).unwrap_or_default();
+    // SAFETY: plain FFI; libnx sets the main thread handle before main.
+    handles.push(unsafe { envGetMainThreadHandle() });
+    let (mut out, mut err) = ([0u64; 3], 0);
+    for handle in handles {
+        let (mut ticks, mut core, mut mask) = (0u64, 0i32, 0u64);
+        // SAFETY: plain SVCs; a stale handle returns an error, skipped.
+        let rc = unsafe {
+            match svcGetInfo(&mut ticks, INFO_THREAD_TICK_COUNT, handle, u64::MAX) {
+                0 => svcGetThreadCoreMask(&mut core, &mut mask, handle),
+                rc => rc,
+            }
+        };
+        match out.get_mut(core as usize) {
+            Some(total) if rc == 0 => *total += ticks,
+            _ if err == 0 => err = rc,
+            _ => {}
+        }
+    }
+    (out, err)
 }
 
 /// newlib `struct mallinfo` (`malloc.h`), all `size_t`.

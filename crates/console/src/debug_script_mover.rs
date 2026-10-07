@@ -52,7 +52,7 @@ pub(crate) fn route_debug_script_mover_commands(
                 continue;
             }
         };
-        if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+        if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
             echo(
                 "rotatevelocity: cheats are off".into(),
                 &mut console,

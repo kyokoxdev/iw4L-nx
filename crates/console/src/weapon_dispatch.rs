@@ -163,7 +163,7 @@ pub(crate) fn route_weapon_commands(
 
     for cmd in events.read() {
         if matches!(cmd.name.as_str(), "give" | "attach")
-            && authority.as_ref().is_some_and(|a| !a.0.cheats_enabled())
+            && authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled())
         {
             echo(
                 format!("{}: cheats are off", cmd.name),

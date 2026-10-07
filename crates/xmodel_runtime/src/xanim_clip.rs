@@ -20,11 +20,30 @@ pub struct RawXAnimParts {
 
     pub bone_count: [u8; 10],
     pub framerate: f32,
-    pub names: Vec<String>,
+    pub names: Vec<std::sync::Arc<str>>,
     pub notifies: Vec<ClipNotify>,
     pub indices: Vec<u16>,
 
     pub delta_trans: Option<RawDeltaTrans>,
+}
+
+/// Shared copy of a bone name. Thousands of anims name the same few hundred
+/// bones, and each decoded clip names them again; one allocation per distinct
+/// name keeps hundreds of thousands of tiny blocks off the heap, which newlib
+/// on Switch is slow to fill and slower to free at match teardown.
+// ponytail: process-wide and never pruned; distinct bone names stay in the low
+// thousands across every zone, so it is a few hundred KB at most.
+pub fn intern_bone_name(name: &str) -> std::sync::Arc<str> {
+    static NAMES: std::sync::Mutex<Option<std::collections::HashSet<std::sync::Arc<str>>>> =
+        std::sync::Mutex::new(None);
+    let mut names = NAMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let names = names.get_or_insert_default();
+    if let Some(shared) = names.get(name) {
+        return shared.clone();
+    }
+    let shared: std::sync::Arc<str> = name.into();
+    names.insert(shared.clone());
+    shared
 }
 
 #[derive(Debug, Clone, Default)]
@@ -108,7 +127,7 @@ pub enum Translation {
 
 #[derive(Debug, Clone)]
 pub struct Track {
-    pub name: String,
+    pub name: std::sync::Arc<str>,
     pub rotation: Rotation,
     pub translation: Translation,
 }
@@ -651,5 +670,16 @@ impl<'a> Cursor<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn interned_bone_names_share_one_allocation() {
+        let a = super::intern_bone_name("j_shoulder_le");
+        let b = super::intern_bone_name(&String::from("j_shoulder_le"));
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        assert!(!std::sync::Arc::ptr_eq(&a, &super::intern_bone_name("j_shoulder_ri")));
     }
 }

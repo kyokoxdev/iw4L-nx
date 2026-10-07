@@ -165,7 +165,7 @@ pub(super) fn state_dump_body(
     audio: Option<&str>,
 ) -> String {
     let authority_snapshot = match (authority_clock, authority) {
-        (Some(clock), Some(world)) => format!("{:#?}", world.0.snapshot(sim::Tick(clock.tick))),
+        (Some(clock), Some(world)) => format!("{:#?}", world.lock().snapshot(sim::Tick(clock.tick))),
         (None, Some(_)) => "Unavailable { reason: \"AuthorityClock resource absent\" }".to_owned(),
         (Some(_), None) => "Unavailable { reason: \"AuthorityWorld resource absent\" }".to_owned(),
         (None, None) => {
@@ -183,12 +183,12 @@ pub(super) fn state_dump_body(
     let hitvol = match authority {
         Some(world) => {
             let mut out = String::from("[hitvol]\n");
-            for line in hitvol_report(&world.0) {
+            for line in hitvol_report(&world.lock()) {
                 out.push_str(&line);
                 out.push('\n');
             }
             out.push_str("rows =\n");
-            for row in world.0.hitvol_dump() {
+            for row in world.lock().hitvol_dump() {
                 out.push_str(&format!("  {row:?}\n"));
             }
             out

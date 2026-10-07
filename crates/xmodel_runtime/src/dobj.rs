@@ -312,7 +312,7 @@ impl DObj {
         }
         clip.tracks
             .iter()
-            .map(|track| first_by_name.get(track.name.as_str()).copied())
+            .map(|track| first_by_name.get(&*track.name).copied())
             .collect()
     }
 

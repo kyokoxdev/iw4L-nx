@@ -20,9 +20,12 @@ bevy-trace = ["bevy/trace", "bevy/trace_chrome"]
 # The same spans summed in-process and logged every few seconds: the Switch
 # build's profiler (`span_profile.rs`). `bevy/debug` keeps system names;
 # without it every system span reads "<Enable the debug feature ...>".
-span-profile = ["bevy/trace", "bevy/debug"]
+# `profiling` turns wgpu-core's `profiling::scope!`s (Queue::submit, present,
+# render pass recording) into spans, splitting the graphics layer's time.
+span-profile = ["bevy/trace", "bevy/debug", "dep:profiling"]
 
 [dependencies]
+profiling = { version = "1", optional = true, features = ["profile-with-tracing"] }
 bevy.workspace = true
 asset_audio.workspace = true
 asset_core.workspace = true

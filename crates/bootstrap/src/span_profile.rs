@@ -6,6 +6,12 @@
 //! a schedule's time includes its systems'; systems on different threads
 //! overlap, so the column does not add up to the frame.
 //!
+//! A second line, `span heap:`, ranks spans by heap bytes they left live (their
+//! thread's allocations minus its frees, `diag::thread_net_alloc_bytes`): a
+//! system that keeps a positive row window after window is what grows the heap.
+//! It ends with the spans making the most allocations per frame: on Switch each
+//! one goes through newlib's locked malloc, so churn costs frame time.
+//!
 //! The Switch has no profiler that reaches a homebrew process and an SD card
 //! too slow for a Chrome trace; this is what answers "which system" there.
 //! Feature `span-profile`: the subscriber itself costs a few ms a frame.
@@ -27,8 +33,9 @@ const TOP: usize = 90;
 /// The span `SubApp::update` opens around the main app's schedule: one per frame.
 const FRAME_SPAN: &str = "main app";
 
-/// The default log filter, plus Bevy's spans: they are `info`.
-pub const FILTER: &str = "warn,iw4l=info,bevy_ecs=info,bevy_app=info,bevy_render=info";
+/// The default log filter, plus Bevy's and wgpu-core's spans: they are `info`.
+pub const FILTER: &str =
+    "warn,iw4l=info,bevy_ecs=info,bevy_app=info,bevy_render=info,wgpu_core=info";
 
 pub fn layer(_: &mut bevy::app::App) -> Option<BoxedLayer> {
     Some(Box::new(SpanProfile))
@@ -38,7 +45,7 @@ struct SpanProfile;
 
 /// The span's interned name, fixed at creation: `system sim::step`, `schedule Update`.
 struct Name(usize);
-struct Entered(Instant);
+struct Entered(Instant, i64, u64);
 
 /// Interned once per span creation, so a span exit only adds to a slot:
 /// hashing and cloning the name on every exit cost more than many systems.
@@ -47,6 +54,10 @@ struct Totals {
     ids: HashMap<String, usize>,
     names: Vec<String>,
     by_id: Vec<(Duration, u32)>,
+    /// Net heap bytes each span left live this window.
+    net: Vec<i64>,
+    /// Allocations each span made this window.
+    allocs: Vec<u64>,
     frame_id: Option<usize>,
     frames: u32,
     since: Option<Instant>,
@@ -64,6 +75,8 @@ impl Totals {
         self.ids.insert(name.clone(), id);
         self.names.push(name);
         self.by_id.push(Default::default());
+        self.net.push(0);
+        self.allocs.push(0);
         id
     }
 }
@@ -113,16 +126,20 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
 
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
-            span.extensions_mut().replace(Entered(Instant::now()));
+            let net = diag::thread_net_alloc_bytes().unwrap_or(0);
+            let allocs = diag::thread_alloc_count().unwrap_or(0);
+            span.extensions_mut().replace(Entered(Instant::now(), net, allocs));
         }
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         let now = Instant::now();
-        let report = {
+        let net = diag::thread_net_alloc_bytes().unwrap_or(0);
+        let allocs = diag::thread_alloc_count().unwrap_or(0);
+        let (report, heap) = {
             let extensions = span.extensions();
-            let (Some(&Name(name)), Some(Entered(at))) =
+            let (Some(&Name(name)), Some(Entered(at, net_at, allocs_at))) =
                 (extensions.get::<Name>(), extensions.get::<Entered>())
             else {
                 return;
@@ -136,6 +153,8 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
             let entry = &mut totals.by_id[name];
             entry.0 += now - *at;
             entry.1 += 1;
+            totals.net[name] += net - net_at;
+            totals.allocs[name] += allocs.saturating_sub(*allocs_at);
             if totals.frame_id != Some(name) {
                 return;
             }
@@ -144,14 +163,17 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for SpanProfile {
             if now - since < WINDOW {
                 return;
             }
-            let report = render(totals, now - since);
+            let report = (render(totals, now - since), render_heap(totals));
             totals.by_id.fill(Default::default());
+            totals.net.fill(0);
+            totals.allocs.fill(0);
             totals.frames = 0;
             totals.since = Some(now);
             report
         };
         // Logged with the lock released: the log writer may itself be traced.
         diag::info!(World, "{report}");
+        diag::info!(World, "{heap}");
     }
 }
 
@@ -191,6 +213,44 @@ fn render(totals: &Totals, wall: Duration) -> String {
             time.as_secs_f64() * 1000.0 / frames,
             *runs as f64 / frames
         ));
+    }
+    out
+}
+
+/// Systems ranked by heap bytes left live this window, most first, then the
+/// biggest net freers. Schedules are skipped: they repeat their systems' bytes.
+fn render_heap(totals: &Totals) -> String {
+    const ROWS: usize = 15;
+    let mut rows: Vec<_> = totals
+        .names
+        .iter()
+        .zip(&totals.net)
+        .filter(|(name, net)| !name.starts_with("schedule") && **net != 0)
+        .collect();
+    rows.sort_by_key(|(_, net)| std::cmp::Reverse(**net));
+    let live = diag::process_live_heap_bytes().unwrap_or(0);
+    let mut out = format!(
+        "span heap: live={}MB (KB left live per window; + grew, - freed)",
+        live >> 20
+    );
+    let kb = |net: i64| net as f64 / 1024.0;
+    for (name, net) in rows.iter().take(ROWS).filter(|(_, net)| **net > 0) {
+        out.push_str(&format!(" | {name}={:+.0}", kb(**net)));
+    }
+    for (name, net) in rows.iter().rev().take(5).filter(|(_, net)| **net < 0) {
+        out.push_str(&format!(" | {name}={:+.0}", kb(**net)));
+    }
+    let frames = totals.frames.max(1) as f64;
+    let mut churn: Vec<_> = totals
+        .names
+        .iter()
+        .zip(&totals.allocs)
+        .filter(|(name, n)| !name.starts_with("schedule") && **n > 0)
+        .collect();
+    churn.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    out.push_str(" || allocs/frame");
+    for (name, n) in churn.into_iter().take(ROWS) {
+        out.push_str(&format!(" | {name}={:.0}", *n as f64 / frames));
     }
     out
 }

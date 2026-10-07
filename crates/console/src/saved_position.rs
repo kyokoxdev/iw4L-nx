@@ -57,7 +57,7 @@ pub(crate) fn route_saved_position_commands(
                 echo(format!("{command}: nothing saved — use save first"));
                 return;
             };
-            if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+            if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                 echo(format!("{command}: cheats are off"));
                 return;
             }

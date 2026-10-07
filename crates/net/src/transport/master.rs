@@ -791,9 +791,9 @@ pub fn arm_master_bridge(
         let Some(descriptor) = descriptor.as_deref() else {
             return;
         };
+        let authority = authority.as_ref().map(|authority| authority.lock());
         let world = authority
-            .as_ref()
-            .map(|authority| &authority.0)
+            .as_deref()
             .or_else(|| prediction.as_ref().map(|prediction| prediction.0.world()));
         if world.is_none_or(|world| !world.has_world_clip()) {
             return;
@@ -1286,7 +1286,7 @@ fn apply_master_lifecycle(
             .as_ref()
             .map(|authority| {
                 authority
-                    .0
+                    .lock()
                     .clients_scoreboard()
                     .into_iter()
                     .map(|(client, _)| client.0)
@@ -1301,13 +1301,13 @@ fn apply_master_lifecycle(
                 let name = hub.as_ref().and_then(|hub| {
                     let client = hub.client_of_member(member_id)?;
                     let authority = authority.as_ref()?;
-                    Some(crate::client_name_string(&authority.0, client))
+                    Some(crate::client_name_string(&authority.lock(), client))
                 });
                 if let Some(hub) = hub.as_mut()
                     && let Some(client) = hub.retire_member(member_id)
                     && let Some(authority) = authority.as_mut()
                 {
-                    authority.0.retire_client(client);
+                    authority.lock().retire_client(client);
                 }
                 if let (Some(name), Some(pending)) = (name, pending_notify.as_mut()) {
                     pending.push_left(name);
@@ -1319,7 +1319,7 @@ fn apply_master_lifecycle(
                     && let Some(client) = hub.deny_member(member_id)
                     && let Some(authority) = authority.as_mut()
                 {
-                    authority.0.retire_client(client);
+                    authority.lock().retire_client(client);
                 }
             }
             MasterLifecycleFact::SessionClosed { .. } => {}
@@ -3316,7 +3316,7 @@ fn refresh_relay_authority_hello(
     let Some(authority) = authority else {
         return;
     };
-    let Some(hello) = handshake_for_match(Some(&authority.0), Some(descriptor)) else {
+    let Some(hello) = handshake_for_match(Some(&authority.lock()), Some(descriptor)) else {
         return;
     };
     let content = hello.content;

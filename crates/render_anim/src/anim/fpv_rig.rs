@@ -605,7 +605,7 @@ impl PreparedFpvRig {
                     .clip
                     .tracks
                     .iter()
-                    .any(|track| track.name == "j_shoulder_le")
+                    .any(|track| &*track.name == "j_shoulder_le")
         };
         let full_weight = if self.combines_hands() {
             bound

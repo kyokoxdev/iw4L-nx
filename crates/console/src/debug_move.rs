@@ -153,7 +153,7 @@ pub(crate) fn route_debug_move_commands(
                         );
                         continue;
                     }
-                    if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                    if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                         echo("move: cheats are off".into(), &mut console, &mut line);
                         continue;
                     }
@@ -217,7 +217,7 @@ pub(crate) fn route_debug_move_commands(
                         );
                         continue;
                     }
-                    if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                    if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                         echo("look: cheats are off".into(), &mut console, &mut line);
                         continue;
                     }
@@ -271,7 +271,7 @@ pub(crate) fn route_debug_move_commands(
                     echo("usage: god".into(), &mut console, &mut line);
                     continue;
                 }
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo("god: cheats are off".into(), &mut console, &mut line);
                     continue;
                 }
@@ -307,7 +307,7 @@ pub(crate) fn route_debug_move_commands(
                     );
                     continue;
                 }
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo("kill: cheats are off".into(), &mut console, &mut line);
                     continue;
                 }
@@ -338,7 +338,7 @@ pub(crate) fn route_debug_move_commands(
                         continue;
                     }
                 };
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo(
                         "force_spawn: cheats are off".into(),
                         &mut console,
@@ -364,8 +364,7 @@ pub(crate) fn route_debug_move_commands(
                 if !cmd.background {
                     let life = authority
                         .as_ref()
-                        .and_then(|a| a.0.client_meta(local.0))
-                        .map(|m| m.life_sequence)
+                        .and_then(|a| a.lock().client_meta(local.0).map(|m| m.life_sequence))
                         .unwrap_or_default();
                     dispatch.wait_alive = Some((local.0, life));
                     dispatch.wait_alive_elapsed = 0.0;
@@ -402,7 +401,7 @@ pub(crate) fn route_debug_move_commands(
                     );
                     continue;
                 }
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo("damage: cheats are off".into(), &mut console, &mut line);
                     continue;
                 }
@@ -444,7 +443,7 @@ pub(crate) fn route_debug_move_commands(
                     );
                     continue;
                 }
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo("nudge: cheats are off".into(), &mut console, &mut line);
                     continue;
                 }
@@ -473,7 +472,7 @@ pub(crate) fn route_debug_move_commands(
                     );
                     continue;
                 };
-                authority.0.gate_nudge_origin(local.0, delta);
+                authority.lock().gate_nudge_origin(local.0, delta);
                 echo(
                     format!(
                         "nudge: authority origin += ({:.1} {:.1} {:.1})",
@@ -524,7 +523,7 @@ pub(crate) fn route_debug_move_commands(
                 _ => echo("usage: name [string]".into(), &mut console, &mut line),
             },
             "force_match_start" => {
-                if authority.as_ref().is_some_and(|a| !a.0.cheats_enabled()) {
+                if authority.as_ref().is_some_and(|a| !a.lock().cheats_enabled()) {
                     echo(
                         "force_match_start: cheats are off".into(),
                         &mut console,
@@ -540,7 +539,7 @@ pub(crate) fn route_debug_move_commands(
                     );
                     continue;
                 };
-                match world.0.phase() {
+                match world.lock().phase() {
                     MatchPhase::Playing => {
                         echo(
                             "force_match_start: already playing".into(),

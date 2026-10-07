@@ -121,26 +121,219 @@ static BACKING: std::alloc::System = std::alloc::System;
 
 pub struct ProcessCountingAllocator;
 
+/// Small blocks go through per-thread free lists on Switch only.
+const TCACHE: bool = cfg!(target_os = "horizon");
+
 unsafe impl GlobalAlloc for ProcessCountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size() as u64);
-        unsafe { BACKING.alloc(layout) }
+        match tcache::class(layout) {
+            Some(class) if TCACHE => unsafe { tcache::alloc(class) },
+            _ => unsafe { BACKING.alloc(layout) },
+        }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size() as u64);
-        unsafe { BACKING.alloc_zeroed(layout) }
+        match tcache::class(layout) {
+            Some(class) if TCACHE => unsafe {
+                let ptr = tcache::alloc(class);
+                if !ptr.is_null() {
+                    ptr.write_bytes(0, layout.size());
+                }
+                ptr
+            },
+            _ => unsafe { BACKING.alloc_zeroed(layout) },
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         record_dealloc(layout.size() as u64);
-        unsafe { BACKING.dealloc(ptr, layout) }
+        match tcache::class(layout) {
+            Some(class) if TCACHE => unsafe { tcache::dealloc(ptr, class) },
+            _ => unsafe { BACKING.dealloc(ptr, layout) },
+        }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         record_alloc(new_size as u64);
         record_dealloc(layout.size() as u64);
-        unsafe { BACKING.realloc(ptr, layout, new_size) }
+        // SAFETY: `GlobalAlloc::realloc` contract: `new_size` fits `layout.align()`.
+        let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
+        match (tcache::class(layout), tcache::class(new_layout)) {
+            (None, None) => unsafe { BACKING.realloc(ptr, layout, new_size) },
+            _ if !TCACHE => unsafe { BACKING.realloc(ptr, layout, new_size) },
+            // Either side is a cached class: its block must come from (and go
+            // back to) the class lists, so move instead of resizing in place.
+            (old, new) => unsafe {
+                let moved = match new {
+                    Some(class) => tcache::alloc(class),
+                    None => BACKING.alloc(new_layout),
+                };
+                if !moved.is_null() {
+                    moved.copy_from_nonoverlapping(ptr, layout.size().min(new_size));
+                    match old {
+                        Some(class) => tcache::dealloc(ptr, class),
+                        None => BACKING.dealloc(ptr, layout),
+                    }
+                }
+                moved
+            },
+        }
+    }
+}
+
+/// Per-thread free lists of small blocks in front of newlib's malloc. newlib
+/// takes one process-wide lock per call and keeps its large bins sorted on
+/// free, so with a fragmented match heap every small alloc/free from the main,
+/// render and pool threads queued on that lock and walked bins. A cached block
+/// is a whole malloc'd block of its class size, so any thread may cache it.
+mod tcache {
+    use std::alloc::{GlobalAlloc, Layout};
+    use std::cell::Cell;
+    use std::ptr::null_mut;
+
+    use super::BACKING;
+
+    const STEP: usize = 16;
+    const MAX: usize = 512;
+    const CLASSES: usize = MAX / STEP;
+    // ponytail: fixed refill/cap, and an exiting thread strands its lists
+    // (at most CAP blocks a class); hand them back on thread exit if
+    // short-lived threads ever add up.
+    const REFILL: u32 = 16;
+    const CAP: u32 = 64;
+
+    #[derive(Clone, Copy)]
+    struct List {
+        head: *mut u8,
+        len: u32,
+    }
+
+    thread_local! {
+        static LISTS: [Cell<List>; CLASSES] =
+            const { [const { Cell::new(List { head: null_mut(), len: 0 }) }; CLASSES] };
+    }
+
+    /// The class serving `layout`, if it is small and at most malloc-aligned.
+    pub(super) fn class(layout: Layout) -> Option<usize> {
+        (layout.size() <= MAX && layout.align() <= STEP)
+            .then(|| layout.size().max(1).div_ceil(STEP) - 1)
+    }
+
+    fn block(class: usize) -> Layout {
+        // SAFETY: a nonzero multiple of 16, aligned 16.
+        unsafe { Layout::from_size_align_unchecked((class + 1) * STEP, STEP) }
+    }
+
+    /// Runs `f` under one hold of newlib's malloc lock (recursive, so the
+    /// mallocs and frees inside take it again for free).
+    fn locked<R>(f: impl FnOnce() -> R) -> R {
+        #[cfg(target_os = "horizon")]
+        unsafe extern "C" {
+            fn __malloc_lock(reent: *mut core::ffi::c_void);
+            fn __malloc_unlock(reent: *mut core::ffi::c_void);
+        }
+        #[cfg(target_os = "horizon")]
+        unsafe {
+            __malloc_lock(null_mut())
+        };
+        let out = f();
+        #[cfg(target_os = "horizon")]
+        unsafe {
+            __malloc_unlock(null_mut())
+        };
+        out
+    }
+
+    unsafe fn pop(list: &mut List) -> *mut u8 {
+        let head = list.head;
+        if !head.is_null() {
+            list.head = unsafe { head.cast::<*mut u8>().read() };
+            list.len -= 1;
+        }
+        head
+    }
+
+    unsafe fn push(list: &mut List, ptr: *mut u8) {
+        unsafe { ptr.cast::<*mut u8>().write(list.head) };
+        list.head = ptr;
+        list.len += 1;
+    }
+
+    /// SAFETY: `GlobalAlloc::alloc` contract, for a layout of `class`.
+    pub(super) unsafe fn alloc(class: usize) -> *mut u8 {
+        let cached = LISTS.try_with(|lists| {
+            let mut list = lists[class].get();
+            if list.head.is_null() {
+                locked(|| {
+                    for _ in 0..REFILL {
+                        let ptr = unsafe { BACKING.alloc(block(class)) };
+                        if ptr.is_null() {
+                            break;
+                        }
+                        unsafe { push(&mut list, ptr) };
+                    }
+                });
+            }
+            let ptr = unsafe { pop(&mut list) };
+            lists[class].set(list);
+            ptr
+        });
+        match cached {
+            Ok(ptr) if !ptr.is_null() => ptr,
+            // No TLS (thread start/exit) or out of memory: one plain block.
+            _ => unsafe { BACKING.alloc(block(class)) },
+        }
+    }
+
+    /// SAFETY: `GlobalAlloc::dealloc` contract, for a layout of `class`.
+    pub(super) unsafe fn dealloc(ptr: *mut u8, class: usize) {
+        let cached = LISTS.try_with(|lists| {
+            let mut list = lists[class].get();
+            unsafe { push(&mut list, ptr) };
+            if list.len > CAP {
+                locked(|| {
+                    while list.len > CAP / 2 {
+                        unsafe { BACKING.dealloc(pop(&mut list), block(class)) };
+                    }
+                });
+            }
+            lists[class].set(list);
+        });
+        if cached.is_err() {
+            unsafe { BACKING.dealloc(ptr, block(class)) };
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn classes_reuse_and_spill() {
+            let at = |size, align| class(Layout::from_size_align(size, align).unwrap());
+            assert_eq!((at(1, 1), at(16, 8), at(17, 8), at(512, 16)), (Some(0), Some(0), Some(1), Some(31)));
+            assert_eq!((at(513, 8), at(64, 32)), (None, None));
+
+            unsafe {
+                // Freed blocks come back LIFO, whole class size writable.
+                let a = alloc(3);
+                a.write_bytes(0xab, 64);
+                dealloc(a, 3);
+                assert_eq!(alloc(3), a);
+                dealloc(a, 3);
+
+                // Past CAP the list spills back to malloc down to CAP/2.
+                let blocks: Vec<_> = (0..CAP * 2).map(|_| alloc(5)).collect();
+                for &ptr in &blocks {
+                    ptr.write_bytes(0xcd, 96);
+                    dealloc(ptr, 5);
+                }
+                let len = LISTS.with(|lists| lists[5].get().len);
+                assert!(len > CAP / 2 && len <= CAP, "len {len}");
+            }
+        }
     }
 }
 
@@ -187,6 +380,11 @@ pub fn thread_net_alloc_bytes() -> Option<i64> {
     }
     let s = slot();
     Some(s.alloc_bytes.load(Ordering::Relaxed) as i64 - s.dealloc_bytes.load(Ordering::Relaxed) as i64)
+}
+
+/// Allocations this thread has made so far, for per-span churn.
+pub fn thread_alloc_count() -> Option<u64> {
+    counting_enabled().then(|| slot().alloc_count.load(Ordering::Relaxed))
 }
 
 pub fn process_allocation_slots_used() -> usize {

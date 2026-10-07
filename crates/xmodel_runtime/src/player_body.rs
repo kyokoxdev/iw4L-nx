@@ -163,11 +163,11 @@ pub fn overlay_legs_clip(legs: &crate::AnimClip, torso: &crate::AnimClip) -> cra
     let names: HashSet<&str> = torso
         .tracks
         .iter()
-        .map(|track| track.name.as_str())
+        .map(|track| &*track.name)
         .collect();
     let mut overlayed = legs.clone();
     overlayed
         .tracks
-        .retain(|track| !names.contains(track.name.as_str()));
+        .retain(|track| !names.contains(&*track.name));
     overlayed
 }

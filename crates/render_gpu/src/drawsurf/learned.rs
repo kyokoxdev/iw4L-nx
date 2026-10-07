@@ -54,10 +54,18 @@ impl<const N: usize> Learned<N> {
         assets::load_pool()
             .spawn(async move {
                 let _write = self.write.lock();
+                // Union with disk: a boot read that failed left the state
+                // empty, and writing it alone would drop every learned key.
+                let disk = assets::cache_get(KIND, self.name).unwrap_or_default();
                 let bytes = self
                     .state()
                     .lock()
-                    .map(|s| s.bytes.clone())
+                    .map(|mut s| {
+                        for record in disk.chunks_exact(N) {
+                            s.absorb(record.try_into().expect("chunk is N bytes"));
+                        }
+                        s.bytes.clone()
+                    })
                     .unwrap_or_default();
                 if let Err(error) = assets::cache_put(KIND, self.name, &bytes) {
                     diag::warn!(World, "learned pipelines {}: {error}", self.name);

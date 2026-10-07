@@ -82,7 +82,7 @@ pub fn validate_remote_tracks(
         .tracks
         .iter()
         .take(8)
-        .map(|track| track.name.as_str())
+        .map(|track| &*track.name)
         .collect::<Vec<_>>()
         .join(",");
     let bones = body
