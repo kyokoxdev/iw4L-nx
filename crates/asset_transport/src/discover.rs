@@ -105,8 +105,7 @@ pub fn game_install_root(picked: &Path) -> PathBuf {
 }
 
 pub fn folder_holds_game(folder: &Path, game: crate::ZoneGame) -> bool {
-    // Switch build is MW2-only; other titles' zones are never on the SD card.
-    if cfg!(target_os = "horizon") && game != crate::ZoneGame::Iw4 {
+    if !game.enabled() {
         return false;
     }
     let version = zone_version(game);
@@ -305,13 +304,14 @@ fn files_under(roots: Vec<PathBuf>) -> impl Iterator<Item = Result<PathBuf, Stri
 }
 
 pub fn zone_game_for_path(path: &Path) -> Option<crate::ZoneGame> {
-    match peek_zone_version(path)? {
-        IW4_ZONE_VERSION => Some(crate::ZoneGame::Iw4),
-        T5_ZONE_VERSION => Some(crate::ZoneGame::T5),
-        IW5_ZONE_VERSION => Some(crate::ZoneGame::Iw5),
-        T6_ZONE_VERSION => Some(crate::ZoneGame::T6),
-        _ => None,
-    }
+    let game = match peek_zone_version(path)? {
+        IW4_ZONE_VERSION => crate::ZoneGame::Iw4,
+        T5_ZONE_VERSION => crate::ZoneGame::T5,
+        IW5_ZONE_VERSION => crate::ZoneGame::Iw5,
+        T6_ZONE_VERSION => crate::ZoneGame::T6,
+        _ => return None,
+    };
+    game.enabled().then_some(game)
 }
 
 pub fn find_zone_file_under(search_root: &Path, zone: &str) -> Result<ZoneFile, String> {
@@ -337,8 +337,12 @@ pub fn find_zone_file_under(search_root: &Path, zone: &str) -> Result<ZoneFile, 
         }
         match peek_zone_version(&path) {
             Some(IW4_ZONE_VERSION) if iw4.is_none() => iw4 = Some(path),
-            Some(T5_ZONE_VERSION) if t5.is_none() => t5 = Some(path),
-            Some(IW5_ZONE_VERSION) if iw5.is_none() => iw5 = Some(path),
+            Some(T5_ZONE_VERSION) if t5.is_none() && crate::ZoneGame::T5.enabled() => {
+                t5 = Some(path)
+            }
+            Some(IW5_ZONE_VERSION) if iw5.is_none() && crate::ZoneGame::Iw5.enabled() => {
+                iw5 = Some(path)
+            }
             Some(v) if other.is_none() => other = Some((path, v)),
             None if other.is_none() => other = Some((path, 0)),
             _ => {}

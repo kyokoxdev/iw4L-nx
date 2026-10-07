@@ -195,7 +195,7 @@ fn sound_sources(games: &GamesRoot, map: &Path) -> (Vec<SoundSource>, Vec<SoundS
         runtime("common_mp", Merge::Override, Absent::Gap),
         runtime("localized_common_mp", Merge::Override, Absent::Gap),
     ];
-    let after_map = vec![
+    let mut after_map = vec![
         donor(
             AssetNamespace::Iw5,
             "code_post_gfx_mp",
@@ -232,6 +232,7 @@ fn sound_sources(games: &GamesRoot, map: &Path) -> (Vec<SoundSource>, Vec<SoundS
             fastfile_t6::ZONE_VERSION_PC,
         ),
     ];
+    after_map.retain(|source| source.namespace.enabled());
     (before_map, after_map)
 }
 

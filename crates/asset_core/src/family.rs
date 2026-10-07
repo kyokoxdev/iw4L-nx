@@ -17,6 +17,11 @@ impl FamilyId {
             Self::T6 => "t6",
         }
     }
+    /// Families this build reads. Switch is MW2-only: other titles' zones are
+    /// never probed, classified or walked there.
+    pub const fn enabled(self) -> bool {
+        !cfg!(target_os = "horizon") || matches!(self, Self::Iw4)
+    }
     pub const fn prefix(self) -> &'static str {
         self.as_str()
     }

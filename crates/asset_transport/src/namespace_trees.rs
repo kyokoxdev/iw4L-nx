@@ -36,7 +36,10 @@ impl NamespaceTrees {
             AssetNamespace::T5,
             AssetNamespace::Iw5,
             AssetNamespace::T6,
-        ] {
+        ]
+        .into_iter()
+        .filter(|ns| ns.enabled())
+        {
             let version = zone_version(zone_game_of(ns));
             if let Ok(found) = find_zone_file_version(root, "common_mp", version) {
                 *trees.slot_mut(ns) = Some(NamespaceTree::from_anchor(found.path));
@@ -89,6 +92,7 @@ impl NamespaceTrees {
             AssetNamespace::T6,
         ]
         .into_iter()
+        .filter(|ns| ns.enabled())
         .map(|ns| match self.get(ns) {
             Some(tree) => format!(
                 "namespace tree {}: main={} anchor={}",

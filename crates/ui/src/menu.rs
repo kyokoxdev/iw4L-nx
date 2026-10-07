@@ -159,12 +159,20 @@ pub fn install_frontend_menus(catalog: &mut asset_game::MenuCatalog) -> Result<(
             game_folders.handlers.action = vec![asset_game::MenuEvent::Script(
                 "play mouse_click; close self; open options_game_folders;".into(),
             )];
+            // Switch is MW2-only and offline: no other titles' folders, no
+            // community servers.
+            if cfg!(target_os = "horizon") {
+                game_folders.vis_exp = "0".into();
+            }
             let mut community_servers = game_folders.clone();
             menu.items.push(game_folders);
             community_servers.name = "community_servers_settings".into();
             community_servers.text_key = "Community Servers".into();
             community_servers.rect.y = 148.0;
-            community_servers.vis_exp = "op 38 s:75695f636f6d6d756e6974795f6d656e75 op 1".into();
+            if !cfg!(target_os = "horizon") {
+                community_servers.vis_exp =
+                    "op 38 s:75695f636f6d6d756e6974795f6d656e75 op 1".into();
+            }
             community_servers.handlers.action = vec![asset_game::MenuEvent::Script(
                 "play mouse_click; close self; open options_community_servers;".into(),
             )];
