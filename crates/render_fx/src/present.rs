@@ -91,10 +91,11 @@ pub struct FxElemInfoCache {
 
 impl FxElemInfoCache {
     pub fn sync(&mut self, catalog: &FxDefinitions) {
-        let first = catalog.names().next().map(str::to_owned);
-        if self.synced_len == catalog.len() && self.synced_first == first {
+        let first = catalog.names().next();
+        if self.synced_len == catalog.len() && self.synced_first.as_deref() == first {
             return;
         }
+        let first = first.map(str::to_owned);
         self.by_index = catalog
             .effects()
             .map(|effect| Arc::<[FxElemDefInfo]>::from(owned_elem_infos(effect)))

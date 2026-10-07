@@ -76,13 +76,24 @@ pub struct PlayerCorpsePool {
     pub slots: [PlayerCorpseSlot; MAX_CLIENT_CORPSES as usize],
 
     pub spawn_ring: u8,
+
+    /// Level time each slot's body was cloned, for [`CORPSE_LIFE_MS`]. Not on
+    /// the wire: a decoded pool reads 0 and never expires; the authority's
+    /// expiry reaches clients as the slot going empty.
+    pub born_ms: [i32; MAX_CLIENT_CORPSES as usize],
 }
+
+/// How long a body stays before it is removed. IW4 kept each of its 8 bodies
+/// until the ring reused the slot; on Switch every body is skinned, posed and
+/// drawn each frame.
+pub const CORPSE_LIFE_MS: i32 = 8_000;
 
 impl Default for PlayerCorpsePool {
     fn default() -> Self {
         Self {
             slots: [PlayerCorpseSlot::default(); MAX_CLIENT_CORPSES as usize],
             spawn_ring: 0,
+            born_ms: [0; MAX_CLIENT_CORPSES as usize],
         }
     }
 }
@@ -96,9 +107,20 @@ impl PlayerCorpsePool {
     }
 
     pub fn clear_entnum(&mut self, entnum: i32) {
-        for slot in &mut self.slots {
+        for (slot, born) in self.slots.iter_mut().zip(&mut self.born_ms) {
             if slot.entnum == entnum {
                 *slot = PlayerCorpseSlot::default();
+                *born = 0;
+            }
+        }
+    }
+
+    /// Empties every body older than [`CORPSE_LIFE_MS`] at `time_ms`.
+    pub fn expire(&mut self, time_ms: i32) {
+        for (slot, born) in self.slots.iter_mut().zip(&mut self.born_ms) {
+            if slot.occupied && *born != 0 && time_ms.saturating_sub(*born) >= CORPSE_LIFE_MS {
+                *slot = PlayerCorpseSlot::default();
+                *born = 0;
             }
         }
     }
@@ -179,6 +201,7 @@ pub(crate) fn occupy_player_clone(
             ..PlayerCorpseSlot::default()
         },
     );
+    pool.born_ms[usize::from(slot)] = time_ms.max(1);
     world.corpse_dobj_tree_install(entnum, ps.anim().legs_anim);
     slot
 }
@@ -239,6 +262,7 @@ fn is_ragdoll_tr_type(tr_type: i32) -> bool {
 }
 
 pub(crate) fn phase_run_corpse_move(world: &mut FrameWorld, time_ms: i32) {
+    world.corpses_mut().expire(time_ms);
     let n = world.corpses().slots.len();
     for i in 0..n {
         let slot = world.corpses().slots[i];
@@ -424,4 +448,28 @@ pub(crate) fn sync_corpse_info_player_anims(world: &mut FrameWorld, slot: usize)
     let slot = &mut world.corpses_mut().slots[slot];
     slot.anim.legs_anim = copied.legs_anim;
     slot.anim.torso_anim = copied.torso_anim;
+}
+
+#[cfg(test)]
+mod life_tests {
+    use super::*;
+
+    #[test]
+    fn bodies_expire_after_life_and_decoded_pools_never_do() {
+        let mut pool = PlayerCorpsePool::default();
+        let entnum = pool.alloc_clone_entity();
+        let slot = pool.get_free([0.0; 3]);
+        pool.occupy(slot, entnum, PlayerCorpseSlot::default());
+        pool.born_ms[usize::from(slot)] = 1_000;
+        pool.expire(1_000 + CORPSE_LIFE_MS - 1);
+        assert!(pool.slots[usize::from(slot)].occupied);
+        pool.expire(1_000 + CORPSE_LIFE_MS);
+        assert!(!pool.slots[usize::from(slot)].occupied);
+
+        // Born unknown (a pool decoded off the wire): kept.
+        pool.occupy(slot, entnum, PlayerCorpseSlot::default());
+        pool.born_ms[usize::from(slot)] = 0;
+        pool.expire(i32::MAX);
+        assert!(pool.slots[usize::from(slot)].occupied);
+    }
 }

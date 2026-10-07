@@ -1,6 +1,8 @@
 mod alloc_count;
 pub mod exit;
 pub mod gap;
+#[cfg(target_os = "horizon")]
+mod sd_log;
 pub mod wgsl_dump;
 
 pub use alloc_count::{
@@ -203,6 +205,10 @@ pub fn init_log(artifacts_root: &Path) -> PathBuf {
         }
     }
 
+    #[cfg(target_os = "horizon")]
+    if let Some(file) = state.file.as_ref() {
+        sd_log::start(file);
+    }
     let _ = SINK.set(Mutex::new(state));
     path
 }
@@ -292,7 +298,13 @@ fn emit_raw(
         // One write per line: each write to the unbuffered file is an SD append.
         if cfg!(target_os = "horizon") {
             let line = format!("{:>8} {text}\n", now_ms(state.started));
-            let _ = file.write_all(line.as_bytes());
+            #[cfg(target_os = "horizon")]
+            let queued = sd_log::push(line.as_bytes(), lvl <= Level::Error);
+            #[cfg(not(target_os = "horizon"))]
+            let queued = false;
+            if !queued {
+                let _ = file.write_all(line.as_bytes());
+            }
         } else {
             let _ = writeln!(file, "{text}");
         }
@@ -372,6 +384,8 @@ pub fn flush() {
     {
         flush_collapsed(&mut state);
     }
+    #[cfg(target_os = "horizon")]
+    sd_log::flush();
 }
 
 pub fn announce_log_stdout(path: &Path, latest: Option<&Path>) {

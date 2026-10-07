@@ -699,9 +699,17 @@ impl FxDefinitions {
             .and_then(|index| self.defs.get(index))
     }
 
+    /// `def`'s slot, if it is one of this catalog's own defs. By address: the
+    /// FX tick asks per live effect per frame, and a by-name lookup cloned and
+    /// hashed the name each time.
     pub fn index_of(&self, def: &OwnedFxEffectDef) -> Option<usize> {
-        self.index_in(def.namespace, &def.name)
-            .filter(|&index| std::ptr::eq(&self.defs[index], def))
+        let offset =
+            (def as *const OwnedFxEffectDef as usize).checked_sub(self.defs.as_ptr() as usize)?;
+        let index = offset / std::mem::size_of::<OwnedFxEffectDef>().max(1);
+        self.defs
+            .get(index)
+            .filter(|slot| std::ptr::eq(*slot, def))
+            .map(|_| index)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {

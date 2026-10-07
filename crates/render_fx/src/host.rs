@@ -58,7 +58,10 @@ pub struct FxMarkDvars {
 impl Default for FxMarkDvars {
     fn default() -> Self {
         Self {
-            fx_marks: true,
+            // Bullet holes and blood splats off on Switch: each one is clipped
+            // into the world mesh on impact and drawn every frame after.
+            // `fx_marks 1` in the console turns them back on.
+            fx_marks: !cfg!(target_os = "horizon"),
             fx_marks_smodels: true,
             fx_marks_ents: true,
             fx_mark_profile: false,

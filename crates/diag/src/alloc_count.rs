@@ -124,11 +124,13 @@ static BACKING: std::alloc::System = std::alloc::System;
 /// Talc frees in O(1); it takes 16 MiB blocks from newlib and hands a block
 /// back once everything in it is freed.
 #[cfg(target_os = "horizon")]
-static BACKING: talc::TalcLock<nx_mutex::NxMutex, talc::source::GlobalAllocSource<std::alloc::System>> =
-    talc::TalcLock::new(talc::source::GlobalAllocSource::with_block_size(
-        std::alloc::System,
-        16 << 20,
-    ));
+static BACKING: talc::TalcLock<
+    nx_mutex::NxMutex,
+    talc::source::GlobalAllocSource<std::alloc::System>,
+> = talc::TalcLock::new(talc::source::GlobalAllocSource::with_block_size(
+    std::alloc::System,
+    16 << 20,
+));
 
 /// libnx's kernel-arbitrated mutex: no allocation, and a waiter sleeps
 /// instead of spinning against a holder on its own core.
