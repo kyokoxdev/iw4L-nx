@@ -921,7 +921,9 @@ pub(crate) fn reset_world_spawn_on_teardown(
                 .resource::<crate::prepare::scene::smodel_lighting::WorldSmodelLighting>()
                 .resource::<crate::prepare::scene::smodel_geom_cache::WorldStaticModelCache>()
                 .resource::<crate::prepare::scene::model_lighting_atlas::WorldModelLightingAtlas>()
-                .resource::<crate::prepare::scene::model_lighting_cache::WorldModelLightingCache>();
+                .resource::<crate::prepare::scene::model_lighting_cache::WorldModelLightingCache>()
+                .reset::<crate::assemble::drawsurf::MaterialGeneration>()
+                .reset::<crate::assemble::drawsurf::MaterialFrameInputs>();
         });
     });
 }
