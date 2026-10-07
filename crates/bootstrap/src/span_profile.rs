@@ -35,9 +35,10 @@ const TOP: usize = 160;
 /// The span `SubApp::update` opens around the main app's schedule: one per frame.
 const FRAME_SPAN: &str = "main app";
 
-/// The default log filter, plus Bevy's and wgpu-core's spans: they are `info`.
+/// The default log filter, plus Bevy's and wgpu-core's spans (they are `info`)
+/// and the GL backend's per-command replay timing.
 pub const FILTER: &str =
-    "warn,iw4l=info,bevy_ecs=info,bevy_app=info,bevy_render=info,wgpu_core=info";
+    "warn,iw4l=info,bevy_ecs=info,bevy_app=info,bevy_render=info,wgpu_core=info,wgpu_hal::gles::replay=info";
 
 pub fn layer(_: &mut bevy::app::App) -> Option<BoxedLayer> {
     Some(Box::new(SpanProfile))
