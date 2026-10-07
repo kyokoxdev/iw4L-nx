@@ -108,6 +108,9 @@ fn walk_t5_leftover_materials(
     seed: MaterialCatalog,
     report: &mut Vec<String>,
 ) -> MaterialCatalog {
+    if !asset_core::FamilyId::T5.enabled() {
+        return seed;
+    }
     let root = match games_root_from_env() {
         Ok(root) => root,
         Err(error) => {
@@ -556,6 +559,9 @@ pub(super) fn resolve_iw5_weapon_donor(
     runtime_common: Option<&Path>,
     report: &mut Vec<String>,
 ) -> Option<PathBuf> {
+    if !asset_core::FamilyId::Iw5.enabled() {
+        return None;
+    }
     let Ok(root) = games_root_from_env() else {
         report.push("iw5 weapons: IW4L_GAMES unset".into());
         return None;
@@ -701,6 +707,9 @@ pub(super) fn t5_weapon_common_prep(
     progress: &LoadProgress,
 ) -> T5CommonPrep {
     let mut report = Vec::new();
+    if !asset_core::FamilyId::T5.enabled() {
+        return T5CommonPrep::Skip(report);
+    }
     let root = match games_root_from_env() {
         Ok(root) => root,
         Err(error) => {
@@ -898,6 +907,9 @@ pub(super) fn walk_t6_weapon_bundle(
     Vec<String>,
 ) {
     let mut report = Vec::new();
+    if !asset_core::FamilyId::T6.enabled() {
+        return (WeaponBuild::default(), None, Vec::new(), report);
+    }
     let root = match games_root_from_env() {
         Ok(root) => root,
         Err(error) => {
@@ -1076,6 +1088,9 @@ pub(super) fn load_localized_strings_beside(
         .and_then(|zone| zone.path.parent()?.file_name()?.to_str().map(str::to_owned));
     let mut plan = Vec::new();
     for (namespace, version, names) in lanes {
+        if !namespace.enabled() {
+            continue;
+        }
         let found: Vec<_> = if matches!(
             namespace,
             asset_core::AssetNamespace::T5 | asset_core::AssetNamespace::T6
