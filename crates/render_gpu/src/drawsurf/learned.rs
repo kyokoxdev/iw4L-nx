@@ -91,3 +91,28 @@ impl<const N: usize> State<N> {
         new
     }
 }
+
+/// Bytes of a pass state in a record: both words, cull, alpha test.
+pub(super) const STATE_LEN: usize = 11;
+
+/// Every input `compile_packed_state` takes, so `decode_state` rebuilds the
+/// state exactly. None for an alpha func with no D3D raw value.
+pub(super) fn encode_state(state: render_material::CompiledPassState) -> Option<[u8; STATE_LEN]> {
+    let [word0, word1] = state.authored_words();
+    let alpha_test = match state.alpha_test() {
+        Some(test) => [u8::try_from(test.func.to_raw()?).ok()?, test.reference],
+        None => [0, 0],
+    };
+    let mut out = [0; STATE_LEN];
+    out[0..4].copy_from_slice(&word0.to_le_bytes());
+    out[4..8].copy_from_slice(&word1.to_le_bytes());
+    out[8..11].copy_from_slice(&[state.cull(), alpha_test[0], alpha_test[1]]);
+    Some(out)
+}
+
+pub(super) fn decode_state(bytes: &[u8; STATE_LEN]) -> render_material::CompiledPassState {
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let alpha_test = (bytes[9] != 0)
+        .then(|| d3d9_state::AlphaTest::from_raw(u32::from(bytes[9]), bytes[10]));
+    render_material::compile_packed_state([word(0), word(4)], alpha_test, bytes[8])
+}

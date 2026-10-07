@@ -37,6 +37,8 @@ pub struct FpvAssemblyTags {
 
 #[derive(Debug)]
 pub struct FpvAssembly {
+    pub family: crate::FpvFamilyConnection,
+    mesh_identity: u64,
     pub dobj: Arc<DObj>,
     pub parts: Vec<FpvAssemblyPart>,
     pub view_bone: usize,
@@ -170,6 +172,13 @@ impl FpvAssembly {
         jammed: bool,
         skeletons: &mut FpvSkeletons,
     ) -> Result<Self, FpvAssemblyError> {
+        if catalog.identity() == 0 {
+            return Err(FpvAssemblyError::Catalog("published mesh owner"));
+        }
+        let family = crate::FpvFamilyConnection::bind(catalog, mounts.gun, hands).ok_or(
+            FpvAssemblyError::Catalog("compatible gun and hands families"),
+        )?;
+        let hands = family.hands();
         let reticle_tags: Vec<String> = if jammed {
             EMP_RETICLE_TAGS
                 .iter()
@@ -180,6 +189,13 @@ impl FpvAssembly {
         };
         let gun_tags: Vec<String> = hide_tags.iter().chain(&reticle_tags).cloned().collect();
         let pose_of = |model: FpvMeshIndex| -> Result<&ModelPoseSrc, FpvAssemblyError> {
+            if model != hands
+                && catalog
+                    .get_at(model.order())
+                    .is_none_or(|entry| entry.namespace != family.family())
+            {
+                return Err(FpvAssemblyError::Catalog("native FPV component family"));
+            }
             catalog
                 .get_at(model.order())
                 .and_then(|entry| entry.skel.pose.as_ref())
@@ -188,7 +204,7 @@ impl FpvAssembly {
         let mut parts = vec![
             (hands, FpvPartRole::Hands, None),
             (
-                mounts.gun,
+                family.gun(),
                 FpvPartRole::Gun,
                 Some(Attach {
                     parent_model: 0,
@@ -298,6 +314,8 @@ impl FpvAssembly {
             })
             .collect();
         Ok(Self {
+            family,
+            mesh_identity: catalog.identity(),
             dobj,
             parts,
             view_bone,
@@ -309,15 +327,20 @@ impl FpvAssembly {
         })
     }
 
+    pub fn mesh_identity(&self) -> u64 {
+        self.mesh_identity
+    }
+
     pub fn compose_tracks(
         &self,
-        clip: usize,
+        clip_index: usize,
+        clip: &AnimClip,
         tracks: &FpvClipTracks,
     ) -> Option<Vec<Option<usize>>> {
         let tables: Vec<Option<&[u16]>> = self
             .parts
             .iter()
-            .map(|part| tracks.table(clip, part.model))
+            .map(|part| tracks.table(clip_index, clip, self.mesh_identity, part.model))
             .collect();
         let track_n = tables.iter().flatten().next()?.len();
         Some(
@@ -336,13 +359,49 @@ impl FpvAssembly {
 #[derive(Clone, Debug, Default)]
 pub struct FpvClipTracks {
     tables: HashMap<(usize, FpvMeshIndex), Arc<[u16]>>,
+    sources: HashMap<usize, FpvClipSource>,
+}
+
+#[derive(Clone, Debug)]
+struct FpvClipSource {
+    mesh_identity: u64,
+    clip: Arc<AnimClip>,
 }
 
 impl FpvClipTracks {
     pub const NONE: u16 = u16::MAX;
 
-    pub fn table(&self, clip: usize, model: FpvMeshIndex) -> Option<&[u16]> {
-        self.tables.get(&(clip, model)).map(|table| &table[..])
+    pub fn table(
+        &self,
+        clip_index: usize,
+        clip: &AnimClip,
+        mesh_identity: u64,
+        model: FpvMeshIndex,
+    ) -> Option<&[u16]> {
+        self.owns_clip(mesh_identity, clip_index, clip)
+            .then_some(())?;
+        self.tables
+            .get(&(clip_index, model))
+            .map(|tracks| &tracks[..])
+    }
+
+    pub fn owns_clip(&self, mesh_identity: u64, clip_index: usize, clip: &AnimClip) -> bool {
+        self.matches_clip(mesh_identity, clip_index, Some(clip))
+    }
+
+    pub fn matches_clip(
+        &self,
+        mesh_identity: u64,
+        clip_index: usize,
+        clip: Option<&AnimClip>,
+    ) -> bool {
+        match self.sources.get(&clip_index) {
+            Some(source) => {
+                source.mesh_identity == mesh_identity
+                    && clip.is_some_and(|clip| std::ptr::eq(source.clip.as_ref(), clip))
+            }
+            None => clip.is_none(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -357,10 +416,10 @@ impl FpvClipTracks {
         &mut self,
         catalog: &FpvMeshCatalog,
         clip_index: usize,
-        clip: &AnimClip,
+        clip: Arc<AnimClip>,
         model: FpvMeshIndex,
     ) {
-        if self.tables.contains_key(&(clip_index, model)) {
+        if catalog.identity() == 0 || self.tables.contains_key(&(clip_index, model)) {
             return;
         }
         let Some(pose) = catalog
@@ -385,6 +444,10 @@ impl FpvClipTracks {
                     .unwrap_or(Self::NONE)
             })
             .collect();
+        self.sources.entry(clip_index).or_insert(FpvClipSource {
+            mesh_identity: catalog.identity(),
+            clip,
+        });
         self.tables.insert((clip_index, model), table);
     }
 }

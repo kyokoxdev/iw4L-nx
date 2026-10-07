@@ -20,3 +20,7 @@ sim.workspace = true
 
 [lints]
 workspace = true
+
+# Community descriptor and self-update; none on Switch.
+[target.'cfg(not(target_os = "horizon"))'.dependencies]
+updater = { path = "../updater" }

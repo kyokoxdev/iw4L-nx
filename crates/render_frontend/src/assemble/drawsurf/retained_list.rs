@@ -99,6 +99,21 @@ const fn bsp_lane(kind: asset_world::CameraRangeKind) -> BspCameraLane {
 
 pub use render_frame::SmodelPretessRange;
 
+// The packed key holds only a 12-bit sort band; maps with more materials alias in it.
+fn world_surface_rank(
+    cull: Option<&crate::prepare::scene::world::WorldCull>,
+    surf: usize,
+    packed: u64,
+    catalog: &super::material_runtime::RuntimeMaterialCatalog,
+) -> u32 {
+    cull.and_then(|cull| cull.surface_materials.get(surf).copied().flatten())
+        .and_then(|id| catalog.ordinal_for_asset_id(id))
+        .map_or_else(
+            || u32::from(GfxDrawSurf::from_packed(packed).material_sorted_index()),
+            |ordinal| ordinal.get(),
+        )
+}
+
 fn with_catalog(
     key: u64,
     material_rank: u32,
@@ -119,13 +134,7 @@ fn with_catalog(
             render_material::MaterialDrawKey::new(key, material_rank),
         )
         .ok()
-        .map(|m| {
-            if m.namespace == asset_core::AssetNamespace::T5 && m.camera_region == 3 {
-                asset_iw4::CAMERA_REGION_NONE
-            } else {
-                m.camera_region
-            }
-        }),
+        .map(|material| material.draw_rules.colour_camera_region),
     }
 }
 
@@ -464,7 +473,7 @@ fn xmodel_lane_layout_hash(
     thermal: &super::thermal_body::ThermalBodySelection,
 ) -> u64 {
     let mut id = super::list::CONTENT_ID_SEED;
-    super::list::mix_content_id(&mut id, catalog.generation_id.0);
+    super::list::mix_content_id(&mut id, catalog.generation_id().get());
     super::list::mix_content_id(&mut id, xmodel.topology_revision);
     super::list::mix_content_id(&mut id, xmodel.draws.len() as u64);
     for draw in &xmodel.draws {
@@ -758,7 +767,7 @@ fn smodel_drawsurf_key(
     .packed
 }
 
-fn t5_smodel_camera_emits(
+fn smodel_colour_emits(
     pass: SmodelDestinationPass,
     catalog: &super::RuntimeMaterialCatalog,
     authored: Option<assets::MaterialIndex>,
@@ -768,13 +777,7 @@ fn t5_smodel_camera_emits(
     }
     authored
         .and_then(|id| catalog.derived(id))
-        .is_none_or(|material| {
-            material.namespace != asset_core::AssetNamespace::T5
-                || asset_material::t5_smodel_camera_emits(
-                    material.info_game_flags,
-                    material.camera_region,
-                )
-        })
+        .is_none_or(|material| material.draw_rules.smodel_colour_emits)
 }
 
 fn smodel_sun_shadow_emits(
@@ -1323,7 +1326,7 @@ fn expand_smodel_destination(
         return stats;
     };
     for &(surface, authored) in lod_surfs {
-        if !t5_smodel_camera_emits(source.pass, catalog, authored) {
+        if !smodel_colour_emits(source.pass, catalog, authored) {
             continue;
         }
         if !smodel_sun_shadow_emits(source.pass, catalog, authored) {
@@ -1419,7 +1422,7 @@ fn push_smodel_destination(
     out: &mut Vec<SmodelDestinationRecord>,
 ) -> SmodelExpandStats {
     let mut stats = SmodelExpandStats::default();
-    if !t5_smodel_camera_emits(source.pass, catalog, authored) {
+    if !smodel_colour_emits(source.pass, catalog, authored) {
         return stats;
     }
     if !smodel_sun_shadow_emits(source.pass, catalog, authored) {
@@ -2273,7 +2276,12 @@ fn emit_world_static_lane(
             }
         };
 
-        let world_rank = u32::from(GfxDrawSurf::from_packed(item.key).material_sorted_index());
+        let world_rank = world_surface_rank(
+            scene.and_then(|scene| scene.cull.as_ref()),
+            usize::from(item.surf),
+            item.key,
+            catalog,
+        );
         list.world_items.push(with_catalog(
             item.key,
             world_rank,
@@ -2521,7 +2529,7 @@ pub(crate) fn rebuild_static_draw_lane(
     let eye = prepared.as_ref().filter(|v| v.ready).map(|v| v.eye);
     let lod_args = lod_ramp.args();
     let eye_key = eye_lod_reuse_key(eye, lod_args);
-    let generation_hold = list.generation_id == runtime.catalog.generation_id
+    let generation_hold = list.generation_id == runtime.catalog.generation_id()
         && list.world_generation == world_generation;
     // Named phases for the `span-profile` layer; runs/frame give the rebuild rate.
     macro_rules! phase {
@@ -2538,7 +2546,7 @@ pub(crate) fn rebuild_static_draw_lane(
         generation_hold,
         !list.static_items.is_empty(),
     );
-    list.generation_id = runtime.catalog.generation_id;
+    list.generation_id = runtime.catalog.generation_id();
     list.world_generation = world_generation;
     if reuse {
         list.census.rebuild_skip = 1;
@@ -2827,7 +2835,7 @@ fn emit_world_sun_shadow_surf(
         .copied()
         .unwrap_or_default();
 
-    let world_rank = u32::from(GfxDrawSurf::from_packed(packed).material_sorted_index());
+    let world_rank = world_surface_rank(Some(cull), surf, packed, catalog);
     plan.items.push(with_catalog(
         packed,
         world_rank,
@@ -3046,7 +3054,7 @@ pub fn bake_sun_shadow_caster_plan(
     smodel_ids: &mut Vec<u16>,
 ) -> SunShadowCasterPlan {
     let mut plan = SunShadowCasterPlan {
-        generation_id: catalog.generation_id,
+        generation_id: catalog.generation_id(),
         ..Default::default()
     };
     let mut queues = SmodelBucketEmitQueues::default();

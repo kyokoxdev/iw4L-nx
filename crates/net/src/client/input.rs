@@ -64,6 +64,8 @@ pub struct ClientActionInput {
     pub pad_lockon: Option<u64>,
     pub pad_autoaim: Option<(u64, f32)>,
     pub pad_was_ads: bool,
+    pub use_reload_down: bool,
+    pub use_reload_over_item: Option<(i32, i32)>,
 }
 
 impl Default for ClientActionInput {
@@ -98,6 +100,8 @@ impl Default for ClientActionInput {
             pad_lockon: None,
             pad_autoaim: None,
             pad_was_ads: false,
+            use_reload_down: false,
+            use_reload_over_item: None,
         }
     }
 }

@@ -82,7 +82,7 @@ pub(super) struct ExactPipelineRegistry {
     discovered: Mutex<
         Vec<(
             super::colour_submit::ExactColourPipelineKey,
-            render_material::GfxPassStateBits,
+            render_material::CompiledPassState,
         )>,
     >,
 }
@@ -106,7 +106,7 @@ impl ExactPipelineRegistry {
     pub(super) fn discover(
         &self,
         key: super::colour_submit::ExactColourPipelineKey,
-        state: render_material::GfxPassStateBits,
+        state: render_material::CompiledPassState,
     ) {
         self.discovered
             .lock()
@@ -118,7 +118,7 @@ impl ExactPipelineRegistry {
         &mut self,
     ) -> Vec<(
         super::colour_submit::ExactColourPipelineKey,
-        render_material::GfxPassStateBits,
+        render_material::CompiledPassState,
     )> {
         std::mem::take(
             &mut *self

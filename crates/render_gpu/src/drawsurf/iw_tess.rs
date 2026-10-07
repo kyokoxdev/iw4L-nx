@@ -128,7 +128,7 @@ struct IwTessPipeline {
 struct IwTessPipelineKey {
     target: TextureFormat,
     samples: u32,
-    state_bits: Option<[u32; 2]>,
+    state: Option<render_material::CompiledPassState>,
 }
 
 impl SpecializedRenderPipeline for IwTessPipeline {
@@ -140,8 +140,8 @@ impl SpecializedRenderPipeline for IwTessPipeline {
             dst_factor: BlendFactor::OneMinusSrcAlpha,
             operation: BlendOperation::Add,
         };
-        let state = key.state_bits.map(|bits| {
-            crate::GfxPassState::from_state_bits(bits[0], bits[1])
+        let state = key.state.map(|bits| {
+            crate::GfxPassState::from_prepared(bits)
                 .apply_change_state_0_host(AlphaMode::Blend, false)
         });
         RenderPipelineDescriptor {
@@ -435,31 +435,30 @@ fn prepare_iw_tess(
 
 /// HUD material states play has drawn, specialized as soon as the view
 /// format is known so a match never compiles one (`super::learned`).
-static LEARNED_TESS: super::learned::Learned<9> = super::learned::Learned::new("iw-tess-v1");
+static LEARNED_TESS: super::learned::Learned<{ 1 + super::learned::STATE_LEN }> =
+    super::learned::Learned::new("iw-tess-v2");
 
 #[derive(Default)]
 struct LearnedTess {
     warmed: bevy::platform::collections::HashSet<TextureFormat>,
-    seen: bevy::platform::collections::HashSet<Option<[u32; 2]>>,
+    seen: bevy::platform::collections::HashSet<Option<render_material::CompiledPassState>>,
 }
 
-fn tess_record(bits: Option<[u32; 2]>) -> [u8; 9] {
-    let mut record = [0; 9];
-    if let Some([word0, word1]) = bits {
+fn tess_record(
+    state: Option<render_material::CompiledPassState>,
+) -> Option<[u8; 1 + super::learned::STATE_LEN]> {
+    let mut record = [0; 1 + super::learned::STATE_LEN];
+    if let Some(state) = state {
         record[0] = 1;
-        record[1..5].copy_from_slice(&word0.to_le_bytes());
-        record[5..9].copy_from_slice(&word1.to_le_bytes());
+        record[1..].copy_from_slice(&super::learned::encode_state(state)?);
     }
-    record
+    Some(record)
 }
 
-fn tess_bits(record: &[u8; 9]) -> Option<[u32; 2]> {
-    (record[0] == 1).then(|| {
-        [
-            u32::from_le_bytes(record[1..5].try_into().unwrap()),
-            u32::from_le_bytes(record[5..9].try_into().unwrap()),
-        ]
-    })
+fn tess_state(
+    record: &[u8; 1 + super::learned::STATE_LEN],
+) -> Option<render_material::CompiledPassState> {
+    (record[0] == 1).then(|| super::learned::decode_state(record[1..].try_into().unwrap()))
 }
 
 fn draw_iw_tess(
@@ -494,7 +493,7 @@ fn draw_iw_tess(
                 IwTessPipelineKey {
                     target: format,
                     samples: 1,
-                    state_bits: tess_bits(&record),
+                    state: tess_state(&record),
                 },
             );
         }
@@ -551,9 +550,10 @@ fn draw_iw_tess(
         let Some(batch) = extracted.0.batches.get(geom.batch_i) else {
             continue;
         };
-        if batch.technique != HudTessTechnique::SplatterAlt && learned.seen.insert(batch.state_bits)
+        if batch.technique != HudTessTechnique::SplatterAlt && learned.seen.insert(batch.state)
+            && let Some(record) = tess_record(batch.state)
         {
-            learned_new |= LEARNED_TESS.remember(tess_record(batch.state_bits));
+            learned_new |= LEARNED_TESS.remember(record);
         }
         let Some(gpu_image) = images.get(&batch.image) else {
             continue;
@@ -566,7 +566,7 @@ fn draw_iw_tess(
                     IwTessPipelineKey {
                         target: format,
                         samples,
-                        state_bits: batch.state_bits,
+                        state: batch.state,
                     },
                 );
                 let layout = cache.get_bind_group_layout(&pipeline.modulate_layout);
@@ -591,7 +591,7 @@ fn draw_iw_tess(
                     IwTessPipelineKey {
                         target: format,
                         samples,
-                        state_bits: batch.state_bits,
+                        state: batch.state,
                     },
                 );
                 let layout = cache.get_bind_group_layout(&pipeline.modulate_layout);
@@ -718,7 +718,7 @@ fn prepare_saved_screen(
         IwTessPipelineKey {
             target: format,
             samples: 1,
-            state_bits: None,
+            state: None,
         },
     );
     if saved

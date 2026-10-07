@@ -112,6 +112,7 @@ pub struct ExtractedStaticGeometry {
     pub smodel_vertex_refusal: Option<render_frame::PackedVertexRefusal>,
     pub smodel_cached_vertices: Arc<Vec<[u8; asset_iw4::size::GFX_PACKED_VERTEX]>>,
     pub smodel_surface_verts: Arc<Vec<(u32, u32)>>,
+    pub smodel_vertex_lighting: Arc<Vec<[u8; 4]>>,
 }
 
 /// Installed world and material resources. Longer-lived than a colour frame:
@@ -264,6 +265,7 @@ struct ExactColourGeometry {
 
     world_cpu_indices: Vec<u32>,
     smodel_vertex: Option<Buffer>,
+    smodel_vertex_lighting: Option<Buffer>,
     smodel_index: Option<Buffer>,
     smodel_surface_ranges: Vec<(u32, u32)>,
     smodel_vertex_count: usize,
@@ -294,7 +296,11 @@ struct ExactColourGeometry {
     glass_mesh: residency::GpuMesh,
     glass_mesh_surface_ranges: Vec<(u32, u32)>,
     last_xmodel_gpu_hash: Option<i64>,
+    neutral_vertex_lighting: Option<Buffer>,
+    neutral_vertex_lighting_count: usize,
 }
+
+pub const NEUTRAL_VERTEX_LIGHTING: [u8; 4] = [45, 45, 45, 255];
 
 #[derive(Resource, Default)]
 struct ExactColourPipeline {
@@ -1985,6 +1991,7 @@ fn material_refusal_class(cause: &MaterialRefusal) -> &'static str {
         }
         MaterialRefusal::SortedMaterialBuildFailed { .. } => "SortedMaterialBuildFailed",
         MaterialRefusal::StaleMaterialGeneration { .. } => "StaleMaterialGeneration",
+        MaterialRefusal::MissingLightBindings { .. } => "MissingLightBindings",
         MaterialRefusal::MaterialOutOfRange { .. } => "MaterialOutOfRange",
         MaterialRefusal::LocalTechniqueSetOutOfRange { .. } => "LocalTechniqueSetOutOfRange",
         MaterialRefusal::RemappedTechniqueSetOutOfRange { .. } => "RemappedTechniqueSetOutOfRange",
@@ -2012,7 +2019,7 @@ fn material_refusal_class(cause: &MaterialRefusal) -> &'static str {
 }
 
 pub fn dump_sorted_material_names(catalog: &RuntimeMaterialCatalog) -> Vec<String> {
-    match &catalog.sorted_materials {
+    match &catalog.parts().sorted_materials {
         RuntimeSortedMaterialTable::Ready {
             asset_ids_by_ordinal,
             ..
@@ -2020,6 +2027,7 @@ pub fn dump_sorted_material_names(catalog: &RuntimeMaterialCatalog) -> Vec<Strin
             .iter()
             .map(|id| {
                 catalog
+                    .parts()
                     .materials
                     .get(usize::from(id.0))
                     .map(|material| material.name.clone())
@@ -2034,6 +2042,7 @@ pub fn dump_sorted_material_names(catalog: &RuntimeMaterialCatalog) -> Vec<Strin
 
 pub fn dump_shader_program_names(catalog: &RuntimeMaterialCatalog) -> Vec<Option<String>> {
     catalog
+        .parts()
         .shader_programs
         .iter()
         .map(|slot| slot.as_ref().map(|program| program.name.clone()))
@@ -2268,7 +2277,7 @@ impl ExactPrepare<'_> {
         };
         let scene_index = texture_table::scene_table_index(
             after_scene_resolve,
-            GfxPassState::from_bits(executable.state).srgb_write_enable(),
+            GfxPassState::from_prepared(executable.state).srgb_write_enable(),
         );
         let extracted = self.extracted;
         let uploaded = self.uploaded;
@@ -3094,6 +3103,7 @@ fn submit_exact_draws<'a>(
     geometry: &ExactColourGeometry,
     smodel_cache_gpu: &SmodelCacheGpu,
     smodel_skinned_vertex: Option<&Buffer>,
+    smodel_skinned_vertex_lighting: Option<&Buffer>,
     smodel_skinned_index: Option<&Buffer>,
     pretess: &CameraWorldPretess,
     indirect: &indirect::ExactIndirectDraws,
@@ -3157,6 +3167,7 @@ fn submit_exact_draws<'a>(
                 geometry,
                 smodel_cache_gpu,
                 smodel_skinned_vertex,
+                smodel_skinned_vertex_lighting,
                 smodel_skinned_index,
                 pretess,
                 indirect,
@@ -3201,6 +3212,7 @@ fn submit_exact_draw_run<'a>(
     geometry: &ExactColourGeometry,
     smodel_cache_gpu: &SmodelCacheGpu,
     smodel_skinned_vertex: Option<&Buffer>,
+    smodel_skinned_vertex_lighting: Option<&Buffer>,
     smodel_skinned_index: Option<&Buffer>,
     pretess: &CameraWorldPretess,
     indirect: &indirect::ExactIndirectDraws,
@@ -3340,6 +3352,11 @@ fn submit_exact_draw_run<'a>(
                 vertex.slice(..)
             };
             pass.set_vertex_buffer(0, vertex_slice);
+            if let Some(lighting) =
+                vertex_lighting_stream(draw.tess, geometry, smodel_skinned_vertex_lighting)
+            {
+                pass.set_vertex_buffer(1, lighting.slice(..));
+            }
             if draw.tess == ExactTessBind::World
                 && let Some(effect) = geometry.world_effect.as_ref()
             {
@@ -4189,6 +4206,22 @@ fn prepare_smodel_skinned_shadow_gpu(
     out
 }
 
+fn vertex_lighting_stream<'a>(
+    tess: ExactTessBind,
+    geometry: &'a ExactColourGeometry,
+    smodel_skinned: Option<&'a Buffer>,
+) -> Option<&'a Buffer> {
+    match tess {
+        ExactTessBind::World => None,
+        ExactTessBind::Smodel => geometry
+            .smodel_vertex_lighting
+            .as_ref()
+            .or(geometry.neutral_vertex_lighting.as_ref()),
+        ExactTessBind::SmodelSkinned => smodel_skinned,
+        _ => geometry.neutral_vertex_lighting.as_ref(),
+    }
+}
+
 fn record_shadowmap_draws<'a>(
     encoder: &mut CommandEncoder,
     device: &RenderDevice,
@@ -4201,6 +4234,7 @@ fn record_shadowmap_draws<'a>(
     smodel_vertex: Option<&Buffer>,
     xmodel_vertex: Option<&Buffer>,
     smodel_skinned_vertex: Option<&Buffer>,
+    smodel_skinned_vertex_lighting: Option<&Buffer>,
     smodel_skinned_index: Option<&Buffer>,
     constants_bind: Option<&BindGroup>,
     textures_bind: Option<&BindGroup>,
@@ -4316,6 +4350,11 @@ fn record_shadowmap_draws<'a>(
         {
             pass.set_render_pipeline(gpu_pipeline);
             pass.set_vertex_buffer(0, vertex.slice(..));
+            if let Some(lighting) =
+                vertex_lighting_stream(draw.tess, geometry, smodel_skinned_vertex_lighting)
+            {
+                pass.set_vertex_buffer(1, lighting.slice(..));
+            }
             if draw.tess == ExactTessBind::World
                 && let Some(effect) = geometry.world_effect.as_ref()
             {
@@ -4867,6 +4906,7 @@ fn record_shadowmap_spot(
     shadow_arena: &ShadowmapSpotArena,
     context: &mut RenderContext,
     smodel_skinned_vertex: Option<&Buffer>,
+    smodel_skinned_vertex_lighting: Option<&Buffer>,
     smodel_skinned_index: Option<&Buffer>,
 ) -> SpotShadowSubmit {
     if work.prepared_slots.is_empty() {
@@ -4906,6 +4946,7 @@ fn record_shadowmap_spot(
             geometry.smodel_vertex.as_ref(),
             geometry.xmodel.vertex.buffer(),
             smodel_skinned_vertex,
+            smodel_skinned_vertex_lighting,
             smodel_skinned_index,
             shadow_arena.gpu.bind_group.as_ref(),
             table_binds.map(|binds| &binds.scene),
@@ -4992,7 +5033,7 @@ fn prepare_shadowmap_sun(
     if draw_sun_shadow_map_forced(0, None).is_none() {
         return PreparedSunWork::done(SunShadowSubmit::refused("ShadowmapSunPartitionMissing"));
     }
-    let generation = extracted.world.generation.0;
+    let generation = extracted.world.generation.get();
 
     let ShadowExecScratch {
         executor: shadow_exec_executor,
@@ -5503,6 +5544,7 @@ fn record_shadowmap_sun(
     static_draws: &ResidentShadowStaticDraws,
     context: &mut RenderContext,
     smodel_skinned_vertex: Option<&Buffer>,
+    smodel_skinned_vertex_lighting: Option<&Buffer>,
     smodel_skinned_index: Option<&Buffer>,
 ) -> SunShadowSubmit {
     if let Some(submit) = work.early.take() {
@@ -5553,6 +5595,7 @@ fn record_shadowmap_sun(
                 geometry.smodel_vertex.as_ref(),
                 geometry.xmodel.vertex.buffer(),
                 smodel_skinned_vertex,
+                smodel_skinned_vertex_lighting,
                 smodel_skinned_index,
                 shadow_arena.gpu[part.pi].bind_group.as_ref(),
                 table_binds.map(|binds| &binds.sun_caster),
@@ -5891,7 +5934,7 @@ impl ExactPrepare<'_> {
                                 pair: executable.shader_pair,
                             },
                         )?;
-                        let host_state = GfxPassState::from_bits(executable.state);
+                        let host_state = GfxPassState::from_prepared(executable.state);
                         let state0 = host_state.apply_change_state_0_host(AlphaMode::Opaque, false);
                         let state1 = host_state.apply_change_state_1_host();
                         let color = exact_colour_target_format(target.color, state0.srgb_write);
@@ -5993,7 +6036,7 @@ impl ExactPrepare<'_> {
                         .then(|| drawsurf_object_id(key)),
                     depth_min,
                     depth_max,
-                    state: GfxPassState::from_bits(executable.state),
+                    state: GfxPassState::from_prepared(executable.state),
                     ring_epoch: 0,
                     smc_stream_off,
                     bsp_kind,
