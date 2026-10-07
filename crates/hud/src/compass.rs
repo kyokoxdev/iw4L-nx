@@ -702,6 +702,33 @@ fn take_radar_pings(
         latch.radar_last_ms = None;
         return None;
     }
+    if radar == sim::RadarMode::Constant {
+        latch.radar_progress = 0.0;
+        latch.radar_last_ms = None;
+        for (id, _) in &snapshot.players {
+            if *id == local {
+                continue;
+            }
+            let Some(meta) = snapshot.meta.for_client(*id) else {
+                continue;
+            };
+            if same_team(local_team, meta.client_state_team) {
+                continue;
+            }
+            let Some(ps) = presented.alive_player(*id) else {
+                continue;
+            };
+            latch.actors.insert(
+                id.0,
+                PingActor {
+                    begin_fade_ms: now_ms,
+                    fade_seconds: COMPASS_RADAR_PING_FADE_TIME_DEFAULT,
+                    last_pos: [ps.origin[0], ps.origin[1]],
+                },
+            );
+        }
+        return None;
+    }
     let frametime = latch
         .radar_last_ms
         .map_or(0, |last| now_ms.saturating_sub(last).max(0));

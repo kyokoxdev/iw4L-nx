@@ -6,7 +6,7 @@ use super::{
     Unary, Value, VecDeque, Waiter, WaiterKind,
 };
 use bevy_ecs::entity::Entity;
-use bevy_ecs::prelude::World;
+use bevy_ecs::prelude::{Resource, World};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -1113,27 +1113,27 @@ fn register(
     });
 }
 
-/// serial -> thread entity, checked on every hit and rebuilt on a miss.
-/// `find_thread` runs per runnable thread and per woken waiter; a scan of
-/// every thread each time was quadratic in the thread count.
-#[derive(bevy_ecs::prelude::Resource, Default)]
+#[derive(Resource, Default)]
 struct ThreadIndex(std::collections::HashMap<u64, Entity>);
 
 fn find_thread(world: &mut World, serial: u64) -> Option<Entity> {
-    let cached = world
+    if let Some(entity) = world
         .get_resource::<ThreadIndex>()
-        .and_then(|index| index.0.get(&serial).copied());
-    if let Some(entity) = cached
-        .filter(|entity| world.get::<Thread>(*entity).is_some_and(|t| t.serial == serial))
+        .and_then(|index| index.0.get(&serial).copied())
+        && world
+            .get::<Thread>(entity)
+            .is_some_and(|thread| thread.serial == serial)
     {
         return Some(entity);
     }
-    let index: std::collections::HashMap<_, _> = world
-        .query::<(Entity, &Thread)>()
-        .iter(world)
-        .map(|(entity, thread)| (thread.serial, entity))
-        .collect();
-    let found = index.get(&serial).copied();
+    let mut index = std::collections::HashMap::new();
+    let mut found = None;
+    for (entity, thread) in world.query::<(Entity, &Thread)>().iter(world) {
+        index.insert(thread.serial, entity);
+        if thread.serial == serial {
+            found = Some(entity);
+        }
+    }
     world.insert_resource(ThreadIndex(index));
     found
 }
@@ -1282,6 +1282,8 @@ fn kill(world: &mut World, entity: Entity, serial: u64) {
     retire(&mut world.resource_mut::<Runtime>(), serial);
 }
 
+const HEAP_COLLECT_TICKS: u32 = 10;
+
 pub(crate) fn advance_scheduler(world: &mut World) {
     let request = world.resource::<crate::step::StepRequest>();
     if !request.reason.advances_authority_world() {
@@ -1314,23 +1316,17 @@ pub(crate) fn advance_scheduler(world: &mut World) {
     let now = i64::from(tick.0) * i64::from(crate::MATCH_TICK_MS);
     super::host::mechanics::deliver_finished(world);
     deliver_external(world, now);
-    // One pass over the waiters, not one per thread: `entity_receivers` per
-    // thread made this threads x waiters every tick.
-    let doomed: std::collections::HashSet<u64> = {
-        let runtime = world.resource::<Runtime>();
-        runtime
-            .waiters
-            .iter()
-            .filter(|w| any_deleted(world, std::slice::from_ref(&w.receiver)))
-            .map(|w| w.thread)
+    let doomed = threads_waiting_on_deleted(world);
+    let dead: Vec<_> = if doomed.is_empty() {
+        Vec::new()
+    } else {
+        world
+            .query::<(Entity, &Thread)>()
+            .iter(world)
+            .filter(|(_, thread)| doomed.contains(&thread.serial))
+            .map(|(entity, thread)| (entity, thread.serial))
             .collect()
     };
-    let dead: Vec<_> = world
-        .query::<(Entity, &Thread)>()
-        .iter(world)
-        .filter(|(_, thread)| doomed.contains(&thread.serial))
-        .map(|(entity, thread)| (entity, thread.serial))
-        .collect();
     for (entity, serial) in dead {
         kill(world, entity, serial);
     }
@@ -1361,14 +1357,10 @@ pub(crate) fn advance_scheduler(world: &mut World) {
         runtime.buckets.remove(&now);
     }
     runtime.loading = false;
-    // A full mark-sweep of the script heap every tick cost more than the
-    // garbage it freed; unreachable values just live up to half a second.
-    if tick.0 % GC_INTERVAL_TICKS == 0 {
+    if tick.0.is_multiple_of(HEAP_COLLECT_TICKS) {
         collect_heap(world);
     }
 }
-
-const GC_INTERVAL_TICKS: u32 = 10;
 
 fn run_ready(world: &mut World, program: &Program, now: i64) {
     loop {
@@ -1410,41 +1402,46 @@ fn run_ready(world: &mut World, program: &Program, now: i64) {
 }
 
 pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread, now: i64) {
+    // The runaway-loop budget lives here between instructions; the runtime's
+    // copy is only current around instructions that can run other threads.
+    let mut budget = world.resource::<Runtime>().budget;
     while thread.state == ThreadState::Runnable {
         let frame = thread.frames.last().unwrap();
         let function = &program.functions[frame.function];
-        // Borrow the location: cloning it costs two String allocations per
-        // instruction, and it is only read on the error path.
-        let Some((location, op)) = function.code.get(frame.pc) else {
+        let (at_function, at_pc) = (frame.function, frame.pc);
+        let Some(op) = function.code.get(frame.pc).map(|(_, op)| op.clone()) else {
             world.resource_mut::<Runtime>().fault = Some(Fault::at(
                 &function.location,
                 "invalid IR: instruction position out of range",
             ));
             break;
         };
-        let op = op.clone();
-        // One resource lookup per instruction, not two: this loop is the
-        // whole GSC scheduler cost.
-        let exhausted = {
-            let mut runtime = world.resource_mut::<Runtime>();
-            let exhausted = runtime.budget == 0;
-            if !exhausted {
-                runtime.budget -= 1;
-            }
-            exhausted
-        };
+        let exhausted = budget == 0;
         let (pops, pushes) = stack_effect(&op);
         let iterates = matches!(op, Op::ArrayKeys);
         let before = thread.stack.len();
         let result = if exhausted {
             Err("potential infinite loop in script - killing thread".into())
         } else {
+            budget -= 1;
             thread.frames.last_mut().unwrap().pc += 1;
-            instruction(world, program, thread, op, now)
+            let nested = matches!(
+                op,
+                Op::Call(..) | Op::Spawn(..) | Op::Indirect(..) | Op::Notify(_)
+            );
+            if nested {
+                world.resource_mut::<Runtime>().budget = budget;
+            }
+            let result = instruction(world, program, thread, op, now);
+            if nested {
+                budget = world.resource::<Runtime>().budget;
+            }
+            result
         };
         let Err(message) = result else {
             continue;
         };
+        let location = &program.functions[at_function].code[at_pc].0;
         if world.resource::<Runtime>().fault.is_some() {
             break;
         }
@@ -1469,7 +1466,7 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
         if exhausted {
             let serial = thread.serial;
             let mut runtime = world.resource_mut::<Runtime>();
-            runtime.budget = INSTRUCTION_BUDGET;
+            budget = INSTRUCTION_BUDGET;
             runtime.waiters.retain(|w| w.thread != serial);
             thread.frames.clear();
             thread.stack.clear();
@@ -1498,6 +1495,7 @@ pub(super) fn execute(world: &mut World, program: &Program, thread: &mut Thread,
             }
         }
     }
+    world.resource_mut::<Runtime>().budget = budget;
 }
 
 fn stack_effect(op: &Op) -> (usize, usize) {
@@ -1663,6 +1661,18 @@ fn entity_receivers(world: &World, thread: &Thread) -> Vec<Value> {
         .collect()
 }
 
+fn threads_waiting_on_deleted(world: &World) -> std::collections::HashSet<u64> {
+    let runtime = world.resource::<Runtime>();
+    runtime
+        .waiters
+        .iter()
+        .filter(|w| {
+            matches!(w.receiver, Value::Object(id) if runtime.dead.contains(&id) || !runtime.objects.contains_key(&id))
+        })
+        .map(|w| w.thread)
+        .collect()
+}
+
 fn any_deleted(world: &World, receivers: &[Value]) -> bool {
     let runtime = world.resource::<Runtime>();
     receivers.iter().any(|value| {
@@ -1704,49 +1714,63 @@ impl Runtime {
 }
 
 fn collect_heap(world: &mut World) {
-    let mut pending = vec![Value::Object(0), Value::Object(1), Value::Object(2)];
-    pending.extend(
-        world
-            .resource::<Runtime>()
-            .entities
-            .keys()
-            .map(|id| Value::Object(*id)),
-    );
+    use std::collections::HashSet;
+    #[derive(Default)]
+    struct Marks {
+        objects: HashSet<u64>,
+        arrays: HashSet<u64>,
+        pending_objects: Vec<u64>,
+        pending_arrays: Vec<u64>,
+    }
+    impl Marks {
+        fn reach(&mut self, value: &Value) {
+            match value {
+                Value::Object(id) if self.objects.insert(*id) => self.pending_objects.push(*id),
+                Value::Array(id) if self.arrays.insert(*id) => self.pending_arrays.push(*id),
+                _ => {}
+            }
+        }
+    }
+    let mut marks = Marks::default();
+    for id in [0, 1, 2] {
+        marks.reach(&Value::Object(id));
+    }
+    for id in world.resource::<Runtime>().entities.keys() {
+        marks.reach(&Value::Object(*id));
+    }
     for thread in world.query::<&Thread>().iter(world) {
-        pending.extend(thread.stack.iter().cloned());
+        thread.stack.iter().for_each(|value| marks.reach(value));
         for frame in &thread.frames {
-            pending.push(frame.receiver.clone());
-            pending.extend(frame.locals.iter().cloned());
+            marks.reach(&frame.receiver);
+            frame.locals.iter().for_each(|value| marks.reach(value));
         }
     }
-    let mut objects = std::collections::BTreeSet::new();
-    let mut arrays = std::collections::BTreeSet::new();
     let mut runtime = world.resource_mut::<Runtime>();
-    runtime.native_roots(&mut pending);
+    let mut native = Vec::new();
+    runtime.native_roots(&mut native);
+    native.iter().for_each(|value| marks.reach(value));
     for waiter in &runtime.waiters {
-        pending.push(waiter.receiver.clone());
+        marks.reach(&waiter.receiver);
         if let WaiterKind::Match { values } = &waiter.kind {
-            pending.extend(values.iter().cloned());
+            values.iter().for_each(|value| marks.reach(value));
         }
     }
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Object(id) if objects.insert(id) => {
-                if let Some(fields) = runtime.objects.get(&id) {
-                    pending.extend(fields.values().cloned());
-                }
+    loop {
+        if let Some(id) = marks.pending_objects.pop() {
+            if let Some(fields) = runtime.objects.get(&id) {
+                fields.values().for_each(|value| marks.reach(value));
             }
-            Value::Array(id) if arrays.insert(id) => {
-                if let Some(values) = runtime.arrays.get(&id) {
-                    pending.extend(values.values().cloned());
-                }
+        } else if let Some(id) = marks.pending_arrays.pop() {
+            if let Some(values) = runtime.arrays.get(&id) {
+                values.values().for_each(|value| marks.reach(value));
             }
-            _ => {}
+        } else {
+            break;
         }
     }
-    runtime.objects.retain(|id, _| objects.contains(id));
-    runtime.dead.retain(|id| objects.contains(id));
-    runtime.arrays.retain(|id, _| arrays.contains(id));
+    runtime.objects.retain(|id, _| marks.objects.contains(id));
+    runtime.dead.retain(|id| marks.objects.contains(id));
+    runtime.arrays.retain(|id, _| marks.arrays.contains(id));
 }
 
 #[cfg(test)]
