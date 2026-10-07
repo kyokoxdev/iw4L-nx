@@ -24,12 +24,12 @@ pub use schedule::{
 pub use script_entity_notify::{AbortKillcam, BeginKillcam, KillcamEnded, SpawnedPlayer};
 pub use script_notify::{ExitLevelCalled, register_script_notify};
 pub use session::{
-    AdmissionKey, AppScreen, BotNavigationReady, CacWeaponOffer, ClassSelectHandoff, HasWorld,
-    Headless, HostClassLoadouts, HostClassSlot, HudInputView, LaunchIdentity, LaunchReport,
-    LifeEndCause, LifeEnded, LifeStartReason, LifeStarted, LocalLoadKey, LocalSpawnArmed,
-    MapLoadApproved, MapLoadFailed, MatchInstalled, MatchKey, MatchTornDown, ReadinessState,
-    ReturnedToMenu, RuntimeRole, TeardownReason, UiCamera, UiDraw, ViewSubject, WorldGeneration,
-    WorldProducts, WorldReadiness,
+    AdmissionKey, AppScreen, BotNavigationReady, CacWeaponOffer, ClassSelectHandoff,
+    FrontendPending, HasWorld, Headless, HostClassLoadouts, HostClassSlot, HudInputView,
+    IntroPlaying, LaunchIdentity, LaunchReport, LifeEndCause, LifeEnded, LifeStartReason,
+    LifeStarted, LocalLoadKey, LocalSpawnArmed, MapLoadApproved, MapLoadFailed, MatchInstalled,
+    MatchKey, MatchTornDown, ReadinessState, ReturnedToMenu, RuntimeRole, TeardownReason, UiCamera,
+    UiDraw, ViewSubject, WorldGeneration, WorldProducts, WorldReadiness,
 };
 pub use settings::{DisplayResolution, GameSettings, OtherGame};
 pub use ui::{

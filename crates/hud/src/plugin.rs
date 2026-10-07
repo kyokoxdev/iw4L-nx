@@ -74,8 +74,9 @@ impl Plugin for HudPlugin {
                     hud_stamp_open,
                     sync_games_root,
                     sync_map_zone_tree,
-                    sync_zone_atlases,
-                    warm_hud_images,
+                    // Both latch on the first catalog they see.
+                    (sync_zone_atlases, warm_hud_images)
+                        .run_if(not(resource_exists::<frame::FrontendPending>)),
                     ensure_hud_root,
                     sync_frontend_camera,
                     hud_stamp_setup,
@@ -121,7 +122,10 @@ impl Plugin for HudPlugin {
                             crate::use_hint::update,
                             update_hud_elems,
                             update_targetmap,
-                            crate::menus::update_script_menus,
+                            crate::menus::update_script_menus.run_if(
+                                not(resource_exists::<frame::FrontendPending>)
+                                    .and_then(not(resource_exists::<frame::IntroPlaying>)),
+                            ),
                             hud_stage_close::<7>,
                         )
                             .chain(),

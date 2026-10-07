@@ -16,6 +16,7 @@ unsafe extern "C" {
     fn appletSetMediaPlaybackState(state: bool) -> u32;
     fn svcSetThreadCoreMask(handle: u32, preferred_core: i32, affinity_mask: u32) -> u32;
     fn svcGetCurrentProcessorNumber() -> u32;
+    fn svcSetThreadPriority(handle: u32, priority: u32) -> u32;
     fn envGetMainThreadHandle() -> u32;
     fn svcGetThreadCoreMask(core: *mut i32, mask: *mut u64, handle: u32) -> u32;
     fn clkrstInitialize() -> u32;
@@ -75,6 +76,18 @@ pub fn pin_current_thread(preferred: i32, mask: u32, name: &str) {
     breadcrumb(&format!(
         "thread {name}: was on core {before}, pin core {preferred} mask={mask:#05b} rc={rc:#x}"
     ));
+}
+
+/// Drops the calling thread to the lowest application priority: on its core
+/// it runs only while every default-priority thread there waits. Horizon does
+/// not time-slice equal priorities, so a long CPU-bound job at default
+/// priority would starve its neighbours.
+pub fn background_current_thread(name: &str) {
+    const CUR_THREAD_HANDLE: u32 = 0xFFFF_8000;
+    const LOWEST: u32 = 0x3B;
+    // SAFETY: plain SVC on the calling thread's pseudo-handle.
+    let rc = unsafe { svcSetThreadPriority(CUR_THREAD_HANDLE, LOWEST) };
+    breadcrumb(&format!("thread {name}: priority {LOWEST:#x} rc={rc:#x}"));
 }
 
 /// Every thread nobody pins (SDL audio, Mesa queues, audio workers, `std`

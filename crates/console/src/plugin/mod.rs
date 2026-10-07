@@ -236,6 +236,16 @@ impl Plugin for ConsolePlugin {
                 )
                     .chain(),
             );
+        app.add_systems(
+            Update,
+            (
+                crate::cinematic::start_intro.run_if(run_once),
+                crate::cinematic::route,
+                crate::cinematic::tick.run_if(resource_exists::<crate::cinematic::Cinematic>),
+            )
+                .chain()
+                .in_set(ClientSet::Diag),
+        );
         crate::diagnostics::register_diagnostics_mirror(app);
     }
 }
@@ -758,6 +768,7 @@ fn setup_console(
     crate::debug_lod::register_lod_ramp_commands(&mut registry);
     crate::debug_cg_gun::register_cg_gun_commands(&mut registry);
     crate::debug_cl_yawspeed::register_cl_yawspeed_command(&mut registry);
+    crate::cinematic::register(&mut registry);
     crate::debug_fx::register_debug_fx_commands(&mut registry);
     crate::debug_fx_marks::register_fx_mark_commands(&mut registry);
     binds.apply_defaults();

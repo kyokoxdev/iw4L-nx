@@ -193,6 +193,11 @@ impl AudioRuntime {
         self.rejections[reason as usize - 1].load(Ordering::Relaxed)
     }
 
+    /// Attaches a pushed PCM stream, replacing any previous one.
+    pub fn open_stream(&self) -> crate::PcmStream {
+        crate::PcmStream::attach(&self.shared)
+    }
+
     pub fn set_master_volume(&self, gain: f32) {
         let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
         self.shared.master.store(gain.to_bits(), Ordering::Release);

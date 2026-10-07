@@ -1,0 +1,457 @@
+//! `cinematic <name>`: fullscreen `video/<name>.bik` over everything but the
+//! console. A named thread decodes and converts to RGBA a few frames ahead;
+//! the main thread only swaps the newest due buffer into the image. Nothing
+//! runs while no cinematic is playing.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+
+use bevy::asset::RenderAssetUsages;
+use bevy::image::ImageSampler;
+use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+use crate::{ConsoleCommand, ConsoleLine, ConsoleRegistry, ConsoleSettings, ConsoleState};
+
+/// RGBA frames decoded ahead; also how far audio leads the picture.
+// ponytail: audio lead = queue depth (~130 ms at 30 fps); decode audio-only packets ahead if a device buffer starves.
+const QUEUE: usize = 3;
+
+enum Msg {
+    Frame(f64, Vec<u8>),
+    Failed(String),
+}
+
+#[derive(Resource)]
+pub(crate) struct Cinematic {
+    // Mutex only for `Sync`; the main thread reaches it through `get_mut`.
+    frames: std::sync::Mutex<Receiver<Msg>>,
+    recycle: SyncSender<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+    image: Handle<Image>,
+    root: Entity,
+    /// Wall clock of the first shown frame; video follows it, audio streams freely.
+    started: Option<std::time::Instant>,
+    pending: Option<(f64, Vec<u8>)>,
+    console_was_open: bool,
+    /// Launch intro, with the intro videos still to play after this one.
+    /// Skippable (all of it) only once the menu has loaded.
+    intro: Option<Vec<PathBuf>>,
+}
+
+impl Drop for Cinematic {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn register(registry: &mut ConsoleRegistry) {
+    let names: Vec<String> = video_dirs()
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(|e| {
+            let path = e.ok()?.path();
+            path.extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("bik"))
+                .then(|| path.file_stem()?.to_str().map(str::to_owned))?
+        })
+        .chain(std::iter::once("stop".to_owned()))
+        .collect();
+    registry.register(
+        crate::CommandSpec::new("cinematic")
+            .usage("cinematic <name>|stop — play video/<name>.bik fullscreen")
+            .arg(crate::StaticCompleter::new(names)),
+    );
+}
+
+/// `video/` folders of every configured game install, `main/video` first.
+fn video_dirs() -> Vec<PathBuf> {
+    let Ok(root) = asset_transport::games_root_from_env() else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for folder in asset_transport::search_roots(&root.0) {
+        let children = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir());
+        for base in std::iter::once(folder.clone()).chain(children) {
+            for sub in ["main/video", "video"] {
+                let dir = base.join(sub);
+                if dir.is_dir() && !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    dirs
+}
+
+fn find_video(name: &str) -> Option<PathBuf> {
+    let file = format!("{}.bik", name.trim_end_matches(".bik"));
+    video_dirs()
+        .into_iter()
+        .map(|d| d.join(&file))
+        .find(|p| p.is_file())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn route(
+    mut events: MessageReader<ConsoleCommand>,
+    mut console: ResMut<ConsoleState>,
+    settings: Res<ConsoleSettings>,
+    mut line: ResMut<ConsoleLine>,
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    audio: Option<Res<audio::AudioRuntime>>,
+    playing: Option<Res<Cinematic>>,
+) {
+    let capacity = settings.log_capacity;
+    for cmd in events.read() {
+        if cmd.name != "cinematic" {
+            continue;
+        }
+        let msg = match cmd.args.as_slice() {
+            [arg] if arg == "stop" => {
+                if let Some(c) = &playing {
+                    commands.entity(c.root).despawn();
+                    commands.remove_resource::<Cinematic>();
+                    commands.remove_resource::<frame::IntroPlaying>();
+                }
+                "cinematic stopped".to_owned()
+            }
+            [name] => match find_video(name) {
+                None => format!("cinematic: video/{name}.bik not found"),
+                Some(path) => {
+                    if let Some(c) = &playing {
+                        commands.entity(c.root).despawn();
+                        commands.remove_resource::<frame::IntroPlaying>();
+                    }
+                    match start(&path, &mut commands, &mut images, audio.as_deref(), None) {
+                        Ok(info) => info,
+                        Err(e) => format!("cinematic: {e}"),
+                    }
+                }
+            },
+            _ => "usage: cinematic <name>|stop".to_owned(),
+        };
+        diag::info!(Console, "{msg}");
+        line.0 = msg.clone();
+        console.echo(msg, capacity);
+    }
+}
+
+/// Played in order when `IW4L_INTRO` is unset; it takes a comma list, `0` = off.
+const INTRO: [&str; 2] = ["IW_logo", "legal"];
+
+/// Once, on a menu launch: the intro plays while the menu loads behind it.
+/// Startup commands (a scripted `map`) skip it.
+pub(crate) fn start_intro(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    audio: Option<Res<audio::AudioRuntime>>,
+    frontend_pending: Option<Res<frame::FrontendPending>>,
+    startup: Option<Res<session::StartupCommands>>,
+) {
+    if frontend_pending.is_none() || startup.is_some_and(|s| !s.lines.is_empty()) {
+        return;
+    }
+    let names: Vec<String> = match std::env::var("IW4L_INTRO") {
+        Ok(list) if list == "0" => return,
+        Ok(list) => list.split(',').map(|n| n.trim().to_owned()).collect(),
+        Err(_) => INTRO.map(str::to_owned).to_vec(),
+    };
+    let paths: Vec<PathBuf> = names
+        .iter()
+        .filter_map(|name| {
+            let path = find_video(name);
+            if path.is_none() {
+                diag::info!(Console, "intro: video/{name}.bik not found");
+            }
+            path
+        })
+        .collect();
+    if play_intro(paths, &mut commands, &mut images, audio.as_deref()) {
+        commands.insert_resource(frame::IntroPlaying);
+    }
+}
+
+/// Starts the first playable video of `queue`; false when none starts.
+fn play_intro(
+    mut queue: Vec<PathBuf>,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    audio: Option<&audio::AudioRuntime>,
+) -> bool {
+    while !queue.is_empty() {
+        let path = queue.remove(0);
+        match start(
+            &path,
+            commands,
+            images,
+            audio,
+            Some(std::mem::take(&mut queue)),
+        ) {
+            Ok(info) => {
+                diag::info!(Console, "intro: {info}");
+                return true;
+            }
+            Err(e) => diag::warn!(Console, "intro: {}: {e}", path.display()),
+        }
+    }
+    false
+}
+
+fn start(
+    path: &Path,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    audio: Option<&audio::AudioRuntime>,
+    intro: Option<Vec<PathBuf>>,
+) -> Result<String, bink::Error> {
+    let bink = bink::Bink::open(path)?;
+    let h = *bink.header();
+    let (w, hh) = (h.width, h.height);
+    let size = (w * hh * 4) as usize;
+
+    let mut image = Image::new(
+        Extent3d {
+            width: w,
+            height: hh,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![0; size],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::linear();
+    let handle = images.add(image);
+    let root = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::BLACK),
+            GlobalZIndex(15_000),
+        ))
+        .with_child((
+            Node {
+                height: Val::Percent(100.0),
+                max_width: Val::Percent(100.0),
+                aspect_ratio: Some(w as f32 / hh as f32),
+                ..default()
+            },
+            ImageNode::new(handle.clone()),
+        ))
+        .id();
+
+    let (frames_tx, frames) = std::sync::mpsc::sync_channel(QUEUE);
+    let (recycle, recycle_rx) = std::sync::mpsc::sync_channel(QUEUE + 2);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stream = h.audio.and(audio).map(audio::AudioRuntime::open_stream);
+    let thread_stop = stop.clone();
+    std::thread::Builder::new()
+        .name("iw4l-bink".into())
+        .spawn(move || {
+            decode(bink, size, stream, frames_tx, recycle_rx, &thread_stop);
+        })
+        .map_err(bink::Error::Io)?;
+
+    commands.insert_resource(Cinematic {
+        frames: frames.into(),
+        recycle,
+        stop,
+        image: handle,
+        root,
+        started: None,
+        pending: None,
+        console_was_open: true,
+        intro,
+    });
+    let fps = f64::from(h.fps_num) / f64::from(h.fps_den);
+    let sound = match h.audio {
+        Some(a) => format!("{} Hz {}ch", a.rate, a.channels),
+        None => "no audio".to_owned(),
+    };
+    Ok(format!(
+        "cinematic: {} {w}x{hh} {fps:.2} fps, {} frames, {sound}",
+        path.display(),
+        h.frames
+    ))
+}
+
+fn decode(
+    mut bink: bink::Bink,
+    size: usize,
+    stream: Option<audio::PcmStream>,
+    frames: SyncSender<Msg>,
+    recycle: Receiver<Vec<u8>>,
+    stop: &AtomicBool,
+) {
+    let h = *bink.header();
+    let frame_time = f64::from(h.fps_den) / f64::from(h.fps_num);
+    let mut resample = h.audio.map(|a| Resampler::new(a.rate, a.channels as usize));
+    let (mut pcm, mut stereo) = (Vec::new(), Vec::new());
+    for index in 0.. {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        pcm.clear();
+        match bink.next_frame(&mut pcm) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                let _ = frames.send(Msg::Failed(e.to_string()));
+                return;
+            }
+        }
+        if let (Some(stream), Some(r)) = (&stream, &mut resample) {
+            stereo.clear();
+            r.run(&pcm, &mut stereo);
+            let mut rest = stereo.as_slice();
+            while !rest.is_empty() && !stop.load(Ordering::Relaxed) {
+                rest = &rest[stream.push(rest) * 2..];
+                if !rest.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+        let mut rgba = recycle.try_recv().unwrap_or_else(|_| vec![0; size]);
+        bink.rgba(&mut rgba);
+        if frames
+            .send(Msg::Frame(f64::from(index) * frame_time, rgba))
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
+/// Linear resampler to stereo `audio::SAMPLE_RATE`, carrying one frame across calls.
+struct Resampler {
+    step: f64,
+    pos: f64,
+    channels: usize,
+    prev: [f32; 2],
+}
+
+impl Resampler {
+    fn new(rate: u32, channels: usize) -> Self {
+        Self {
+            step: f64::from(rate) / f64::from(audio::SAMPLE_RATE),
+            pos: 0.0,
+            channels,
+            prev: [0.0; 2],
+        }
+    }
+
+    /// `pos` indexes input frames, with -1 the last frame of the previous call.
+    fn run(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        let n = input.len() / self.channels;
+        if n == 0 {
+            return;
+        }
+        let frame = |i: isize| -> [f32; 2] {
+            if i < 0 {
+                self.prev
+            } else {
+                let at = i as usize * self.channels;
+                [input[at], input[at + self.channels - 1]]
+            }
+        };
+        while self.pos < (n - 1) as f64 {
+            let i = self.pos.floor();
+            let t = (self.pos - i) as f32;
+            let (a, b) = (frame(i as isize), frame(i as isize + 1));
+            out.extend([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            self.pos += self.step;
+        }
+        self.prev = frame(n as isize - 1);
+        self.pos -= n as f64;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tick(
+    mut commands: Commands,
+    mut c: ResMut<Cinematic>,
+    mut images: ResMut<Assets<Image>>,
+    mut console: ResMut<ConsoleState>,
+    settings: Res<ConsoleSettings>,
+    keys: Res<ButtonInput<KeyCode>>,
+    pads: Query<&Gamepad>,
+    frontend_pending: Option<Res<frame::FrontendPending>>,
+    audio: Option<Res<audio::AudioRuntime>>,
+) {
+    // A key that closes the console must not also skip the video; the intro
+    // holds until there is a menu to skip to.
+    let skip = !c.console_was_open
+        && !console.open
+        && !(c.intro.is_some() && frontend_pending.is_some())
+        && (keys.any_just_pressed([KeyCode::Escape, KeyCode::Enter, KeyCode::Space])
+            || pads
+                .iter()
+                .any(|p| p.any_just_pressed([GamepadButton::South, GamepadButton::Start])));
+    c.console_was_open = console.open;
+
+    let now = c.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+    let mut newest = None;
+    let mut ended = skip;
+    loop {
+        let next = match c.pending.take() {
+            Some(f) => f,
+            None => match c
+                .frames
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_recv()
+            {
+                Ok(Msg::Frame(pts, rgba)) => (pts, rgba),
+                Ok(Msg::Failed(e)) => {
+                    console.echo(format!("cinematic: {e}"), settings.log_capacity);
+                    ended = true;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    ended = newest.is_none();
+                    break;
+                }
+            },
+        };
+        if c.started.is_some() && next.0 > now {
+            c.pending = Some(next);
+            break;
+        }
+        c.started.get_or_insert_with(std::time::Instant::now);
+        if let Some((_, old)) = newest.replace(next) {
+            let _ = c.recycle.try_send(old);
+        }
+    }
+    if let Some((_, rgba)) = newest
+        && let Some(mut image) = images.get_mut(&c.image)
+        && let Some(old) = image.data.replace(rgba)
+    {
+        let _ = c.recycle.try_send(old);
+    }
+    if ended {
+        // Menu still loading: the near-black clear colour stays until it opens.
+        commands.entity(c.root).despawn();
+        commands.remove_resource::<Cinematic>();
+        // Next intro video, unless the player skipped the intro.
+        let rest = if skip { None } else { c.intro.take() };
+        if !rest.is_some_and(|q| play_intro(q, &mut commands, &mut images, audio.as_deref())) {
+            commands.remove_resource::<frame::IntroPlaying>();
+        }
+    }
+}

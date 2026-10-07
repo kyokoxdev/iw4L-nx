@@ -32,10 +32,13 @@ fn drain_pending_console_lines(
     mut pending: ResMut<PendingConsoleLines>,
     mut startup: Option<ResMut<StartupCommands>>,
     screen: Option<Res<AppScreen>>,
+    frontend_pending: Option<Res<frame::FrontendPending>>,
     mut queue: ResMut<ConsoleQueue>,
 ) {
+    // A startup `map` must not race the menu data still loading in the background.
     if let Some(startup) = startup.as_mut()
         && !startup.lines.is_empty()
+        && frontend_pending.is_none()
         && screen
             .as_ref()
             .is_some_and(|s| matches!(**s, AppScreen::MainMenu))

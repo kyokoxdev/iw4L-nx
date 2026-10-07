@@ -36,6 +36,8 @@ SD card layout, all under `sdmc:/switch/iw4l/` (process working directory and
 iw4l.nro
 .env                 optional, same keys as desktop
 games/MW2/zone/...   MW2 Multiplayer files; `IW4L_GAMES` overrides
+games/MW2/main/video/*.bik  cinematics (`cinematic <name>`); the launch intro is
+                     `IW4L_INTRO` (comma list, default IW_logo,legal; `0` = off)
 iw4l-artifacts/      writable state, cache, logs
 boot.txt             breadcrumbs from main to the first frames, Bevy/wgpu warnings,
                      native aborts and exits; rewritten per launch

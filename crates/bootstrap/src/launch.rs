@@ -115,6 +115,138 @@ fn install_class_catalog(
     commands.remove_resource::<ShellCommonTask>();
 }
 
+struct FrontendLoad {
+    menus: asset_game::MenuCatalog,
+    localize: Option<asset_game::LocalizeCatalog>,
+    bank: Option<std::sync::Arc<asset_audio::SoundCatalog>>,
+    iwd: std::sync::Arc<NamespaceSoundIwd>,
+}
+
+#[derive(Resource)]
+struct PendingFrontend {
+    // Mutex only for `Sync`; reached through `get_mut`.
+    load: std::sync::Mutex<std::sync::mpsc::Receiver<Result<FrontendLoad, String>>>,
+    #[cfg(not(target_os = "horizon"))]
+    shell: Option<ShellCommonTask>,
+}
+
+/// Menu catalog, localize strings and the menu sound bank — ~15 s on Switch —
+/// load while the window is up and the intro plays; the menu waits on
+/// `frame::FrontendPending`.
+fn spawn_frontend_load(
+    ui_games: asset_transport::GamesRoot,
+    trees: NamespaceTrees,
+) -> std::sync::mpsc::Receiver<Result<FrontendLoad, String>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("frontend-load".into())
+        .spawn(move || {
+            // Below the cinematic decoder and the pools sharing its core.
+            #[cfg(target_os = "horizon")]
+            platform_nx::background_current_thread("frontend-load");
+            let _ = tx.send(load_frontend(&ui_games, &trees));
+        })
+        .unwrap_or_else(|error| fatal(&format!("frontend load thread: {error}")));
+    rx
+}
+
+fn load_frontend(
+    ui_games: &asset_transport::GamesRoot,
+    trees: &NamespaceTrees,
+) -> Result<FrontendLoad, String> {
+    let (mut menus, menu_report) = load_ui_menu_catalog(ui_games);
+    ui::install_frontend_menus(&mut menus)?;
+    for line in &menu_report {
+        diag::info!(Launch, "{line}");
+    }
+    let missing = ["main", "main_text"]
+        .into_iter()
+        .filter(|name| menus.get(name).is_none())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "Cannot start the IW4 menu: {} not loaded from {}.\n\n\
+             A missing menu can mean an absent file or a FastFile decoding failure. \
+             Include the catalog details below when reporting this error.\n\n{}",
+            missing.join(", "),
+            ui_games.0.display(),
+            menu_report.join("\n")
+        ));
+    }
+    let localize = match load_mp_localized_strings(ui_games, "iw4:code_post_gfx_mp") {
+        Ok(loc) => {
+            diag::info!(Launch, "menu: {} localize keys", loc.len());
+            Some(loc)
+        }
+        Err(error) => {
+            diag::warn!(Launch, "menu: localize: {error}");
+            None
+        }
+    };
+    let bank = match load_mp_sound_bank(ui_games, "iw4:code_post_gfx_mp") {
+        Ok(loaded) => {
+            diag::info!(Launch, "menu: sound bank ready");
+            for line in loaded.gap_lines() {
+                diag::warn!(Launch, "menu: {line}");
+            }
+            Some(std::sync::Arc::new(loaded.catalog))
+        }
+        Err(error) => {
+            diag::warn!(Launch, "menu: sound bank: {error}");
+            None
+        }
+    };
+    let (iwd, lines) = NamespaceSoundIwd::open(trees);
+    for line in lines {
+        diag::info!(Launch, "menu: {line}");
+    }
+    Ok(FrontendLoad {
+        menus,
+        localize,
+        bank,
+        iwd: std::sync::Arc::new(iwd),
+    })
+}
+
+fn install_frontend(mut commands: Commands, mut pending: ResMut<PendingFrontend>) {
+    use std::sync::mpsc::TryRecvError;
+    let load = match pending
+        .load
+        .get_mut()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .try_recv()
+    {
+        Err(TryRecvError::Empty) => return,
+        Err(TryRecvError::Disconnected) => fatal("menu load thread stopped without a result"),
+        Ok(Err(error)) => fatal(&error),
+        Ok(Ok(load)) => load,
+    };
+    if let Some(loc) = load.localize {
+        commands.insert_resource(loc);
+    }
+    if let Some(bank) = load.bank {
+        commands.insert_resource(SoundBank(std::sync::Arc::clone(&bank)));
+        commands.insert_resource(audio::ClipStore::start(
+            std::sync::Arc::clone(&bank),
+            Some(std::sync::Arc::clone(&load.iwd)),
+        ));
+        commands.insert_resource(audio::FrontendAudio {
+            bank,
+            iwd: std::sync::Arc::clone(&load.iwd),
+        });
+    }
+    commands.insert_resource(SoundIwd(load.iwd));
+    #[cfg(not(target_os = "horizon"))]
+    if let Some(mut shell) = pending.shell.take() {
+        shell.perk_table = load.menus.string_table("mp/perkTable.csv").cloned();
+        commands.insert_resource(shell);
+    }
+    commands.insert_resource(load.menus);
+    commands.remove_resource::<PendingFrontend>();
+    commands.remove_resource::<frame::FrontendPending>();
+    diag::info!(Launch, "menu: frontend installed");
+}
+
 fn launch_identity(config: &LaunchConfig) -> LaunchIdentity {
     LaunchIdentity {
         role_label: format!("{:?}", config.role),
@@ -329,25 +461,6 @@ fn run_menu(
     // not fit beside the menu in the ~3 GB heap. CAC weapon lists stay empty.
     #[cfg(not(target_os = "horizon"))]
     let shell_common = assets::load_pool().spawn(assets::load_shell_common(games.clone()));
-    let (mut menus, menu_report) = load_ui_menu_catalog(&ui_games);
-    ui::install_frontend_menus(&mut menus).unwrap_or_else(|error| fatal(&error));
-    for line in &menu_report {
-        diag::info!(Launch, "{line}");
-    }
-    let missing = ["main", "main_text"]
-        .into_iter()
-        .filter(|name| menus.get(name).is_none())
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        fatal(&format!(
-            "Cannot start the IW4 menu: {} not loaded from {}.\n\n\
-             A missing menu can mean an absent file or a FastFile decoding failure. \
-             Include the catalog details below when reporting this error.\n\n{}",
-            missing.join(", "),
-            ui_games.0.display(),
-            menu_report.join("\n")
-        ));
-    }
     let maps = list_mp_map_packs(&games);
     diag::info!(
         Launch,
@@ -388,53 +501,22 @@ fn run_menu(
             ..default()
         },
     ));
-    #[cfg(not(target_os = "horizon"))]
-    app.insert_resource(ShellCommonTask {
-        task: shell_common,
-        perk_table: menus.string_table("mp/perkTable.csv").cloned(),
-        started: std::time::Instant::now(),
+    app.insert_resource(PendingFrontend {
+        load: spawn_frontend_load(ui_games.clone(), namespace_trees).into(),
+        #[cfg(not(target_os = "horizon"))]
+        shell: Some(ShellCommonTask {
+            task: shell_common,
+            perk_table: None,
+            started: std::time::Instant::now(),
+        }),
     })
-    .add_systems(Update, install_class_catalog);
-    match load_mp_localized_strings(&ui_games, "iw4:code_post_gfx_mp") {
-        Ok(loc) => {
-            diag::info!(Launch, "menu: {} localize keys", loc.len());
-            app.insert_resource(loc);
-        }
-        Err(error) => diag::warn!(Launch, "menu: localize: {error}"),
-    }
-    app.insert_resource(menus);
-    let menu_bank = match load_mp_sound_bank(&ui_games, "iw4:code_post_gfx_mp") {
-        Ok(loaded) => {
-            diag::info!(Launch, "menu: sound bank ready");
-            for line in loaded.gap_lines() {
-                diag::warn!(Launch, "menu: {line}");
-            }
-            let bank = std::sync::Arc::new(loaded.catalog);
-            app.insert_resource(SoundBank(std::sync::Arc::clone(&bank)));
-            Some(bank)
-        }
-        Err(error) => {
-            diag::warn!(Launch, "menu: sound bank: {error}");
-            None
-        }
-    };
-
-    let (menu_iwd, lines) = NamespaceSoundIwd::open(&namespace_trees);
-    for line in lines {
-        diag::info!(Launch, "menu: {line}");
-    }
-    let menu_iwd = std::sync::Arc::new(menu_iwd);
-    app.insert_resource(SoundIwd(std::sync::Arc::clone(&menu_iwd)));
-    if let Some(bank) = menu_bank {
-        app.insert_resource(audio::ClipStore::start(
-            std::sync::Arc::clone(&bank),
-            Some(std::sync::Arc::clone(&menu_iwd)),
-        ));
-        app.insert_resource(audio::FrontendAudio {
-            bank,
-            iwd: menu_iwd,
-        });
-    }
+    .insert_resource(frame::FrontendPending)
+    .add_systems(
+        Update,
+        install_frontend.run_if(resource_exists::<PendingFrontend>),
+    );
+    #[cfg(not(target_os = "horizon"))]
+    app.add_systems(Update, install_class_catalog);
     app.insert_resource(launch_identity(&config))
         .insert_resource(cheats)
         .insert_resource(MenuMapList(maps))

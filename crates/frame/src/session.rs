@@ -36,6 +36,14 @@ pub enum AppScreen {
     InGame,
 }
 
+/// Startup menu data is still loading off the main thread; the menu waits.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct FrontendPending;
+
+/// The launch intro cinematic owns the screen; the menu opens after it.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct IntroPlaying;
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiDraw(pub bool);
 

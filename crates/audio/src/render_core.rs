@@ -1,9 +1,10 @@
 use std::cell::UnsafeCell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::admission::AdmissionFailure;
 use crate::media::RenderMedia;
+use crate::pcm_stream::StreamRing;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const QUANTUM: usize = 128;
@@ -162,6 +163,7 @@ pub(crate) struct RenderShared {
     pub device_underruns: AtomicU64,
     pub cancelled: AtomicBool,
     pub peak: AtomicU32,
+    pub(crate) stream: Arc<Mutex<Option<Arc<StreamRing>>>>,
 }
 
 // The bounded rendering lease exclusively owns RenderState. Slot payload access
@@ -200,6 +202,7 @@ impl RenderShared {
             device_underruns: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
             peak: AtomicU32::new(0),
+            stream: Arc::default(),
         }
     }
 
@@ -276,6 +279,12 @@ impl RenderShared {
             if ended {
                 slot.phase.store(RETIRED, Ordering::Release);
             }
+        }
+        // Control holds this lock only to attach or detach; skip a quantum then.
+        if let Ok(stream) = self.stream.try_lock()
+            && let Some(ring) = stream.as_ref()
+        {
+            ring.mix(output);
         }
         let master = f32::from_bits(self.master.load(Ordering::Relaxed));
         let mut peak = f32::from_bits(self.peak.load(Ordering::Relaxed));
