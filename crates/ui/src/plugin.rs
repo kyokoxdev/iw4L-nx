@@ -3,7 +3,7 @@ use frame::{ClientSet, register_ui_contracts};
 
 use crate::classes::equip_txn::register_equip_systems;
 use crate::classes::select::ClassSelectPlugin;
-use crate::gap_hud::register_gap_hud_systems;
+use crate::gap_hud::{gap_should_show, register_gap_hud_systems};
 use crate::launch_report::publish_gap_hud;
 use crate::layers::{GameUiFontPlugin, UiLayersPlugin};
 use crate::loading::{poll_loading_preview, spawn_loading_screen, update_loading_screen};
@@ -32,7 +32,12 @@ impl Plugin for UiPlugin {
                 .chain()
                 .in_set(ClientSet::Ui),
         )
-        .add_systems(Update, publish_gap_hud.in_set(ClientSet::Ui));
+        .add_systems(
+            Update,
+            publish_gap_hud
+                .run_if(gap_should_show)
+                .in_set(ClientSet::Ui),
+        );
         register_screen_systems(app);
         register_equip_systems(app);
         register_gap_hud_systems(app);
