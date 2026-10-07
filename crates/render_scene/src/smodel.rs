@@ -153,11 +153,21 @@ pub struct LodRampSkinnedDvar {
     pub t5: asset_model::t5_lod::LodParmsAxis,
 }
 
+/// Switch: players, corpses and other skinned models drop to lower LODs at a
+/// third of their authored distance (fewer vertices to pose and skin on the
+/// CPU). The cull distance is untouched, so distant players stay visible.
+/// `r_lodScaleSkinned` still overrides it.
+const SWITCH_SKINNED_LOD_SCALE: Option<f32> = if cfg!(target_os = "horizon") {
+    Some(3.0)
+} else {
+    None
+};
+
 impl Default for LodRampSkinnedDvar {
     fn default() -> Self {
         Self {
-            scale_mid: None,
-            bias_mid: None,
+            scale_mid: SWITCH_SKINNED_LOD_SCALE,
+            bias_mid: SWITCH_SKINNED_LOD_SCALE.map(|_| 0.0),
             scale_last: None,
             world_unit: None,
             t5_scale: asset_model::t5_lod::R_LOD_SCALE_SKINNED_DEFAULT,
