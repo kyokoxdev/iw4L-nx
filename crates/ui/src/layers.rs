@@ -135,7 +135,8 @@ impl Plugin for UiLayersPlugin {
             .add_systems(PostUpdate, apply_ui_layers.in_set(ApplyUiLayers))
             .add_systems(
                 PostUpdate,
-                select_ui_camera
+                (park_overlay_camera, select_ui_camera)
+                    .chain()
                     .after(ApplyUiLayers)
                     .before(UiSystems::Prepare),
             );
@@ -188,6 +189,29 @@ fn apply_ui_layers(
 }
 
 pub use frame::UiCamera;
+
+/// Another UI camera (the render-scale presenter in a match, the frontend
+/// camera in the menu) already draws UI at full resolution. The overlay camera
+/// on top would add its own 2D pass and one more full-window blend for the
+/// same nodes, so it sits out until it is the only one left.
+fn park_overlay_camera(
+    others: Query<
+        &Camera,
+        (
+            With<UiCamera>,
+            Without<crate::loading::OverlayUiCamera>,
+            Without<crate::loading::LoadingCamera>,
+        ),
+    >,
+    mut overlays: Query<&mut Camera, With<crate::loading::OverlayUiCamera>>,
+) {
+    let active = !others.iter().any(|camera| camera.is_active);
+    for mut camera in &mut overlays {
+        if camera.is_active != active {
+            camera.is_active = active;
+        }
+    }
+}
 
 fn select_ui_camera(
     mut commands: Commands,

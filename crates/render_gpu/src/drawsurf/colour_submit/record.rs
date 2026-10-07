@@ -526,10 +526,17 @@ pub(super) fn draw_exact_colour(
     // needs a Perfetto recording the console cannot hold.
     if cfg!(target_os = "horizon") {
         static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        if FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 300 == 0 {
+        let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if frame % 300 == 0 {
+            // Census totals span the 300 frames since the last line.
+            let n: Vec<u32> = super::DRAW_CENSUS
+                .iter()
+                .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed) / 300)
+                .collect();
             diag::info!(
                 World,
-                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready}"
+                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={}",
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9]
             );
         }
     }

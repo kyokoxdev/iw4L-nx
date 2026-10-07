@@ -206,8 +206,8 @@ pub fn init_log(artifacts_root: &Path) -> PathBuf {
     }
 
     #[cfg(target_os = "horizon")]
-    if let Some(file) = state.file.as_ref() {
-        sd_log::start(file);
+    if state.file.is_some() {
+        sd_log::start(&path);
     }
     let _ = SINK.set(Mutex::new(state));
     path

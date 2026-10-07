@@ -15,7 +15,7 @@ use bevy::render::render_phase::TrackedRenderPass;
 use bevy::render::render_resource::binding_types::{
     sampler, storage_buffer_read_only, texture_2d, texture_3d, texture_cube, uniform_buffer_sized,
 };
-use bevy::render::render_resource::{
+use bevy::render::render_resource::{BindGroupId, 
     BindGroup, BindGroupEntry, BindGroupLayoutDescriptor, BindingResource, Buffer, BufferBinding,
     BufferDescriptor, BufferInitDescriptor, BufferUsages, ColorTargetState, ColorWrites,
     CommandEncoder, CompareFunction, DepthBiasState, DepthStencilState, Face, FrontFace,
@@ -1783,6 +1783,35 @@ fn smodel_pretess_submit_refusal(
     ))
 }
 
+/// Switch census for the `colour draws:` line, reset as it logs: draws per
+/// `ExactTessBind`, then `merged`, the ones folded into the draw before.
+pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 10] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; 10];
+
+/// Adjacent colour draws merge unless `IW4L_NO_DRAW_MERGE=1`.
+fn draw_merge_enabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*OFF.get_or_init(|| perf::switch("IW4L_NO_DRAW_MERGE"))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct DrawMergeKey {
+    pipeline: ExactPipelineSlot,
+    tess: ExactTessBind,
+    smc_stream_off: u64,
+    arena_lane: u8,
+    texture_bind: Option<BindGroupId>,
+    depth: (u32, u32),
+    constant_base: u32,
+}
+
+struct PendingDraw {
+    key: DrawMergeKey,
+    start: u32,
+    end: u32,
+    constant_base: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExactTessBind {
     World,
@@ -3245,6 +3274,20 @@ fn submit_exact_draw_run<'a>(
     let mut bound_arena = None;
     let mut textures_bound = false;
     let mut bound_slots_group = None;
+    let merge = draw_merge_enabled();
+    // The last direct draw, held back while the next ones extend its range.
+    let mut pending: Option<PendingDraw> = None;
+    macro_rules! flush_pending {
+        () => {
+            if let Some(held) = pending.take() {
+                pass.draw_indexed(
+                    held.start..held.end,
+                    0,
+                    held.constant_base..held.constant_base.saturating_add(1),
+                );
+            }
+        };
+    }
 
     let indirect_args = indirect.buffer();
     let mut batch = indirect::IndirectBatch::default();
@@ -3295,6 +3338,50 @@ fn submit_exact_draw_run<'a>(
             *last_refusal = Some(GpuSubmitRefusal::ConstantArenaMissing);
             continue;
         };
+        // Same pipeline, buffers, bind groups, depth range and constants
+        // block as the held draw, starting where its indices end: one
+        // draw_indexed covers both, identical output, one less GL draw.
+        let key = DrawMergeKey {
+            pipeline: draw.pipeline,
+            tess: draw.tess,
+            smc_stream_off: draw.smc_stream_off,
+            arena_lane: draw.arena_lane,
+            texture_bind: draw.texture_bind.as_ref().map(|group| group.id()),
+            depth: (draw.depth_min.to_bits(), draw.depth_max.to_bits()),
+            constant_base,
+        };
+        let end = draw.start.saturating_add(draw.count);
+        let contiguous = pending
+            .as_ref()
+            .is_some_and(|held| held.key == key && held.end == draw.start);
+        if cfg!(target_os = "horizon") {
+            use std::sync::atomic::Ordering::Relaxed;
+            DRAW_CENSUS[draw.tess as usize].fetch_add(1, Relaxed);
+            if contiguous {
+                DRAW_CENSUS[9].fetch_add(1, Relaxed);
+            }
+        }
+        if merge
+            && contiguous
+            && draw.indirect_arg.is_none()
+            && (draw.tess != ExactTessBind::World || end <= pretess.logical_index_count())
+            && let Some(held) = pending.as_mut()
+        {
+            held.end = end;
+            indexed = indexed.saturating_add(1);
+            if draw.owner_object_id == focused_object_id && focused_object_id.is_some() {
+                focused_drawn = focused_drawn.saturating_add(1);
+            }
+            if draw.bsp_counted
+                && let Some(kind) = draw.bsp_kind
+            {
+                let lane = bsp_kind_index(kind);
+                bsp_drawn_surfaces[lane] =
+                    bsp_drawn_surfaces[lane].saturating_add(u32::from(draw.bsp_surf_count));
+            }
+            continue;
+        }
+        flush_pending!();
         let (vertex, index) = match draw.tess {
             ExactTessBind::World => (geometry.world_vertex.as_ref(), pretess.index()),
             ExactTessBind::Smodel => (
@@ -3428,11 +3515,17 @@ fn submit_exact_draw_run<'a>(
                     issue_indirect(&mut pass, indirect_args, done, &mut record_n);
                 }
             }
-            _ => pass.draw_indexed(
-                draw.start..draw.start.saturating_add(draw.count),
-                0,
-                constant_base..constant_base.saturating_add(1),
-            ),
+            _ => {
+                pending = Some(PendingDraw {
+                    key,
+                    start: draw.start,
+                    end,
+                    constant_base,
+                });
+                if !merge {
+                    flush_pending!();
+                }
+            }
         }
         indexed = indexed.saturating_add(1);
         if draw.owner_object_id == focused_object_id && focused_object_id.is_some() {
@@ -3446,6 +3539,7 @@ fn submit_exact_draw_run<'a>(
                 bsp_drawn_surfaces[lane].saturating_add(u32::from(draw.bsp_surf_count));
         }
     }
+    flush_pending!();
     issue_indirect_batch!();
     let drop_started = Instant::now();
     drop(pass);

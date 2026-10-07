@@ -33,7 +33,13 @@ fn main() {
     #[cfg(target_os = "horizon")]
     {
         let _ = std::fs::create_dir_all("sdmc:/switch/iw4l");
-        let _ = std::fs::remove_file("sdmc:/switch/iw4l/boot.txt");
+        // Keep the last run's trace: a crash's alloc-failure/abort lines are
+        // only there, and relaunching to test another map used to erase them.
+        let _ = std::fs::remove_file("sdmc:/switch/iw4l/boot.prev.txt");
+        let _ = std::fs::rename(
+            "sdmc:/switch/iw4l/boot.txt",
+            "sdmc:/switch/iw4l/boot.prev.txt",
+        );
         platform_nx::breadcrumb("main");
         platform_nx::boot_env();
         std::panic::set_hook(Box::new(|info| {

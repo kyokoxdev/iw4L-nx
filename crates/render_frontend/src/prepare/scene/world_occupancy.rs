@@ -415,6 +415,9 @@ fn downscale_lens(
                 ..OrthographicProjection::default_2d()
             }),
             Visibility::Inherited,
+            // Bevy UI draws here at full resolution, over the quad; the
+            // overlay UI camera parks while this one exists.
+            frame::UiCamera,
         ))
         .add_child(quad)
         .id();

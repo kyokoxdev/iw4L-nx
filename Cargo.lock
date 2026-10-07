@@ -4328,7 +4328,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -7381,7 +7381,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.1",
@@ -7405,7 +7405,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -7437,7 +7437,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7445,7 +7445,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7453,7 +7453,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7461,7 +7461,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -7514,7 +7514,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "naga",
  "wgpu-types",
@@ -7523,7 +7523,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "29.0.4"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=9e938638f1d1f0679c8fd03148900edaa0b288ef#9e938638f1d1f0679c8fd03148900edaa0b288ef"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=2b384a390c73e8b1429688c49449dab5968784df#2b384a390c73e8b1429688c49449dab5968784df"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
