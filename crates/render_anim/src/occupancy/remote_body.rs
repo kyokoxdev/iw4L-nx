@@ -684,6 +684,7 @@ fn pose_remote_bodies(
         pending: Vec::new(),
         world_gun_gap: None,
     };
+    let pose_span = bevy::log::info_span!(target: "iw4l", "remote", name = "pose").entered();
     for (identity, runtime, transform, mut bolts, remote) in &mut roots {
         let persist_key = u32::from(identity.number());
 
@@ -696,6 +697,7 @@ fn pose_remote_bodies(
             Err(reason) => last_calc_error = Some(reason),
         }
     }
+    drop(pose_span);
     pose_frame.trees.retain_live(&live);
     pose_frame.pose_hashes.retain_live(&live);
 
@@ -719,6 +721,7 @@ fn pose_remote_bodies(
     }
 
     let _skin_model = perf::Span::HostSkinModelMs.enter();
+    let _skin_span = bevy::log::info_span!(target: "iw4l", "remote", name = "skin").entered();
     let workers = skin_blend_worker_count(pose_frame.pending.len());
     let pending = std::mem::take(&mut pose_frame.pending);
     let assembled = assemble_meshes_parallel(pending, workers);
@@ -1105,7 +1108,6 @@ fn skin_slot_into(
         skel,
         |bone| skin[base + bone],
         |surface| stream_lod_surface_rigid(skel, lod, entries, model, surface),
-        lod,
         &layout,
         &mut geom.packed[dest_first..dest_first + layout.dest_vertex_n],
     );

@@ -437,11 +437,12 @@ pub fn build_skin_layout(
     })
 }
 
+/// `layout` must come from [`build_skin_layout`] at the LOD being skinned:
+/// its visible surfaces are exactly the vertices to pose.
 pub fn skin_packed_into(
     skel: &FpvSkel,
     bone_to_local: impl Fn(usize) -> Mat4,
     surface_rigid: impl Fn(usize) -> bool,
-    lod: u8,
     layout: &SkinLayout,
     dest: &mut [[u8; asset_iw4::size::GFX_PACKED_VERTEX]],
 ) {
@@ -449,13 +450,13 @@ pub fn skin_packed_into(
     if dest.is_empty() {
         return;
     }
-    let (active_vert, rigid_vert) = vertex_stream_masks(skel, lod, |_| true, surface_rigid);
-    let max_bone = skel
-        .vert_skin
+    let max_bone = layout
+        .surfaces
         .iter()
-        .zip(&active_vert)
-        .filter(|(_, active)| **active)
-        .flat_map(|(skin, _)| {
+        .filter(|surf| surf.visible)
+        .flat_map(|surf| surf.src_first_vertex..surf.src_first_vertex + surf.vertex_count)
+        .filter_map(|src| skel.vert_skin.get(src))
+        .flat_map(|skin| {
             std::iter::once(skin.bones[0]).chain(
                 (1..4)
                     .filter(|&extra| skin.weights()[extra] > 0.0)
@@ -475,18 +476,16 @@ pub fn skin_packed_into(
         if !surf.visible {
             continue;
         }
+        let rigid = surface_rigid(surf.surface_index);
         for local in 0..surf.vertex_count {
             let src = surf.src_first_vertex + local;
             let dst = surf.dest_first_vertex + local;
             dest[dst] = skel.packed_vertices.get(src).copied().unwrap_or([0; 32]);
-            if !active_vert.get(src).copied().unwrap_or(false) {
-                continue;
-            }
             let Some(skin) = skel.vert_skin.get(src) else {
                 continue;
             };
             let p = Vec3::from_array(skel.position(src));
-            let (posed_position, primary_basis) = if rigid_vert.get(src).copied().unwrap_or(false) {
+            let (posed_position, primary_basis) = if rigid {
                 let matrix = bone_cache[usize::from(skin.bones[0])].0;
                 (matrix.transform_point3(p), matrix)
             } else {

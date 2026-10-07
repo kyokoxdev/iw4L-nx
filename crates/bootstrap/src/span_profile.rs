@@ -29,7 +29,7 @@ use bevy::log::tracing_subscriber::layer::{Context, Layer};
 use bevy::log::tracing_subscriber::registry::LookupSpan;
 
 const WINDOW: Duration = Duration::from_secs(5);
-const TOP: usize = 90;
+const TOP: usize = 160;
 /// The span `SubApp::update` opens around the main app's schedule: one per frame.
 const FRAME_SPAN: &str = "main app";
 

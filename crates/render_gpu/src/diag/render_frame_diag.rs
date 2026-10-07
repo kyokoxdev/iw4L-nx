@@ -870,7 +870,11 @@ fn main_opaque_gpu_path() -> DiagnosticPath {
 }
 
 pub fn register_render_frame_diag(app: &mut App) {
-    app.add_plugins(RenderDiagnosticsPlugin);
+    // Switch GL has no timestamp queries, so it measures nothing there, yet
+    // maps its readback buffer every frame (4-50ms render-thread stalls).
+    if !cfg!(target_os = "horizon") {
+        app.add_plugins(RenderDiagnosticsPlugin);
+    }
 
     let slot = SharedRenderStagesSlot::default();
     app.insert_resource(slot.clone())

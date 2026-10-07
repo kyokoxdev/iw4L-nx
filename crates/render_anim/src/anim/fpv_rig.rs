@@ -724,7 +724,6 @@ impl PreparedFpvRig {
                 skel,
                 |bone| pose.eye_from_world * pose.skin[part.bone_base + bone],
                 |_| false,
-                0,
                 &model.layout,
                 rows,
             );
