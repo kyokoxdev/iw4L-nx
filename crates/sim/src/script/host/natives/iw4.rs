@@ -231,16 +231,18 @@ fn dvar(world: &mut World, args: &[Value]) -> Result<String, String> {
         2 => string(args, 1)?,
         _ => return Err("wrong number of parameters".into()),
     };
-    let name = string(args, 0)?.to_ascii_lowercase();
+    let mut name = string(args, 0)?;
+    name.make_ascii_lowercase();
     Ok(runtime(world).dvars.get(&name).cloned().unwrap_or(fallback))
 }
 
 fn dvar_name(args: &[Value]) -> Result<String, String> {
-    let name = string(args, 0)?;
+    let mut name = string(args, 0)?;
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return Err(format!("Dvar {name} has an invalid dvar name"));
     }
-    Ok(name.to_ascii_lowercase())
+    name.make_ascii_lowercase();
+    Ok(name)
 }
 
 fn dvar_value(args: &[Value]) -> Result<String, String> {
