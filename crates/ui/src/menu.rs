@@ -285,12 +285,16 @@ fn add_rule_rows(items: &mut Vec<asset_game::MenuItem>) {
             Some(counts(MAX_RULE_FRIENDLY_BOTS)),
         ));
     }
-    let radar_rows: Vec<Row> = vec![(
+    let mut radar_rows: Vec<Row> = vec![(
         "constant_radar",
         "Constant Radar:",
         sim::CONSTANT_RADAR_DVAR,
         None,
     )];
+    // FFA has no Team Options column: bot rows go under Gameplay Options.
+    if team.is_none() {
+        radar_rows.append(&mut bot_rows);
+    }
     let mut columns = vec![(gameplay, below_gameplay, radar_rows)];
     if let Some(team) = team {
         columns.push((team, team.0, bot_rows));

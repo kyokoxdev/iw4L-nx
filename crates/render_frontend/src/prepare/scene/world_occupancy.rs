@@ -345,6 +345,18 @@ fn render_scale() -> f32 {
         .clamp(0.25, 1.0)
 }
 
+/// The presenter quad's mesh, made at startup so its GPU copy exists before
+/// any match. Bevy's 2D material specialization drops an entity whose mesh is
+/// not prepared yet and never retries it; a mesh made at spawn queues behind
+/// the map's uploads (`RenderAssetBytesPerFrame` on Switch) while the material
+/// is already ready, and the world image then never reaches the screen.
+#[derive(Resource)]
+pub struct PresenterQuadMesh(Handle<Mesh>);
+
+pub fn init_presenter_quad_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    commands.insert_resource(PresenterQuadMesh(meshes.add(Rectangle::new(1.0, 1.0))));
+}
+
 /// Point the lens at an image `scale` times the window and draw that image
 /// over the window, linearly filtered, from a 2D camera after it. Bevy UI goes
 /// to that camera, so the HUD nodes keep full resolution; the HUD tess the
@@ -382,9 +394,7 @@ fn downscale_lens(
     // blended quad let the uncleared frame under it show through there.
     let quad = commands.spawn(Transform::IDENTITY).id();
     commands.queue(move |world: &mut World| {
-        let mesh = world
-            .resource_mut::<Assets<Mesh>>()
-            .add(Rectangle::new(1.0, 1.0));
+        let mesh = world.resource::<PresenterQuadMesh>().0.clone();
         let material = world
             .resource_mut::<Assets<ColorMaterial>>()
             .add(ColorMaterial {

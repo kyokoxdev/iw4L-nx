@@ -256,6 +256,10 @@ fn boot_bots(
     if !installed.is_some_and(|installed| installed.0) {
         return;
     }
+    // Every bot joined → nothing to do; don't block on the step thread's lock.
+    if roster.bots.iter().all(|bot| bot.joined) {
+        return;
+    }
     let seed = roster.seed;
     let team_based = world.lock().game_mode_kind() != gamemode_iw4::GameModeKind::FreeForAll;
     let local_team = match world.lock().client_state_team(local.0) {
