@@ -35,6 +35,16 @@ pub(super) const DVAR_FOCUS: i32 = 0x10;
 pub(super) const MAX_SCRIPT_DEPTH: u32 = 16;
 const MAIN_MENU_DVAR: &str = "g_scriptMainMenu";
 const FALLBACK_MAIN_MENU: &str = "class";
+const FRONTEND_MODE_DVAR: &str = "ui_iw4l_mode";
+
+fn frontend_root(runner: &Runner<'_, '_>) -> &'static str {
+    if runner.dvar(FRONTEND_MODE_DVAR) == Some("mp") {
+        "iw4l_main"
+    } else {
+        "iw4l_select"
+    }
+}
+
 const SCOREBOARD_MENU: &str = "scoreboard";
 
 pub(super) fn is_focusable(item: &asset_game::MenuItem) -> bool {
@@ -253,7 +263,7 @@ pub(crate) fn update_script_menus(
     };
 
     if frontend && screen_changed {
-        runner.open("iw4l_main");
+        runner.open(frontend_root(&runner));
         if let Some(def) = catalog.get("main")
             && !def.sound_name.is_empty()
         {
@@ -691,7 +701,7 @@ fn handle_input(
     if pressed.escape {
         match runner.menus.input_menu().map(|m| m.name.clone()) {
             Some(top) => runner.escape(&top),
-            None if !runner.world.in_game => runner.open("iw4l_main"),
+            None if !runner.world.in_game => runner.open(frontend_root(&runner)),
             None => {
                 let main = runner
                     .world
