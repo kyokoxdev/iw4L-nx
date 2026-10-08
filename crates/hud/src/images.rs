@@ -280,9 +280,11 @@ impl HudImages {
         ns: AssetNamespace,
         name: &str,
     ) -> Option<render_material::CompiledPassState> {
-        (ns == HUD_CHROME_NAMESPACE)
-            .then(|| self.zone_states.get(&cache_key(name)).copied().flatten())
-            .flatten()
+        if ns == HUD_CHROME_NAMESPACE {
+            self.zone_states.get(&cache_key(name)).copied().flatten()
+        } else {
+            asset_material::zone_ui_material_state(ns, name)
+        }
     }
 
     pub(crate) fn blood_material_binding(&self) -> Result<BloodMaterialBinding, &str> {
@@ -516,17 +518,22 @@ impl HudImages {
             return Some((width, height, rgba.as_ref().clone()));
         }
         let main = self.trees.main_for(ns)?;
-        let mapped = (ns == HUD_CHROME_NAMESPACE)
-            .then(|| {
-                self.material_images
-                    .get(&cache_key(name))
-                    .map(String::as_str)
-            })
-            .flatten();
+        let authored = asset_material::ui_material_image(ns, name);
+        let fallback = asset_material::ui_preview_fallback(ns, name);
+        let mapped = authored.as_deref().or_else(|| {
+            (ns == HUD_CHROME_NAMESPACE)
+                .then(|| {
+                    self.material_images
+                        .get(&cache_key(name))
+                        .map(String::as_str)
+                })
+                .flatten()
+        });
         for image_name in mapped
             .filter(|image| *image != name)
             .into_iter()
             .chain(std::iter::once(name))
+            .chain(fallback.as_deref())
         {
             match asset_material::decode_ui_image_from_main(main, image_name) {
                 Ok(Some(image)) => return Some(image),

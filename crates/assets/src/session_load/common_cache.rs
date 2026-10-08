@@ -245,7 +245,15 @@ pub async fn load_shell_common(games: asset_transport::GamesRoot) -> ShellCommon
     let mut report = Vec::new();
     let key = CommonKey::shell(&games, &mut report);
     let (common, reach) = ensure_common(key).await;
-    let weapons = common.products.weapons.clone().publish();
+    let weapons = common.products.weapons.clone().publish_for_loadout();
+    for family in weapons.weapon_families().families() {
+        if let Some(id) = family.base
+            && let Some(image) = weapons.hud_icon_image_of(id)
+            && !family.image.is_empty()
+        {
+            asset_material::retain_ui_preview_fallback(family.key.namespace, &family.image, image);
+        }
+    }
     report.push(format!(
         "CAC: {reach} common set {}; weapons={} (iw4={} iw5={} t5={} t6={}) tables={}",
         common.key,
@@ -688,6 +696,16 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
     })
     .collect();
 
+    if let Some((_, table)) = cac_tables.iter().find(|(ns, table)| {
+        *ns == asset_core::AssetNamespace::Iw5
+            && table.name.eq_ignore_ascii_case("mp/camoTable.csv")
+    }) {
+        let dressed = weapons.prepare_iw5_camouflages(table, &material_seed, &fpv_meshes);
+        common_report.push(format!(
+            "IW5 camouflage: {dressed} weapon configurations prepared"
+        ));
+    }
+
     let mut camouflage_images = None;
     if let (Some((_, options)), Some((_, choices))) = (
         cac_tables.iter().find(|(ns, t)| {
@@ -743,7 +761,6 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
         t6_prepared.prepared, t6_prepared.refused
     ));
     weapons.resolve_fpv_mesh_edges(&fpv_meshes);
-    weapons.resolve_fpv_hands(&fpv_meshes, &asset_model::BodyMeshCatalog::default());
     weapons.resolve_world_model_edges(&world_weapons);
 
     common_report.push(format!(
@@ -775,6 +792,8 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
     material_seed.mark_images_common_owned();
     let mut iw5_materials = iw5_materials;
     iw5_materials.mark_images_common_owned();
+    asset_material::retain_ui_material_images(&material_seed);
+    asset_material::retain_ui_material_images(&iw5_materials);
     let set = Arc::new(CommonSet {
         id: NEXT_COMMON_PROFILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         key,

@@ -18,7 +18,9 @@ pub use preparation::{
 mod iw5_parameters;
 mod native_t6;
 use iw5_parameters::*;
+mod appearance;
 mod registry;
+pub use appearance::SelectedWeaponAppearance;
 pub use capture_t6::{
     t6_attachment_ads_model, t6_attachment_models, t6_attachment_sound_names,
     t6_attachment_xanim_names, t6_model_name, t6_weapon_sound_names, t6_weapon_xanim_names,
@@ -507,6 +509,15 @@ pub fn cac_offhand_bucket(offhand_class: i32) -> Option<CacOffhandBucket> {
 pub struct WeaponCamoModels {
     pub view: Vec<(u8, String)>,
     pub world: Vec<(u8, String)>,
+    pub choices: Vec<WeaponCamouflageChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponCamouflageChoice {
+    pub slot: u8,
+    pub name: String,
+    pub caption_key: String,
+    pub preview: String,
 }
 
 impl WeaponCamoModels {
@@ -1333,7 +1344,7 @@ struct WeaponRow {
 
     attachment_view_model_edges: Vec<AssetEdge<FpvMeshSpace>>,
 
-    fpv_hands: [Option<(asset_model::FpvHands, crate::FpvMeshIndex)>; 2],
+    fpv_soldiers: [Option<Result<crate::SoldierFpvPresentation, String>>; 2],
 
     fpv_mount_plan: Option<Result<asset_model::FpvMountPlan, asset_model::FpvMountError>>,
 
@@ -1346,6 +1357,7 @@ struct WeaponRow {
     camo_models: WeaponCamoModels,
     skin_parent: Option<String>,
     material_camos: Arc<[crate::WeaponCamouflage]>,
+    appearances: Arc<[appearance::PreparedWeaponAppearance]>,
 
     camo_view_edges: Vec<(u8, AssetEdge<FpvMeshSpace>)>,
     camo_world_edges: Vec<(u8, AssetEdge<WorldWeaponSpace>)>,
@@ -1463,7 +1475,7 @@ impl Default for WeaponRow {
             hand_xmodel_edge: AssetEdge::Absent,
             rocket_model_edge: AssetEdge::Absent,
             attachment_view_model_edges: Vec::new(),
-            fpv_hands: [None, None],
+            fpv_soldiers: [None, None],
             fpv_mount_plan: None,
             fpv_assemblies: [None, None],
             world_model: None,
@@ -1471,6 +1483,7 @@ impl Default for WeaponRow {
             camo_models: WeaponCamoModels::default(),
             skin_parent: None,
             material_camos: Arc::default(),
+            appearances: Arc::default(),
             camo_view_edges: Vec::new(),
             camo_world_edges: Vec::new(),
             attachment_world_model_edges: Vec::new(),
@@ -1539,6 +1552,8 @@ pub struct WeaponRegistry {
     rows: Vec<WeaponRow>,
 
     world_catalog_identity: u64,
+    fpv_catalog_identity: u64,
+    loadout_only: bool,
 
     iw5_attachments: HashMap<String, Iw5ScopeRow>,
 
@@ -1742,6 +1757,18 @@ impl std::ops::Deref for WeaponBuild {
 }
 
 impl WeaponBuild {
+    pub fn hand_xmodel_of(&self, index: u32) -> Option<&str> {
+        self.rows
+            .get(index as usize)
+            .and_then(|row| row.hand_xmodel.as_deref())
+    }
+
+    pub fn material_camouflages_of(&self, weapon: u32) -> &[crate::WeaponCamouflage] {
+        self.rows
+            .get(weapon as usize)
+            .map_or(&[], |row| &row.material_camos)
+    }
+
     pub fn set_family_tables(
         &mut self,
         tables: Vec<(crate::AssetNamespace, crate::CapturedStringTable)>,
@@ -2267,6 +2294,109 @@ impl WeaponBuild {
                     .insert((ns, name), group.to_owned());
             }
         }
+    }
+
+    pub fn set_material_camouflages(
+        &mut self,
+        namespace: crate::AssetNamespace,
+        choices: std::collections::BTreeMap<String, Vec<crate::WeaponCamouflage>>,
+        materials: &asset_material::MaterialCatalog,
+    ) -> usize {
+        let choices: std::collections::BTreeMap<_, Arc<[crate::WeaponCamouflage]>> = choices
+            .into_iter()
+            .map(|(name, camos)| {
+                let camos = camos
+                    .into_iter()
+                    .filter(|camo| {
+                        !camo.materials.is_empty()
+                            && camo
+                                .materials
+                                .iter()
+                                .all(|(_, key)| materials.material_index_by_key(key).is_some())
+                    })
+                    .collect::<Vec<_>>();
+                (normalize_weapon_name(&name), camos.into())
+            })
+            .collect();
+        let mut count = 0;
+        for row in &mut self.registry.rows {
+            if row.namespace == namespace
+                && let Some(camos) = choices.get(&row.name)
+            {
+                row.material_camos = Arc::clone(camos);
+                count += usize::from(!camos.is_empty());
+            }
+        }
+        count
+    }
+
+    pub fn prepare_iw5_camouflages(
+        &mut self,
+        table: &crate::CapturedStringTable,
+        materials: &asset_material::MaterialCatalog,
+        fpv: &crate::FpvMeshCatalog,
+    ) -> usize {
+        let choices: Vec<_> = (0..table.rows as i32)
+            .filter_map(|at| {
+                let slot = table
+                    .cell(at, 0)
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|slot| *slot != 0)?;
+                let name = table.cell(at, 1);
+                if name.is_empty() {
+                    return None;
+                }
+                Some(WeaponCamouflageChoice {
+                    slot,
+                    name: name.to_owned(),
+                    caption_key: table.cell(at, 2).to_owned(),
+                    preview: materials
+                        .material_index_by_ns(crate::AssetNamespace::Iw5, table.cell(at, 4))
+                        .and_then(|index| materials.materials.get(index.order()))
+                        .and_then(|material| materials.hud_image_name(material))
+                        .map(|image| format!("iw5:material/{image}"))
+                        .or_else(|| {
+                            table
+                                .cell(at, 4)
+                                .strip_prefix("ui_camoskin_")
+                                .map(|name| format!("iw5:material/weapon_camo_menu_{name}"))
+                        })
+                        .unwrap_or_default(),
+                })
+            })
+            .collect();
+        let mut count = 0;
+        for row in &mut self.registry.rows {
+            if row.namespace != crate::AssetNamespace::Iw5 {
+                continue;
+            }
+            row.camo_models.choices = choices
+                .iter()
+                .filter(|choice| {
+                    row.gun_xmodel_edge
+                        .bound_index()
+                        .and_then(|index| fpv.get_at(index))
+                        .zip(
+                            row.camo_view_edges
+                                .iter()
+                                .find(|(slot, _)| *slot == choice.slot)
+                                .and_then(|(_, edge)| edge.bound_index())
+                                .and_then(|index| fpv.get_at(index)),
+                        )
+                        .is_some_and(|(base, camo)| {
+                            base.skel.surfaces_for_lod(0) == camo.skel.surfaces_for_lod(0)
+                        })
+                        && row
+                            .camo_world_edges
+                            .iter()
+                            .any(|(slot, edge)| *slot == choice.slot && edge.is_bound())
+                })
+                .cloned()
+                .collect();
+            count += usize::from(!row.camo_models.choices.is_empty());
+        }
+        count
     }
 
     pub fn prepare_t5_camouflages(
