@@ -1219,11 +1219,28 @@ fn smodel_pretess_submit_refusal(
 }
 
 /// Switch census for the `colour draws:` line, reset as it logs: draws per
-/// `ExactTessBind`, then `merged`, the ones folded into the draw before.
-pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 10] =
-    [const { std::sync::atomic::AtomicU32::new(0) }; 10];
+/// `ExactTessBind`, then `merged`, the ones folded into the draw before, then
+/// `inst_adj`/`inst_any`, draws repeating an adjacent/earlier draw's mesh
+/// range with only another constants block, then `instanced`, the ones
+/// folded into the draw before as instances.
+pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 13] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; 13];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Switch: colour row cost in µs, summed until the `colour rows` line drains
+/// it: material execute, `prepare_ready_hit`, constant arena, scene texture
+/// lock wait, lane busy time (summed over lanes), rows wall time.
+pub(super) static ROW_COST_US: [std::sync::atomic::AtomicU64; 6] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+
+pub(super) fn row_clock() -> Option<std::time::Instant> {
+    cfg!(target_os = "horizon").then(std::time::Instant::now)
+}
+
+pub(super) fn row_cost_us(since: Option<std::time::Instant>) -> u64 {
+    since.map_or(0, |since| since.elapsed().as_micros() as u64)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ExactTessBind {
     World,
     Smodel,
@@ -1278,6 +1295,10 @@ struct PreparedExactDraw {
 
     indirect_arg: Option<u32>,
     arena_lane: u8,
+
+    /// Arena row of this draw's instance table entry, set when it repeats a
+    /// neighbour's mesh range so encode can fold them into one instanced draw.
+    instance_row: Option<u32>,
 }
 
 fn bsp_draw_source(kind: &RetainedDrawKind) -> (Option<BspCameraLane>, u16, u16, u16) {
@@ -1744,9 +1765,11 @@ impl ExactPrepare<'_> {
         let mut shared_guard;
         let (texture_slots, table) = match &mut self.textures {
             PrepareTextureTables::SceneShared(shared) => {
+                let wait = row_clock();
                 shared_guard = shared
                     .lock()
                     .expect("scene texture tables are never poisoned");
+                ROW_COST_US[3].fetch_add(row_cost_us(wait), std::sync::atomic::Ordering::Relaxed);
                 let refs = &mut *shared_guard;
                 (&mut refs.slots[scene_index], &mut refs.tables[scene_index])
             }
@@ -2896,6 +2919,7 @@ impl ExactPrepare<'_> {
 
                     indirect_arg: None,
                     arena_lane: 0,
+                    instance_row: None,
                 });
             }
             Ok(())
@@ -2907,9 +2931,69 @@ fn texture_table_layout(pipeline: &ExactColourPipeline) -> Option<&BindGroupLayo
     pipeline.ports.first().map(|port| &port.textures_layout)
 }
 
+fn instancing_enabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*OFF.get_or_init(|| perf::switch("IW4L_NO_INSTANCING"))
+}
+
+/// Everything encode needs equal, besides the constants block, to draw two
+/// prepared draws as instances of one draw.
+fn same_instance_shape(prev: &PreparedExactDraw, next: &PreparedExactDraw) -> bool {
+    let instanceable = |draw: &PreparedExactDraw| {
+        draw.constant_base.is_some() && draw.indirect_arg.is_none() && !draw.bsp_counted
+    };
+    instanceable(prev)
+        && instanceable(next)
+        && prev.pipeline == next.pipeline
+        && prev.tess == next.tess
+        && prev.smc_stream_off == next.smc_stream_off
+        && prev.start == next.start
+        && prev.count == next.count
+        && prev.after_scene_resolve == next.after_scene_resolve
+        && prev.state.srgb_write_enable() == next.state.srgb_write_enable()
+        && (prev.depth_min, prev.depth_max) == (next.depth_min, next.depth_max)
+        && prev.texture_bind.as_ref().map(|group| group.id())
+            == next.texture_bind.as_ref().map(|group| group.id())
+}
+
+/// Gives each draw in a run of same-shape neighbours an instance table row
+/// holding its block row; rows run in draw order so encode can extend them.
+fn assign_instance_rows(
+    draws: &mut [PreparedExactDraw],
+    packed: &mut ArenaPack,
+    reserved_rows: u32,
+    instancing: bool,
+) {
+    let mut bases = Vec::new();
+    for i in 0..draws.len() {
+        draws[i].instance_row = None;
+        if !instancing {
+            continue;
+        }
+        let joins_prev = i > 0 && same_instance_shape(&draws[i - 1], &draws[i]);
+        let joins_next = draws
+            .get(i + 1)
+            .is_some_and(|next| same_instance_shape(&draws[i], next));
+        if let (true, Some(base)) = (joins_prev || joins_next, draws[i].constant_base) {
+            draws[i].instance_row = Some(as_u32(bases.len()));
+            bases.push(base);
+        }
+    }
+    if bases.is_empty() {
+        return;
+    }
+    let first = packed.place_instance_table(&bases, reserved_rows);
+    for draw in draws.iter_mut() {
+        if let Some(row) = draw.instance_row.as_mut() {
+            *row = row.saturating_add(first);
+        }
+    }
+}
+
 fn upload_constant_arena(
     draws: &mut [PreparedExactDraw],
     packed: &mut ArenaPack,
+    instancing: bool,
     arena: &mut GpuConstantArena,
     pipeline: &ExactColourPipeline,
     registry: &ExactPipelineRegistry,
@@ -2930,6 +3014,7 @@ fn upload_constant_arena(
             *base = resolve_arena_base(*base, reserved_rows);
         }
     }
+    assign_instance_rows(draws, packed, reserved_rows, instancing);
     let layout = if arena.bind_group.is_none() {
         draws
             .iter()

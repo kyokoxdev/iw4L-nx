@@ -144,3 +144,52 @@ pub(crate) fn dxbc_alpha_tests() -> Vec<(String, String)> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod instance_prologue_tests {
+    use d3d9_sm3::{Semantic, ShaderStage, Sm3Register, Sm3RegisterFile, decode_sm3_program};
+
+    use super::*;
+
+    fn words(tokens: &[u32]) -> Vec<u8> {
+        tokens.iter().flat_map(|token| token.to_le_bytes()).collect()
+    }
+
+    /// `vs_3_0: dcl_position v0; dcl_position o0; mov o0, c0` and
+    /// `ps_3_0: mov oC0, c0`, lowered and run through naga.
+    #[test]
+    fn instanced_pass_validates() {
+        let vertex = words(&[
+            0xFFFE_0300, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0000,
+            0xE00F_0000, 0x0200_0001, 0xE00F_0000, 0xA0E4_0000, 0x0000_FFFF,
+        ]);
+        let pixel = words(&[0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0xA0E4_0000, 0x0000_FFFF]);
+        let vertex = decode_sm3_program(&vertex, ShaderStage::Vertex).unwrap();
+        let pixel = decode_sm3_program(&pixel, ShaderStage::Pixel).unwrap();
+        let position = Semantic { usage: 0, usage_index: 0 };
+        let constant = ConstantSlot { register: 0, program_defined: false };
+        let abi = PassLoweringAbi {
+            vertex_inputs: vec![VertexInput {
+                register: Sm3Register { file: Sm3RegisterFile::Input, index: 0 },
+                location: Some(0),
+                decl_type: Some(DeclType::Float4),
+                semantic: position,
+            }],
+            position: VaryingLink {
+                semantic: position,
+                vertex_register: Sm3Register { file: Sm3RegisterFile::Output, index: 0 },
+                pixel_register: None,
+                location: 0,
+            },
+            varyings: Vec::new(),
+            vertex_constants: vec![constant],
+            pixel_constants: vec![constant],
+            samplers: Vec::new(),
+            alpha_tests: MATERIAL_ALPHA_TESTS.to_vec(),
+            bound_slots: false,
+        };
+        let lowered = lower_pass_to_wgsl(&abi, &vertex, &pixel).unwrap();
+        assert!(lowered.source.contains(d3d9_sm3::wgsl::INSTANCE_BASE_PROLOGUE));
+        validate_wgsl(&lowered.source).unwrap_or_else(|error| panic!("{error:?}\n{}", lowered.source));
+    }
+}

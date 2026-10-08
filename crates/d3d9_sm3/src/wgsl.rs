@@ -25,6 +25,15 @@ pub const TEXTURE_TABLE_BINDING_CUBE: u32 = 1;
 pub const TEXTURE_TABLE_BINDING_3D: u32 = 2;
 pub const TEXTURE_TABLE_BINDING_SAMPLERS: u32 = 3;
 
+/// `instance_index` below this mark is the draw's constant block row. At or
+/// above it, `instance_index - INSTANCE_TABLE_MARK` is an arena row whose `.x`
+/// holds the block row, so one instanced draw can give each instance its own
+/// block. `dxbc_sm5` emits the same prologue.
+pub const INSTANCE_TABLE_MARK: u32 = 1 << 30;
+
+/// Vertex prologue resolving `sm3_instance` to `sm3_constant_base`.
+pub const INSTANCE_BASE_PROLOGUE: &str = "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n";
+
 pub const fn texture_slot_word(texture: u16, sampler: u16) -> u32 {
     (texture as u32) | ((sampler as u32) << 16)
 }
@@ -654,8 +663,9 @@ pub fn lower_pass_to_wgsl(
         )
         .unwrap();
     }
-    source.push_str("    @builtin(instance_index) sm3_constant_base: u32,\n");
+    source.push_str("    @builtin(instance_index) sm3_instance: u32,\n");
     source.push_str(") -> Sm3Varyings {\n");
+    source.push_str(INSTANCE_BASE_PROLOGUE);
     for input in &abi.vertex_inputs {
         let expansion = match (input.location, input.decl_type) {
             (Some(location), Some(decl_type)) => attribute_expansion(decl_type, location),

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::math::{Mat4, Vec3};
+use bevy::tasks::{ComputeTaskPool, TaskPool};
 use render_scene::SmodelPassMaterial;
 
 use crate::anim::fpv_pose::{
@@ -731,35 +732,47 @@ impl PreparedFpvRig {
         {
             return false;
         }
-        for slot in &self.slots {
-            let Some(pose) = poses[slot.hand].as_ref() else {
-                continue;
-            };
-            let part = &self.composition.parts[slot.part];
-            let model = &part.model;
-            let Some(skel) = self
-                .meshes
-                .get_at(model.catalog_entry)
-                .map(|entry| &entry.skel)
-            else {
-                continue;
-            };
-            let end = slot.dest_base.saturating_add(model.layout.dest_vertex_n);
-            if end > dest.len() {
-                continue;
+        // Slots own consecutive, disjoint `dest` ranges (assigned in slot
+        // order), so each skins as its own task: the caller and the compute
+        // pool (core 2 on Switch) split the work.
+        let mut rest = dest;
+        let mut cursor = 0usize;
+        ComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
+            for slot in &self.slots {
+                let part = &self.composition.parts[slot.part];
+                let model = &part.model;
+                let end = slot.dest_base.saturating_add(model.layout.dest_vertex_n);
+                if slot.dest_base < cursor || end - cursor > rest.len() {
+                    continue;
+                }
+                let (_, tail) = std::mem::take(&mut rest).split_at_mut(slot.dest_base - cursor);
+                let (rows, tail) = tail.split_at_mut(end - slot.dest_base);
+                rest = tail;
+                cursor = end;
+                let Some(pose) = poses[slot.hand].as_ref() else {
+                    continue;
+                };
+                let Some(skel) = self
+                    .meshes
+                    .get_at(model.catalog_entry)
+                    .map(|entry| &entry.skel)
+                else {
+                    continue;
+                };
+                scope.spawn(async move {
+                    skin_packed_into(
+                        skel,
+                        |bone| pose.eye_from_world * pose.skin[part.bone_base + bone],
+                        |_| false,
+                        &model.layout,
+                        rows,
+                    );
+                    if pose.offset != Vec3::ZERO {
+                        translate_packed_rows(rows, pose.offset);
+                    }
+                });
             }
-            let rows = &mut dest[slot.dest_base..end];
-            skin_packed_into(
-                skel,
-                |bone| pose.eye_from_world * pose.skin[part.bone_base + bone],
-                |_| false,
-                &model.layout,
-                rows,
-            );
-            if pose.offset != Vec3::ZERO {
-                translate_packed_rows(rows, pose.offset);
-            }
-        }
+        });
         true
     }
 }

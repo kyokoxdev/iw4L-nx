@@ -861,6 +861,10 @@ impl<'a> RemotePoseFrame<'a> {
             )?;
 
             if scene_ent_hidden {
+                // Unposed body still has a name anchor; the overhead-name trace decides visibility.
+                if !is_corpse {
+                    publish_posed_player_head(None, &[], identity, transform, posed_players)?;
+                }
                 return Ok(PoseOneOutcome::SceneHidden);
             }
             let AdvancedRemoteTree {
@@ -875,6 +879,9 @@ impl<'a> RemotePoseFrame<'a> {
             let Some(lods) = select_remote_lods(&model_set, slot_lods, |skel| {
                 skel_camera_lod(skel, origin, eye, ramp)
             }) else {
+                if !is_corpse {
+                    publish_posed_player_head(None, &[], identity, transform, posed_players)?;
+                }
                 return Ok(PoseOneOutcome::NoBodyLod);
             };
             if skip_frozen_corpse_dobj(
@@ -1154,7 +1161,9 @@ fn skin_blend_worker_count(jobs: usize) -> usize {
     }
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
-        .unwrap_or(1)
+        // Horizon has no `available_parallelism`: the caller plus the compute
+        // pool (core 2) split the chunks.
+        .unwrap_or_else(|_| ComputeTaskPool::try_get().map_or(1, |pool| pool.thread_num() + 1))
         .min(jobs)
 }
 

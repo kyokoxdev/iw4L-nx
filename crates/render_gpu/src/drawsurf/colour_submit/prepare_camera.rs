@@ -410,6 +410,7 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
     let rows = pack_plan.row_plan.as_slice();
     let share = rows.len().div_ceil(COLOUR_PREPARE_LANES).max(1);
     let mut tallies: [Option<CameraRowTally>; COLOUR_PREPARE_LANES] = Default::default();
+    let rows_started = super::row_clock();
     ComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
         let mut work = scratch
             .lanes
@@ -430,6 +431,10 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
             *tally = Some(prepare_camera_rows(&input, rows, lane, gpu, index as u8));
         }
     });
+    super::ROW_COST_US[5].fetch_add(
+        super::row_cost_us(rows_started),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let textures = textures
         .into_inner()
         .expect("scene texture tables are never poisoned");
@@ -1132,6 +1137,8 @@ fn prepare_camera_rows(
     let mut glassmesh_hits = 0usize;
     let mut viewmodel_pipeline_gap = false;
     let mut prepared_hits = 0u32;
+    let lane_started = super::row_clock();
+    let (mut exec_us, mut hit_us) = (0u64, 0u64);
     let mut prepared = std::mem::take(&mut lane.prepared);
     let mut submitted_keys = std::mem::take(&mut lane.submitted_keys);
     let mut pending_viewmodel_prepared = std::mem::take(&mut lane.pending_viewmodel_prepared);
@@ -1216,6 +1223,7 @@ fn prepare_camera_rows(
             last_glass_probe_sampler =
                 Some(u32::from(item.surface_samplers.reflection_probe.is_some()));
         }
+        let exec_started = super::row_clock();
         let executed = exec_view.map_or(
             Err(MaterialRefusal::StaleMaterialGeneration {
                 retained: colour.generation_id,
@@ -1226,6 +1234,7 @@ fn prepare_camera_rows(
                 executor.execute(view, item, tech, vertex_type, true)
             },
         );
+        exec_us += super::row_cost_us(exec_started);
         let execution = match executed {
             Ok(()) => executor.execution(),
             Err(ref cause) => {
@@ -1313,7 +1322,8 @@ fn prepare_camera_rows(
             &mut prepared
         };
         let dest_start = dest.len();
-        match exact_prepare.prepare_ready_hit(
+        let hit_started = super::row_clock();
+        let hit = exact_prepare.prepare_ready_hit(
             item,
             execution,
             run_serial,
@@ -1323,7 +1333,9 @@ fn prepare_camera_rows(
             binds_sun_shadow,
             binds_spot_shadow,
             dest,
-        ) {
+        );
+        hit_us += super::row_cost_us(hit_started);
+        match hit {
             Ok(_) => {
                 prepared_hits = prepared_hits.saturating_add(1);
                 if let Some((start, count)) = index_span {
@@ -1460,6 +1472,7 @@ fn prepare_camera_rows(
         (arena_share, arena_vertex_n, arena_pixel_n) = upload_constant_arena(
             &mut prepared,
             &mut lane.arena_pack,
+            super::instancing_enabled(),
             gpu_arena,
             pipeline,
             registry,
@@ -1469,6 +1482,13 @@ fn prepare_camera_rows(
         );
         pending_viewmodel_prepared.extend(prepared.drain(split..));
         arena_ms = arena_started.elapsed().as_secs_f32() * 1000.0;
+    }
+    if lane_started.is_some() {
+        use std::sync::atomic::Ordering::Relaxed;
+        super::ROW_COST_US[0].fetch_add(exec_us, Relaxed);
+        super::ROW_COST_US[1].fetch_add(hit_us, Relaxed);
+        super::ROW_COST_US[2].fetch_add((arena_ms * 1000.0) as u64, Relaxed);
+        super::ROW_COST_US[4].fetch_add(super::row_cost_us(lane_started), Relaxed);
     }
     for draw in prepared
         .iter_mut()

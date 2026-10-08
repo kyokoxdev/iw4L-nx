@@ -21,7 +21,7 @@ fn draw_merge_enabled() -> bool {
     !*OFF.get_or_init(|| perf::switch("IW4L_NO_DRAW_MERGE"))
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct DrawMergeKey {
     pipeline: ExactPipelineSlot,
     tess: ExactTessBind,
@@ -32,11 +32,16 @@ struct DrawMergeKey {
     constant_base: u32,
 }
 
+fn held_single_instance(held: Option<&PendingDraw>) -> bool {
+    held.is_some_and(|held| held.instances.len() == 1)
+}
+
 struct PendingDraw {
     key: DrawMergeKey,
     start: u32,
     end: u32,
-    constant_base: u32,
+    /// `instance_index` range: `constant_base..+1`, or instance table rows.
+    instances: std::ops::Range<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -237,14 +242,14 @@ fn record_colour_run<'a>(
     let merge = draw_merge_enabled();
     // The last direct draw, held back while the next ones extend its range.
     let mut pending: Option<PendingDraw> = None;
+    // Switch census: draws that differ from an earlier one in this run only
+    // by constants block (same mesh range), i.e. what instancing could fold.
+    let mut instance_prev: Option<(DrawMergeKey, u32, u32)> = None;
+    let mut instance_seen = std::collections::HashSet::new();
     macro_rules! flush_pending {
         () => {
             if let Some(held) = pending.take() {
-                pass.draw_indexed(
-                    held.start..held.end,
-                    0,
-                    held.constant_base..held.constant_base.saturating_add(1),
-                );
+                pass.draw_indexed(held.start..held.end, 0, held.instances.clone());
             }
         };
     }
@@ -312,9 +317,42 @@ fn record_colour_run<'a>(
             if contiguous {
                 super::DRAW_CENSUS[9].fetch_add(1, Relaxed);
             }
+            let shape = (DrawMergeKey { constant_base: 0, ..key }, draw.start, draw.count);
+            if instance_prev.is_some_and(|prev| prev == shape) {
+                super::DRAW_CENSUS[10].fetch_add(1, Relaxed);
+            }
+            if !instance_seen.insert(shape) {
+                super::DRAW_CENSUS[11].fetch_add(1, Relaxed);
+            }
+            instance_prev = Some(shape);
+        }
+        // Same mesh range as the held draw, next instance table row: one more
+        // instance of the held draw, each instance reading its own block.
+        let instance = draw
+            .instance_row
+            .map(|row| d3d9_sm3::wgsl::INSTANCE_TABLE_MARK.saturating_add(row));
+        if let (Some(instance), Some(held)) = (instance, pending.as_mut())
+            && draw.indirect_arg.is_none()
+            && held.instances.end == instance
+            && held.start == draw.start
+            && held.end == end
+            && held.key == (DrawMergeKey { constant_base: held.key.constant_base, ..key })
+        {
+            held.instances.end = instance.saturating_add(1);
+            if cfg!(target_os = "horizon") {
+                super::DRAW_CENSUS[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            result.indexed = result.indexed.saturating_add(1);
+            if draw.owner_object_id == input.focused_object_id
+                && input.focused_object_id.is_some()
+            {
+                result.focused_drawn = result.focused_drawn.saturating_add(1);
+            }
+            continue;
         }
         if merge
             && contiguous
+            && held_single_instance(pending.as_ref())
             && draw.indirect_arg.is_none()
             && (draw.tess != ExactTessBind::World || end <= input.geometry.world_index_count)
             && let Some(held) = pending.as_mut()
@@ -441,13 +479,14 @@ fn record_colour_run<'a>(
                 }
             }
             _ => {
+                let first = instance.unwrap_or(constant_base);
                 pending = Some(PendingDraw {
                     key,
                     start: draw.start,
                     end,
-                    constant_base,
+                    instances: first..first.saturating_add(1),
                 });
-                if !merge {
+                if !merge && instance.is_none() {
                     flush_pending!();
                 }
             }

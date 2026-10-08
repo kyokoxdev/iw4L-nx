@@ -223,6 +223,11 @@ fn horizon_task_pools() -> bevy::app::TaskPoolOptions {
         percent: 1.0,
         on_thread_spawn: Some(std::sync::Arc::new(move || {
             platform_nx::pin_current_thread(2, 0b100, name);
+            // Frame-critical fan-out (colour row lanes, parallel systems)
+            // must not wait out a sim step sharing core 2.
+            if name == "compute" {
+                platform_nx::raise_current_thread(name);
+            }
         })),
         on_thread_destroy: None,
     };

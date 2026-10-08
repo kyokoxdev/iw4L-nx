@@ -131,7 +131,13 @@ impl Plugin for HudPlugin {
                             .chain(),
                     )
                         .chain(),
-                    (report_hud_gaps, hud_stage_close::<8>, hud_surfaces_close).chain(),
+                    (
+                        // Diagnostics only; off on Switch to save the main thread.
+                        report_hud_gaps.run_if(|| !cfg!(target_os = "horizon")),
+                        hud_stage_close::<8>,
+                        hud_surfaces_close,
+                    )
+                        .chain(),
                 )
                     .chain()
                     .in_set(LifeFrontPublished),

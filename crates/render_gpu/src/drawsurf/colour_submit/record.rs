@@ -507,8 +507,18 @@ pub(super) fn draw_exact_colour(
                 .collect();
             diag::info!(
                 World,
-                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={}",
-                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9]
+                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={} inst_adj={} inst_any={} instanced={}",
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[12]
+            );
+            let ms: Vec<f32> = super::ROW_COST_US
+                .iter()
+                .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed) as f32 / 300_000.0)
+                .collect();
+            // lanes/wall = how many lanes actually ran at once.
+            diag::info!(
+                World,
+                "colour rows ms/frame: wall={:.2} lanes={:.2} exec={:.2} hit={:.2} arena={:.2} tex_wait={:.2}",
+                ms[5], ms[4], ms[0], ms[1], ms[2], ms[3]
             );
         }
     }

@@ -17,6 +17,7 @@ unsafe extern "C" {
     fn svcSetThreadCoreMask(handle: u32, preferred_core: i32, affinity_mask: u32) -> u32;
     fn svcGetCurrentProcessorNumber() -> u32;
     fn svcSetThreadPriority(handle: u32, priority: u32) -> u32;
+    fn svcGetThreadPriority(priority: *mut u32, handle: u32) -> u32;
     fn envGetMainThreadHandle() -> u32;
     fn svcGetThreadCoreMask(core: *mut i32, mask: *mut u64, handle: u32) -> u32;
     fn clkrstInitialize() -> u32;
@@ -88,6 +89,27 @@ pub fn background_current_thread(name: &str) {
     // SAFETY: plain SVC on the calling thread's pseudo-handle.
     let rc = unsafe { svcSetThreadPriority(CUR_THREAD_HANDLE, LOWEST) };
     breadcrumb(&format!("thread {name}: priority {LOWEST:#x} rc={rc:#x}"));
+}
+
+/// Lifts the calling thread one step above its creation priority. Every
+/// `threadCreate` thread starts at 0x3B (boot.txt), so on a shared core it
+/// then preempts its neighbours (the authority step, logging, audio workers)
+/// instead of queueing behind them: Horizon does not time-slice equal
+/// priorities.
+pub fn raise_current_thread(name: &str) {
+    const CUR_THREAD_HANDLE: u32 = 0xFFFF_8000;
+    let mut priority = 0u32;
+    // SAFETY: plain SVCs on the calling thread's pseudo-handle.
+    let rc = unsafe {
+        match svcGetThreadPriority(&mut priority, CUR_THREAD_HANDLE) {
+            0 => {
+                priority = priority.saturating_sub(1);
+                svcSetThreadPriority(CUR_THREAD_HANDLE, priority)
+            }
+            rc => rc,
+        }
+    };
+    breadcrumb(&format!("thread {name}: priority {priority:#x} rc={rc:#x}"));
 }
 
 /// Every thread nobody pins (SDL audio, Mesa queues, audio workers, `std`

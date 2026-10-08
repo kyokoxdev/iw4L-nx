@@ -444,6 +444,19 @@ struct LearnedTess {
     seen: bevy::platform::collections::HashSet<Option<render_material::CompiledPassState>>,
 }
 
+/// Modulate/saved-screen bind groups by (view, sampler): the same HUD images
+/// draw every frame, so building their groups each frame was ~40 creates.
+#[derive(Default)]
+struct TessBinds(
+    bevy::platform::collections::HashMap<
+        (
+            bevy::render::render_resource::TextureViewId,
+            bevy::render::render_resource::SamplerId,
+        ),
+        bevy::render::render_resource::BindGroup,
+    >,
+);
+
 fn tess_record(
     state: Option<render_material::CompiledPassState>,
 ) -> Option<[u8; 1 + super::learned::STATE_LEN]> {
@@ -481,8 +494,31 @@ fn draw_iw_tess(
     queue: Res<RenderQueue>,
     mut context: RenderContext,
     stages: Option<Res<SharedRenderStagesSlot>>,
-    mut learned: Local<LearnedTess>,
+    (mut learned, mut binds): (Local<LearnedTess>, Local<TessBinds>),
 ) {
+    // ponytail: wholesale clear bounds the cache (dropped images keep their
+    // groups until then); evict per key if HUD image churn ever matters.
+    if binds.0.len() > 256 {
+        binds.0.clear();
+    }
+    let modulate_layout = cache.get_bind_group_layout(&pipeline.modulate_layout);
+    let mut bind_for = |label: &'static str, view: &TextureView, sampler: &Sampler| {
+        binds
+            .0
+            .entry((view.id(), sampler.id()))
+            .or_insert_with(|| {
+                device.create_bind_group(
+                    label,
+                    &modulate_layout,
+                    &BindGroupEntries::sequential((
+                        pipeline.params.as_entire_buffer_binding(),
+                        view,
+                        sampler,
+                    )),
+                )
+            })
+            .clone()
+    };
     let (target, _extracted_view) = view.into_inner();
     let format = target.main_texture_format();
     if learned.warmed.insert(format) {
@@ -569,16 +605,8 @@ fn draw_iw_tess(
                         state: batch.state,
                     },
                 );
-                let layout = cache.get_bind_group_layout(&pipeline.modulate_layout);
-                let bind = device.create_bind_group(
-                    "iw_tess_modulate",
-                    &layout,
-                    &BindGroupEntries::sequential((
-                        pipeline.params.as_entire_buffer_binding(),
-                        &gpu_image.texture_view,
-                        &gpu_image.sampler,
-                    )),
-                );
+                let bind =
+                    bind_for("iw_tess_modulate", &gpu_image.texture_view, &gpu_image.sampler);
                 (id, bind, None)
             }
             HudTessTechnique::SavedScreen => {
@@ -594,16 +622,7 @@ fn draw_iw_tess(
                         state: batch.state,
                     },
                 );
-                let layout = cache.get_bind_group_layout(&pipeline.modulate_layout);
-                let bind = device.create_bind_group(
-                    "iw_tess_saved_screen",
-                    &layout,
-                    &BindGroupEntries::sequential((
-                        pipeline.params.as_entire_buffer_binding(),
-                        &copy.view,
-                        &copy.sampler,
-                    )),
-                );
+                let bind = bind_for("iw_tess_saved_screen", &copy.view, &copy.sampler);
                 (id, bind, None)
             }
             HudTessTechnique::SplatterAlt => {

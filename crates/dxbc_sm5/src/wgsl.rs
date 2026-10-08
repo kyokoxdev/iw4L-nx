@@ -1033,8 +1033,11 @@ pub fn lower_pass(abi: &PassAbi, vertex: &Shader, pixel: &Shader) -> Result<Stri
         )
         .unwrap();
     }
-    out.push_str("    @builtin(instance_index) sm3_constant_base: u32,\n) -> DxVaryings {\n");
-    let mut prologue = String::new();
+    out.push_str("    @builtin(instance_index) sm3_instance: u32,\n) -> DxVaryings {\n");
+    // Same instance table prologue as `d3d9_sm3::INSTANCE_BASE_PROLOGUE`.
+    let mut prologue = String::from(
+        "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n",
+    );
     for register in input_registers(vertex) {
         let expression = abi
             .vertex_inputs

@@ -410,6 +410,9 @@ pub(super) struct ArenaPack {
     pack_scratch: Vec<u8>,
     placed_dirty_scratch: Vec<(usize, usize)>,
     full_upload: bool,
+
+    /// Instance table span in `placed`: (row, capacity bytes).
+    instance_table: Option<(u32, usize)>,
 }
 
 impl ArenaPack {
@@ -490,6 +493,45 @@ impl ArenaPack {
         self.stamp = self.stamp.wrapping_add(1);
         self.share_n = 0;
         self.dirty.clear();
+    }
+
+    /// Writes one row per base (`.x` = block row) into a span of `placed`
+    /// kept across frames, uploading only rows that changed. Returns the
+    /// arena row of the first entry.
+    pub(super) fn place_instance_table(&mut self, bases: &[u32], reserved_rows: u32) -> u32 {
+        let len = bases.len() * 16;
+        let (row, cap) = match self.instance_table {
+            Some((row, cap)) if cap >= len => (row, cap),
+            old => {
+                if let Some(old) = old {
+                    self.placed_free.push(old);
+                }
+                let cap = len.next_power_of_two();
+                let row = take_exact_free(&mut self.placed_free, cap).unwrap_or_else(|| {
+                    let start = self.placed.len();
+                    self.placed.resize(start + cap, 0);
+                    u32::try_from(start / 16).expect("exact constant arena row fits u32")
+                });
+                (row, cap)
+            }
+        };
+        self.instance_table = Some((row, cap));
+        let start = row as usize * 16;
+        let rows = self.placed[start..start + len].chunks_exact_mut(16);
+        let mut dirty: Option<(usize, usize)> = None;
+        for (i, (entry, &base)) in rows.zip(bases).enumerate() {
+            let mut want = [0u8; 16];
+            want[..4].copy_from_slice(&base.to_ne_bytes());
+            if *entry != want {
+                entry.copy_from_slice(&want);
+                let (lo, hi) = (start + i * 16, start + i * 16 + 16);
+                dirty = Some(dirty.map_or((lo, hi), |(a, _)| (a, hi)));
+            }
+        }
+        if let Some((start, end)) = dirty {
+            self.dirty.push(ArenaDirty::Placed { start, end });
+        }
+        resolve_arena_base(mark_placed_base(row), reserved_rows)
     }
 
     fn reserved_rows(&self) -> u32 {

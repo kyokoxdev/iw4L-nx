@@ -1303,6 +1303,7 @@ fn prepare_shadowmap_spot(
         upload_constant_arena(
             &mut all_prepared,
             pack,
+            false,
             gpu,
             pipeline_res,
             registry,
