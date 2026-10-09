@@ -31,8 +31,16 @@ pub const TEXTURE_TABLE_BINDING_SAMPLERS: u32 = 3;
 /// block. `dxbc_sm5` emits the same prologue.
 pub const INSTANCE_TABLE_MARK: u32 = 1 << 30;
 
-/// Vertex prologue resolving `sm3_instance` to `sm3_constant_base`.
-pub const INSTANCE_BASE_PROLOGUE: &str = "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n";
+/// `instance_index` at or above this mark is a band table: arena row
+/// `instance_index - BAND_TABLE_MARK` holds the band count in `.x`, and the
+/// rows after it one band each, `.x` block row and `.y` lowest vertex, in
+/// ascending vertex order. One draw over several objects' contiguous index
+/// ranges then gives each object's vertices its own block.
+pub const BAND_TABLE_MARK: u32 = 1 << 31;
+
+/// Vertex prologue resolving `sm3_instance` (and `sm3_vertex` for band
+/// tables) to `sm3_constant_base`.
+pub const INSTANCE_BASE_PROLOGUE: &str = "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x80000000u {\n        let sm3_band = sm3_instance - 0x80000000u;\n        let sm3_bands = bitcast<u32>(sm3_constants.c[sm3_band].x);\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_band + 1u].x);\n        for (var k = 2u; k <= sm3_bands; k += 1u) {\n            let row = bitcast<vec4<u32>>(sm3_constants.c[sm3_band + k]);\n            if sm3_vertex >= row.y {\n                sm3_constant_base = row.x;\n            }\n        }\n    } else if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n";
 
 pub const fn texture_slot_word(texture: u16, sampler: u16) -> u32 {
     (texture as u32) | ((sampler as u32) << 16)
@@ -664,6 +672,7 @@ pub fn lower_pass_to_wgsl(
         .unwrap();
     }
     source.push_str("    @builtin(instance_index) sm3_instance: u32,\n");
+    source.push_str("    @builtin(vertex_index) sm3_vertex: u32,\n");
     source.push_str(") -> Sm3Varyings {\n");
     source.push_str(INSTANCE_BASE_PROLOGUE);
     for input in &abi.vertex_inputs {

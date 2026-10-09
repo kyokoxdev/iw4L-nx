@@ -33,14 +33,17 @@ struct DrawMergeKey {
 }
 
 fn held_single_instance(held: Option<&PendingDraw>) -> bool {
-    held.is_some_and(|held| held.instances.len() == 1)
+    held.is_some_and(|held| {
+        held.instances.len() == 1 && held.instances.start < d3d9_sm3::wgsl::BAND_TABLE_MARK
+    })
 }
 
 struct PendingDraw {
     key: DrawMergeKey,
     start: u32,
     end: u32,
-    /// `instance_index` range: `constant_base..+1`, or instance table rows.
+    /// `instance_index` range: `constant_base..+1`, instance table rows, or
+    /// one band table.
     instances: std::ops::Range<u32>,
 }
 
@@ -326,6 +329,28 @@ fn record_colour_run<'a>(
             }
             instance_prev = Some(shape);
         }
+        // Same band table as the held draw, indices continuing its range: the
+        // shader picks this draw's block by vertex, so the held draw grows.
+        let band = draw
+            .band_row
+            .map(|row| d3d9_sm3::wgsl::BAND_TABLE_MARK.saturating_add(row));
+        if let (Some(band), Some(held)) = (band, pending.as_mut())
+            && held.instances.start == band
+            && held.end == draw.start
+            && held.key == (DrawMergeKey { constant_base: held.key.constant_base, ..key })
+        {
+            held.end = end;
+            if cfg!(target_os = "horizon") {
+                super::DRAW_CENSUS[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            result.indexed = result.indexed.saturating_add(1);
+            if draw.owner_object_id == input.focused_object_id
+                && input.focused_object_id.is_some()
+            {
+                result.focused_drawn = result.focused_drawn.saturating_add(1);
+            }
+            continue;
+        }
         // Same mesh range as the held draw, next instance table row: one more
         // instance of the held draw, each instance reading its own block.
         let instance = draw
@@ -479,14 +504,14 @@ fn record_colour_run<'a>(
                 }
             }
             _ => {
-                let first = instance.unwrap_or(constant_base);
+                let first = band.or(instance).unwrap_or(constant_base);
                 pending = Some(PendingDraw {
                     key,
                     start: draw.start,
                     end,
                     instances: first..first.saturating_add(1),
                 });
-                if !merge && instance.is_none() {
+                if !merge && instance.is_none() && band.is_none() {
                     flush_pending!();
                 }
             }

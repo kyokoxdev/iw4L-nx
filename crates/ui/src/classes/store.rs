@@ -110,7 +110,9 @@ impl SessionClassStore {
         if !slots.is_empty() {
             let available = slots.clone();
             while slots.len() < PERSONAL_CLASS_SLOTS {
-                slots.push(available[slots.len() % available.len()].clone());
+                let mut copy = available[slots.len() % available.len()].clone();
+                copy.name = format!("custom_{}", slots.len() + 1);
+                slots.push(copy);
             }
         }
         Self {
@@ -300,6 +302,11 @@ pub(crate) fn load_class_store(
                 diag::info!(Ui, "classes: {} read from {}", slots.len(), path.display());
                 file.written = Some(encode_slots(&slots));
                 store.slots = slots;
+                // Files from 5-slot builds: fill the new slots with defaults.
+                if store.slots.len() < PERSONAL_CLASS_SLOTS {
+                    let have = store.slots.len();
+                    store.slots.extend(generate().slots.into_iter().skip(have));
+                }
                 for slot in &mut store.slots {
                     slot.lock_reason = catalog.validate_class(slot).err();
                 }

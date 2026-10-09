@@ -507,8 +507,8 @@ pub(super) fn draw_exact_colour(
                 .collect();
             diag::info!(
                 World,
-                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={} inst_adj={} inst_any={} instanced={}",
-                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[12]
+                "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={} inst_adj={} inst_any={} instanced={} banded={}",
+                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[12], n[13]
             );
             let ms: Vec<f32> = super::ROW_COST_US
                 .iter()

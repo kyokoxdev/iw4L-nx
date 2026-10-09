@@ -204,6 +204,33 @@ pub fn push_remote_body_cpu_draw(
     });
 }
 
+/// Lays the index ranges out material by material, keeping draw order within
+/// a material, so one surface of every body sits contiguous in the index
+/// buffer, in the order the colour list sorts those draws (object ids follow
+/// draw order). Colour submit can then draw the run as one band-table draw.
+/// Index rows no draw references (surfaces without a material) are dropped.
+pub fn group_remote_body_indices_by_material(plan: &mut RemoteBodyDrawPlan) {
+    let mut order: Vec<usize> = (0..plan.draws.len()).collect();
+    order.sort_by_key(|&i| plan.draws[i].material);
+    let mut indices = Vec::with_capacity(plan.indices.len());
+    for i in order {
+        let surface = plan.draws[i].surface as usize;
+        let Some(&(start, count)) = plan.surface_ranges.get(surface) else {
+            continue;
+        };
+        let Some(span) = plan
+            .indices
+            .get(start as usize..start as usize + count as usize)
+        else {
+            continue;
+        };
+        let new_start = indices.len() as u32;
+        indices.extend_from_slice(span);
+        plan.surface_ranges[surface].0 = new_start;
+    }
+    plan.indices = indices;
+}
+
 pub fn finish_remote_body_draw_plan(plan: &mut RemoteBodyDrawPlan) {
     let topology = topology_fingerprint(&plan.indices, &plan.surface_ranges, plan.decoded_n);
     if plan.revisions.topology != topology {

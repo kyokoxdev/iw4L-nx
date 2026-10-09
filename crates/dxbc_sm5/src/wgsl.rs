@@ -1033,10 +1033,11 @@ pub fn lower_pass(abi: &PassAbi, vertex: &Shader, pixel: &Shader) -> Result<Stri
         )
         .unwrap();
     }
-    out.push_str("    @builtin(instance_index) sm3_instance: u32,\n) -> DxVaryings {\n");
+    out.push_str("    @builtin(instance_index) sm3_instance: u32,\n");
+    out.push_str("    @builtin(vertex_index) sm3_vertex: u32,\n) -> DxVaryings {\n");
     // Same instance table prologue as `d3d9_sm3::INSTANCE_BASE_PROLOGUE`.
     let mut prologue = String::from(
-        "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n",
+        "    var sm3_constant_base = sm3_instance;\n    if sm3_instance >= 0x80000000u {\n        let sm3_band = sm3_instance - 0x80000000u;\n        let sm3_bands = bitcast<u32>(sm3_constants.c[sm3_band].x);\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_band + 1u].x);\n        for (var k = 2u; k <= sm3_bands; k += 1u) {\n            let row = bitcast<vec4<u32>>(sm3_constants.c[sm3_band + k]);\n            if sm3_vertex >= row.y {\n                sm3_constant_base = row.x;\n            }\n        }\n    } else if sm3_instance >= 0x40000000u {\n        sm3_constant_base = bitcast<u32>(sm3_constants.c[sm3_instance - 0x40000000u].x);\n    }\n",
     );
     for register in input_registers(vertex) {
         let expression = abi

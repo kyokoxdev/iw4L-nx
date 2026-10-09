@@ -15,6 +15,7 @@ use crate::gaps::{RenderGap, RenderGapCause, RenderPresentationGaps};
 use crate::lighting_box_half;
 use crate::{
     RemoteBodyDrawPlan, append_remote_body_cpu_blob, finish_remote_body_draw_plan,
+    group_remote_body_indices_by_material,
     install_body_packed_session, push_remote_body_cpu_draw, take_body_packed_session,
     topology_fingerprint,
 };
@@ -1484,6 +1485,7 @@ fn submit_remote_bodies(
     }
     install_body_packed_session(&mut plan, session);
     if submitted_verts > 0 && !any_missing_material {
+        group_remote_body_indices_by_material(&mut plan);
         plan.revisions.bump_surfaces();
         plan.revisions.bump_draws();
         let topology = topology_fingerprint(&plan.indices, &plan.surface_ranges, plan.decoded_n);

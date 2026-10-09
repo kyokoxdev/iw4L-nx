@@ -1222,9 +1222,10 @@ fn smodel_pretess_submit_refusal(
 /// `ExactTessBind`, then `merged`, the ones folded into the draw before, then
 /// `inst_adj`/`inst_any`, draws repeating an adjacent/earlier draw's mesh
 /// range with only another constants block, then `instanced`, the ones
-/// folded into the draw before as instances.
-pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 13] =
-    [const { std::sync::atomic::AtomicU32::new(0) }; 13];
+/// folded into the draw before as instances, then `banded`, the ones folded
+/// into the draw before through a band table.
+pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 14] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; 14];
 
 /// Switch: colour row cost in µs, summed until the `colour rows` line drains
 /// it: material execute, `prepare_ready_hit`, constant arena, scene texture
@@ -1299,6 +1300,13 @@ struct PreparedExactDraw {
     /// Arena row of this draw's instance table entry, set when it repeats a
     /// neighbour's mesh range so encode can fold them into one instanced draw.
     instance_row: Option<u32>,
+
+    /// Lowest and highest vertex an XModel draw indexes.
+    vertex_span: Option<(u32, u32)>,
+
+    /// Arena row of the band table header shared by a run of contiguous
+    /// XModel draws that encode folds into one draw (see `assign_band_rows`).
+    band_row: Option<u32>,
 }
 
 fn bsp_draw_source(kind: &RetainedDrawKind) -> (Option<BspCameraLane>, u16, u16, u16) {
@@ -2886,6 +2894,14 @@ impl ExactPrepare<'_> {
                         self.cost.note_pack_seed(executable.local_banks.is_some());
                         (Some(Arc::new(packed)), None)
                     };
+                let vertex_span = match kind {
+                    RetainedDrawKind::XModel { surface, .. } => self
+                        .geometry
+                        .xmodel_surface_spans
+                        .get(surface as usize)
+                        .copied(),
+                    _ => None,
+                };
                 let (depth_min, depth_max) = if target.forward_z {
                     (0.0, 1.0)
                 } else {
@@ -2920,6 +2936,8 @@ impl ExactPrepare<'_> {
                     indirect_arg: None,
                     arena_lane: 0,
                     instance_row: None,
+                    vertex_span,
+                    band_row: None,
                 });
             }
             Ok(())
@@ -2956,17 +2974,145 @@ fn same_instance_shape(prev: &PreparedExactDraw, next: &PreparedExactDraw) -> bo
             == next.texture_bind.as_ref().map(|group| group.id())
 }
 
+/// Bands fold unless `IW4L_NO_BANDING=1`.
+fn banding_enabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*OFF.get_or_init(|| perf::switch("IW4L_NO_BANDING"))
+}
+
+/// Everything encode needs equal, besides the constants block, to draw `next`
+/// in the same draw as `prev`: an XModel draw whose indices continue `prev`'s.
+fn bandable(draw: &PreparedExactDraw) -> bool {
+    draw.tess == ExactTessBind::XModel
+        && draw.vertex_span.is_some()
+        && draw.instance_row.is_none()
+        && draw.constant_base.is_some()
+        && draw.indirect_arg.is_none()
+}
+
+fn same_band_shape(prev: &PreparedExactDraw, next: &PreparedExactDraw) -> bool {
+    bandable(prev)
+        && bandable(next)
+        && prev.pipeline == next.pipeline
+        && prev.start.saturating_add(prev.count) == next.start
+        && prev.after_scene_resolve == next.after_scene_resolve
+        && prev.state.srgb_write_enable() == next.state.srgb_write_enable()
+        && (prev.depth_min, prev.depth_max) == (next.depth_min, next.depth_max)
+        && prev.texture_bind.as_ref().map(|group| group.id())
+            == next.texture_bind.as_ref().map(|group| group.id())
+}
+
+/// Splits runs of `same_band_shape` neighbours into bands, one per constants
+/// block, and gives each run of two or more bands a table: a header row with
+/// the band count, then `[block row, lowest vertex]` per band. Bands must sit
+/// in ascending, disjoint vertex spans, which the shader prologue relies on
+/// to find a vertex's band; a draw that breaks that order ends the run.
+fn assign_band_rows(draws: &mut [PreparedExactDraw], table: &mut Vec<[u32; 4]>) {
+    let blocks: Vec<_> = draws
+        .iter()
+        .map(|draw| {
+            bandable(draw)
+                .then(|| draw.constant_base.zip(draw.vertex_span))
+                .flatten()
+        })
+        .collect();
+    let joins: Vec<bool> = (0..draws.len())
+        .map(|j| j > 0 && same_band_shape(&draws[j - 1], &draws[j]))
+        .collect();
+    for (run, bands) in band_runs(&blocks, &joins) {
+        let header = as_u32(table.len());
+        table.push([as_u32(bands.len()), 0, 0, 0]);
+        table.extend_from_slice(&bands);
+        for draw in &mut draws[run] {
+            draw.band_row = Some(header);
+        }
+    }
+}
+
+/// `blocks[j]`: draw `j`'s block row and vertex span if it can band at all;
+/// `joins[j]`: it can continue draw `j - 1`'s draw. Returns each run of two
+/// or more bands with its `[block row, lowest vertex, 0, 0]` rows.
+fn band_runs(
+    blocks: &[Option<(u32, (u32, u32))>],
+    joins: &[bool],
+) -> Vec<(std::ops::Range<usize>, Vec<[u32; 4]>)> {
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < blocks.len() {
+        let mut bands: Vec<[u32; 4]> = Vec::new();
+        // Highest vertex of all bands, and of the bands before the last one.
+        let (mut hi, mut before_hi) = (0u32, 0u32);
+        let mut j = i;
+        while j < blocks.len() {
+            let Some((base, (lo, top))) = blocks[j].filter(|_| j == i || joins[j]) else {
+                break;
+            };
+            let banded = bands.len();
+            match bands.last_mut() {
+                Some(last) if last[0] == base => {
+                    if banded > 1 && lo <= before_hi {
+                        break;
+                    }
+                    last[1] = last[1].min(lo);
+                }
+                Some(_) if lo <= hi => break,
+                _ => {
+                    before_hi = hi;
+                    bands.push([base, lo, 0, 0]);
+                }
+            }
+            hi = hi.max(top);
+            j += 1;
+        }
+        if bands.len() > 1 {
+            runs.push((i..j, bands));
+        }
+        i = j.max(i + 1);
+    }
+    runs
+}
+
+#[cfg(test)]
+mod band_tests {
+    use super::band_runs;
+
+    #[test]
+    fn bands_split_on_block_and_stop_on_overlap() {
+        let blocks = [
+            Some((7, (0, 9))),    // body A, block 7
+            Some((7, (0, 9))),    // body A second surface, same block
+            Some((8, (10, 19))),  // body B
+            Some((9, (15, 30))),  // overlaps B: new run starts here
+            Some((10, (31, 40))), // continues that run
+            None,                 // not bandable
+            Some((11, (50, 60))), // lone band: no table
+        ];
+        let joins = [false, true, true, true, true, false, false];
+        let runs = band_runs(&blocks, &joins);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, 0..3);
+        assert_eq!(runs[0].1, vec![[7, 0, 0, 0], [8, 10, 0, 0]]);
+        assert_eq!(runs[1].0, 3..5);
+        assert_eq!(runs[1].1, vec![[9, 15, 0, 0], [10, 31, 0, 0]]);
+        // A draw that does not continue its neighbour's indices ends the run.
+        let runs = band_runs(&blocks[..3], &[false, true, false]);
+        assert!(runs.is_empty());
+    }
+}
+
 /// Gives each draw in a run of same-shape neighbours an instance table row
 /// holding its block row; rows run in draw order so encode can extend them.
+/// Then folds contiguous XModel runs into band tables in the same span.
 fn assign_instance_rows(
     draws: &mut [PreparedExactDraw],
     packed: &mut ArenaPack,
     reserved_rows: u32,
     instancing: bool,
 ) {
-    let mut bases = Vec::new();
+    let mut table = Vec::new();
     for i in 0..draws.len() {
         draws[i].instance_row = None;
+        draws[i].band_row = None;
         if !instancing {
             continue;
         }
@@ -2975,16 +3121,22 @@ fn assign_instance_rows(
             .get(i + 1)
             .is_some_and(|next| same_instance_shape(&draws[i], next));
         if let (true, Some(base)) = (joins_prev || joins_next, draws[i].constant_base) {
-            draws[i].instance_row = Some(as_u32(bases.len()));
-            bases.push(base);
+            draws[i].instance_row = Some(as_u32(table.len()));
+            table.push([base, 0, 0, 0]);
         }
     }
-    if bases.is_empty() {
+    if instancing && banding_enabled() {
+        assign_band_rows(draws, &mut table);
+    }
+    if table.is_empty() {
         return;
     }
-    let first = packed.place_instance_table(&bases, reserved_rows);
+    let first = packed.place_instance_table(&table, reserved_rows);
     for draw in draws.iter_mut() {
-        if let Some(row) = draw.instance_row.as_mut() {
+        for row in [draw.instance_row.as_mut(), draw.band_row.as_mut()]
+            .into_iter()
+            .flatten()
+        {
             *row = row.saturating_add(first);
         }
     }

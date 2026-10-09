@@ -36,6 +36,9 @@ pub(super) struct ExactColourGeometry {
 
     pub(super) xmodel: residency::GpuMesh,
     pub(super) xmodel_surface_ranges: Vec<(u32, u32)>,
+    /// Lowest and highest vertex each `xmodel_surface_ranges` entry indexes,
+    /// so prepare can tell bands of one merged draw apart by `vertex_index`.
+    pub(super) xmodel_surface_spans: Vec<(u32, u32)>,
 
     pub(super) xmodel_resident_segments: render_frame::PackedSegments,
 
@@ -555,6 +558,7 @@ fn upload_xmodel_streams(
         geometry.xmodel.uploaded_vertices = source.xmodel_revision;
         geometry.xmodel.uploaded_topology = source.xmodel_topology_revision;
         geometry.xmodel_surface_ranges.clear();
+        geometry.xmodel_surface_spans.clear();
         geometry.xmodel_resident_segments.forget();
         geometry.last_xmodel_gpu_hash = None;
         return;
@@ -614,6 +618,16 @@ fn upload_xmodel_streams(
             geometry
                 .xmodel_surface_ranges
                 .clone_from(&*source.xmodel_surface_ranges);
+            geometry.xmodel_surface_spans.clear();
+            geometry.xmodel_surface_spans.extend(source.xmodel_surface_ranges.iter().map(
+                |&(start, count)| {
+                    let span = source
+                        .xmodel_indices
+                        .get(start as usize..start.saturating_add(count) as usize)
+                        .unwrap_or(&[]);
+                    span.iter().fold((u32::MAX, 0), |(lo, hi), &v| (lo.min(v), hi.max(v)))
+                },
+            ));
         } else {
             diag::error!(
                 World,

@@ -53,6 +53,9 @@ struct PreparedPostFxGpu {
     textures_layout: BindGroupLayoutDescriptor,
     sampler: bevy::render::render_resource::Sampler,
     vertex: Buffer,
+    /// Size `vertex` last holds a quad for, `x << 32 | y`; `u64::MAX` when
+    /// unwritten. Prepared passes move between steps, so the size can change.
+    vertex_size: std::sync::atomic::AtomicU64,
     index: Buffer,
     constants_arena: Buffer,
 }
@@ -594,6 +597,7 @@ fn create_postfx_gpu(
         textures_layout,
         sampler: device.create_sampler(&sampler.descriptor()),
         vertex,
+        vertex_size: std::sync::atomic::AtomicU64::new(u64::MAX),
         index,
         constants_arena,
     })
@@ -953,11 +957,18 @@ fn draw_postfx(
             targets.quarter
         };
         queue.write_buffer(&ready.constants_arena, 0, bytes);
-        queue.write_buffer(
-            &ready.vertex,
-            0,
-            &packed_fullscreen_vertices(size.x, size.y),
-        );
+        let packed_size = u64::from(size.x) << 32 | u64::from(size.y);
+        if ready
+            .vertex_size
+            .swap(packed_size, std::sync::atomic::Ordering::Relaxed)
+            != packed_size
+        {
+            queue.write_buffer(
+                &ready.vertex,
+                0,
+                &packed_fullscreen_vertices(size.x, size.y),
+            );
+        }
         let views: Vec<_> = step
             .images
             .iter()

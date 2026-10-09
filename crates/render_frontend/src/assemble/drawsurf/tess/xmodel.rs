@@ -1290,7 +1290,12 @@ fn compact_admitted_source(
     let mut surf_remap = vec![UNMAPPED; surface_ranges.len()];
     let vert_base = merged.decoded_n as u32;
     let mut new_verts = 0u32;
-    for (si, &(start, count)) in surface_ranges.iter().enumerate() {
+    // Source index order, not surface order: producers lay ranges out on
+    // purpose (remote bodies group them by material for band draws).
+    let mut by_start: Vec<usize> = (0..surface_ranges.len()).collect();
+    by_start.sort_by_key(|&si| surface_ranges[si].0);
+    for si in by_start {
+        let (start, count) = surface_ranges[si];
         if !used_surfaces.get(si).copied().unwrap_or(false) {
             continue;
         }

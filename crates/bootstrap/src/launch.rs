@@ -33,7 +33,6 @@ enum Role {
     Replay,
 }
 
-#[cfg_attr(target_os = "horizon", allow(dead_code))]
 fn adopt_shell_ui_images(
     mut commands: Commands,
     shell: Option<Res<ShellUiImages>>,
@@ -76,8 +75,6 @@ fn launch_report(
     }
 }
 
-#[cfg_attr(target_os = "horizon", allow(dead_code))]
-#[cfg_attr(target_os = "horizon", allow(dead_code))]
 #[derive(Resource)]
 struct ShellUiImages(asset_material::UiImagePublication);
 
@@ -88,7 +85,6 @@ struct ShellCommonTask {
     started: std::time::Instant,
 }
 
-#[cfg_attr(target_os = "horizon", allow(dead_code))]
 fn install_class_catalog(
     mut commands: Commands,
     shell: Option<ResMut<ShellCommonTask>>,
@@ -151,7 +147,6 @@ struct FrontendLoad {
 struct PendingFrontend {
     // Mutex only for `Sync`; reached through `get_mut`.
     load: std::sync::Mutex<std::sync::mpsc::Receiver<Result<FrontendLoad, String>>>,
-    #[cfg(not(target_os = "horizon"))]
     shell: Option<ShellCommonTask>,
 }
 
@@ -261,7 +256,6 @@ fn install_frontend(mut commands: Commands, mut pending: ResMut<PendingFrontend>
         });
     }
     commands.insert_resource(SoundIwd(load.iwd));
-    #[cfg(not(target_os = "horizon"))]
     if let Some(mut shell) = pending.shell.take() {
         shell.perk_table = load.menus.string_table("mp/perkTable.csv").cloned();
         commands.insert_resource(shell);
@@ -482,9 +476,6 @@ fn run_menu(
         diag::warn!(Launch, "{error}");
         fatal(&mw2_not_found(&games, steam))
     });
-    // Switch: the common set holds every common_mp model at every LOD and does
-    // not fit beside the menu in the ~3 GB heap. CAC weapon lists stay empty.
-    #[cfg(not(target_os = "horizon"))]
     let shell_common = assets::load_pool().spawn(assets::load_shell_common(games.clone()));
     let maps = list_mp_map_packs(&games);
     diag::info!(
@@ -528,7 +519,6 @@ fn run_menu(
     ));
     app.insert_resource(PendingFrontend {
         load: spawn_frontend_load(ui_games.clone(), namespace_trees).into(),
-        #[cfg(not(target_os = "horizon"))]
         shell: Some(ShellCommonTask {
             task: shell_common,
             perk_table: None,
@@ -540,7 +530,6 @@ fn run_menu(
         Update,
         install_frontend.run_if(resource_exists::<PendingFrontend>),
     );
-    #[cfg(not(target_os = "horizon"))]
     app.add_systems(
         Update,
         (install_class_catalog, adopt_shell_ui_images)

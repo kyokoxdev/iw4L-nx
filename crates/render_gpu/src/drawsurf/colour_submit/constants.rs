@@ -495,11 +495,11 @@ impl ArenaPack {
         self.dirty.clear();
     }
 
-    /// Writes one row per base (`.x` = block row) into a span of `placed`
-    /// kept across frames, uploading only rows that changed. Returns the
-    /// arena row of the first entry.
-    pub(super) fn place_instance_table(&mut self, bases: &[u32], reserved_rows: u32) -> u32 {
-        let len = bases.len() * 16;
+    /// Writes the instance and band table rows into a span of `placed` kept
+    /// across frames, uploading only rows that changed. Returns the arena row
+    /// of the first entry.
+    pub(super) fn place_instance_table(&mut self, table: &[[u32; 4]], reserved_rows: u32) -> u32 {
+        let len = table.len() * 16;
         let (row, cap) = match self.instance_table {
             Some((row, cap)) if cap >= len => (row, cap),
             old => {
@@ -519,9 +519,8 @@ impl ArenaPack {
         let start = row as usize * 16;
         let rows = self.placed[start..start + len].chunks_exact_mut(16);
         let mut dirty: Option<(usize, usize)> = None;
-        for (i, (entry, &base)) in rows.zip(bases).enumerate() {
-            let mut want = [0u8; 16];
-            want[..4].copy_from_slice(&base.to_ne_bytes());
+        for (i, (entry, words)) in rows.zip(table).enumerate() {
+            let want: [u8; 16] = bytemuck::cast(*words);
             if *entry != want {
                 entry.copy_from_slice(&want);
                 let (lo, hi) = (start + i * 16, start + i * 16 + 16);
