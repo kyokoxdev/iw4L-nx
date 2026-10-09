@@ -33,6 +33,25 @@ enum Role {
     Replay,
 }
 
+#[cfg_attr(target_os = "horizon", allow(dead_code))]
+fn adopt_shell_ui_images(
+    mut commands: Commands,
+    shell: Option<Res<ShellUiImages>>,
+    weapons: Option<Res<assets::PreparedWeapons>>,
+    selected: Option<Res<asset_material::UiImagePublication>>,
+) {
+    if weapons.is_some() {
+        return;
+    }
+    if let Some(shell) = shell
+        && selected
+            .as_ref()
+            .is_none_or(|selected| selected.id() != shell.0.id())
+    {
+        commands.insert_resource(shell.0.clone());
+    }
+}
+
 struct LaunchConfig {
     role: Role,
     zone: String,
@@ -58,6 +77,10 @@ fn launch_report(
 }
 
 #[cfg_attr(target_os = "horizon", allow(dead_code))]
+#[cfg_attr(target_os = "horizon", allow(dead_code))]
+#[derive(Resource)]
+struct ShellUiImages(asset_material::UiImagePublication);
+
 #[derive(Resource)]
 struct ShellCommonTask {
     task: bevy::tasks::Task<assets::ShellCommon>,
@@ -84,9 +107,11 @@ fn install_class_catalog(
     }
     commands.insert_resource(ui::frontend::maps::MapPresentation::from_tables(
         &common.tables,
+        common.ui_images.clone(),
     ));
+    commands.insert_resource(ShellUiImages(common.ui_images));
     let mut class_catalog =
-        ClassLoadoutCatalog::from_weapon_registry(std::sync::Arc::new(common.weapons))
+        ClassLoadoutCatalog::from_editor_catalog(std::sync::Arc::new(common.weapons))
             .with_weapon_tables(&common.tables);
     if let Some(table) = shell.perk_table.as_ref() {
         class_catalog = class_catalog.with_perk_table(table);
@@ -516,7 +541,13 @@ fn run_menu(
         install_frontend.run_if(resource_exists::<PendingFrontend>),
     );
     #[cfg(not(target_os = "horizon"))]
-    app.add_systems(Update, install_class_catalog);
+    app.add_systems(
+        Update,
+        (install_class_catalog, adopt_shell_ui_images)
+            .chain()
+            .in_set(net::ClientSet::Load)
+            .after(frame::SessionSwapApplied),
+    );
     app.insert_resource(launch_identity(&config))
         .insert_resource(cheats)
         .insert_resource(MenuMapList(maps))

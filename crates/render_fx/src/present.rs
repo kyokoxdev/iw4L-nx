@@ -426,6 +426,8 @@ pub fn drain_spawn_runners(
             };
             let child_name = child.name.clone();
             let previous_mark_entity = host.spawn_mark_entity;
+            let previous_products = host.spawn_products;
+            host.spawn_products = req.products;
             host.spawn_mark_entity = req.mark_entity;
             let played = play_def_at(
                 host,
@@ -439,6 +441,7 @@ pub fn drain_spawn_runners(
             )
             .is_some();
             host.spawn_mark_entity = previous_mark_entity;
+            host.spawn_products = previous_products;
             if !played {
                 skip_runner(host, &req);
                 continue;
@@ -925,7 +928,11 @@ fn tick_fx_pass(
             };
             let child_name = child.name.as_str();
             let elems = cache.arc_for(catalog, child);
-            match spawn_impact_or_death_effect(
+            let previous_products = sys.spawn_products;
+            let previous_mark_entity = sys.spawn_mark_entity;
+            sys.spawn_products = req.products;
+            sys.spawn_mark_entity = req.mark_entity;
+            let played = match spawn_impact_or_death_effect(
                 sys,
                 FxPlayRequest {
                     def_name: child_name,
@@ -941,7 +948,10 @@ fn tick_fx_pass(
             ) {
                 PlayResult::PlayedReleased { .. } | PlayResult::Held { .. } => true,
                 PlayResult::Failed(_) => false,
-            }
+            };
+            sys.spawn_products = previous_products;
+            sys.spawn_mark_entity = previous_mark_entity;
+            played
         },
         |index, def_index| {
             let effect = catalog_lookup(catalog, index)?;

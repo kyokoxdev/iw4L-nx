@@ -996,6 +996,7 @@ struct FanoutQueues<'w> {
 }
 
 fn fanout_loopback(
+    world: ResMut<AuthorityWorld>,
     loopback: Option<ResMut<ListenLoopback>>,
     hub: Option<ResMut<crate::transport::udp_session::UdpAuthorityHub>>,
     server_tick: Res<ServerTick>,
@@ -1033,6 +1034,16 @@ fn fanout_loopback(
         clock.time_ms,
         &tick.script_seats,
     );
+    for (viewer, seat) in &tick.script_seats {
+        if seat.archive_ms > 0
+            && let Some(session) = seats.get(*viewer)
+            && session.archivetime_ms != seat.archive_ms
+        {
+            world
+                .lock()
+                .set_script_archive_time(*viewer, seat.archive_ms, session.archivetime_ms);
+        }
+    }
     if tick.script_exit_level {
         queues.exit_level.write(ExitLevelCalled);
         diag::info!(Sim, "exitLevel: called by the match scripts");

@@ -172,8 +172,34 @@ pub(crate) fn sync_presence(world: &mut World) {
     phase!("script_locks", super::controls::sync_script_locks(world));
     phase!("triggers", super::triggers::dispatch_triggers(world));
     phase!("present", present(world, now));
+    phase!("killcam_cameras", publish_killcam_cameras(world));
     phase!("settle_collision", settle_collision(world));
     phase!("link_tags", resolve_link_tags(world));
+}
+
+fn publish_killcam_cameras(world: &mut World) {
+    let runtime = world.resource::<Runtime>();
+    let cameras: Vec<_> = runtime
+        .entities
+        .iter()
+        .filter_map(|(object, entity)| {
+            entity.presence?;
+            let mode = if runtime.vehicles.contains_key(object) {
+                Some(playerstate_iw4::KillCamMode::Mode1Heli)
+            } else if runtime.engine.turrets.contains_key(object) {
+                Some(playerstate_iw4::KillCamMode::Mode6Turret)
+            } else {
+                None
+            };
+            Some((entity.number, mode))
+        })
+        .collect();
+    let mut frame = FrameWorld::from_world(world);
+    for (number, mode) in cameras {
+        if let Some(mover) = frame.script_mover_mut_by_number(number) {
+            mover.killcam_camera = mode;
+        }
+    }
 }
 
 fn present(world: &mut World, now: i32) {
