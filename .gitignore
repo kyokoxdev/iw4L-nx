@@ -18,3 +18,4 @@ iw4l.community.*.tmp
 # Switch port: device crash dumps and boot traces copied off the SD card.
 /switch/crash_report/
 /switch/boot.txt
+/switch/logs/
