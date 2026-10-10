@@ -97,7 +97,10 @@ impl FpvHands {
                 .names_in(map_ns)
                 .filter(|n| crate::is_arms_model(n))
                 .collect();
-            if let Some(name) = crate::arms_for_body(&kit.body, &arm_names) {
+            // Campaign levels ship one generic pair of arms for every body.
+            let only = (kit.body.starts_with("body_") && arm_names.len() == 1)
+                .then(|| arm_names[0].to_owned());
+            if let Some(name) = crate::arms_for_body(&kit.body, &arm_names).or(only) {
                 if catalog.contains(map_ns, &name) {
                     return Self::FromKit {
                         namespace: map_ns,

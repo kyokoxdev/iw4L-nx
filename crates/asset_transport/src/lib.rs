@@ -15,7 +15,7 @@ pub use artifact_cache::{
 };
 pub use asset_core::ZoneGame;
 pub use discover::{
-    GamesRoot, MapPack, ZoneFile, campaign_zone_set, find_mp_zone_file, ensure_artifacts_dir,
+    GamesRoot, MapPack, ZoneFile, campaign_zone_set, find_mp_zone_file, with_mp_zones, ensure_artifacts_dir,
     find_common_mp_for_envelope, find_common_mp_for_zone, find_game_install,
     find_localized_common_mp_for_zone, find_runtime_common_mp, find_runtime_zone, find_zone_file,
     find_zone_file_version, find_zone_for_tree, folder_holds_game, game_install_root,

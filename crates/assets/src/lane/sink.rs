@@ -2074,6 +2074,19 @@ impl ModelCensus {
                 kit_name(kits.kit(false)),
                 kit_name(kits.kit(true))
             ));
+            if kits.kit(false).is_none_or(|kit| kit.arms.is_none()) {
+                let arms: Vec<&str> = self
+                    .walked_names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| asset_model::is_arms_model(name))
+                    .collect();
+                report.push(format!(
+                    "map soldier kit gap: no arms matched; arms models: [{}] soldier models: [{}]",
+                    arms.join(" "),
+                    self.soldier_names.join(" ")
+                ));
+            }
         }
         report
     }

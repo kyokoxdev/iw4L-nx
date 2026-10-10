@@ -502,6 +502,9 @@ pub fn apply_prepared_match(
         for (name, value) in &script_dvars {
             sim.set_gsc_dvar(name, value);
         }
+        if script_entries.is_empty() {
+            sim.start_gsc_without_entries();
+        }
         for entry in script_entries {
             sim.start_gsc(&entry, sim::script::Value::level(), Vec::new())
                 .map_err(|e| script_refusal(&zone, gametype, "entry", &e))?;
@@ -1794,6 +1797,7 @@ fn install_clip_and_player(
         allow_debug_actions,
         intermission_view,
         airstrike_height,
+        campaign: asset_transport::campaign_zone_set(),
         ..Default::default()
     }) {
         diag::info!(Sim, "bootstrap: {err}");

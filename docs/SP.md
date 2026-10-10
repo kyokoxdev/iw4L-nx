@@ -43,6 +43,10 @@ An unknown builtin refuses the install, so SP GSC waits on a full `IW4_SP`.
 2. Static SP load: an SP request swaps `common_mp` for the SP common set
    (`code_pre_gfx`, `code_post_gfx`, `common`, `patch`, `ui`), loads the
    map, skips GSC, spawns at `info_player_start`. Done when you can walk it.
+   Holds on desktop for trainer: the engine spawns the joining player
+   (`MatchBootstrap::campaign`), kits come from `body_*` + the level's one
+   `*_viewhands`. Left: the level's own weapons (`trainer.ff`) are not
+   captured — only common zones feed the weapon registry — so no gun or hands.
 3. Frontend: Campaign tile lists `list_sp_maps`.
 4. Fill `IW4_SP`; run `maps/_load` with AI natives stubbed; in-world video
    (`CINEMATIC_*` textures) once a mission needs it.
