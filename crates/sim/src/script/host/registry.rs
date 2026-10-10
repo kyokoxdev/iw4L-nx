@@ -43,6 +43,7 @@ impl Default for NativeRegistry {
             Ok(Value::Object(id))
         });
         natives::iw4::register(&mut registry);
+        natives::cinematic::register(&mut registry);
         super::audio::register(&mut registry);
         natives::math::register(&mut registry);
         natives::engine::register(&mut registry);

@@ -1,5 +1,5 @@
-//! `cinematic <name>`: fullscreen `video/<name>.bik` over everything but the
-//! console. A named thread decodes and converts to RGBA a few frames ahead;
+//! `cinematic <name>`, the launch intro, script cinematics and the map-load
+//! briefing: fullscreen `video/<name>.bik` over everything but the console. A named thread decodes and converts to RGBA a few frames ahead;
 //! the main thread only swaps the newest due buffer into the image. Nothing
 //! runs while no cinematic is playing.
 
@@ -36,9 +36,31 @@ pub(crate) struct Cinematic {
     started: Option<std::time::Instant>,
     pending: Option<(f64, Vec<u8>)>,
     console_was_open: bool,
+    kind: Kind,
+}
+
+enum Kind {
+    /// `cinematic <name>`; skippable.
+    Console,
     /// Launch intro, with the intro videos still to play after this one.
     /// Skippable (all of it) only once the menu has loaded.
-    intro: Option<Vec<PathBuf>>,
+    Intro(Vec<PathBuf>),
+    /// `CinematicInGame*`; ends with the video or `StopCinematicInGame`.
+    Script,
+    /// `video/<map>_load.bik` over a map load. Holds the match
+    /// (`frame::LoadCinematicPlaying`); skippable once the map is ready.
+    Load,
+}
+
+/// Takes `c` off the screen and drops the hold its kind put on the game.
+fn remove(c: &Cinematic, commands: &mut Commands) {
+    commands.entity(c.root).despawn();
+    commands.remove_resource::<Cinematic>();
+    match c.kind {
+        Kind::Intro(_) => commands.remove_resource::<frame::IntroPlaying>(),
+        Kind::Load => commands.remove_resource::<frame::LoadCinematicPlaying>(),
+        Kind::Console | Kind::Script => {}
+    }
 }
 
 impl Drop for Cinematic {
@@ -67,28 +89,10 @@ pub(crate) fn register(registry: &mut ConsoleRegistry) {
     );
 }
 
-/// `video/` folders of every configured game install, `main/video` first.
 fn video_dirs() -> Vec<PathBuf> {
-    let Ok(root) = asset_transport::games_root_from_env() else {
-        return Vec::new();
-    };
-    let mut dirs = Vec::new();
-    for folder in asset_transport::search_roots(&root.0) {
-        let children = std::fs::read_dir(&folder)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir());
-        for base in std::iter::once(folder.clone()).chain(children) {
-            for sub in ["main/video", "video"] {
-                let dir = base.join(sub);
-                if dir.is_dir() && !dirs.contains(&dir) {
-                    dirs.push(dir);
-                }
-            }
-        }
-    }
-    dirs
+    asset_transport::games_root_from_env()
+        .map(|root| asset_transport::video_dirs(&root.0))
+        .unwrap_or_default()
 }
 
 fn find_video(name: &str) -> Option<PathBuf> {
@@ -118,9 +122,7 @@ pub(crate) fn route(
         let msg = match cmd.args.as_slice() {
             [arg] if arg == "stop" => {
                 if let Some(c) = &playing {
-                    commands.entity(c.root).despawn();
-                    commands.remove_resource::<Cinematic>();
-                    commands.remove_resource::<frame::IntroPlaying>();
+                    remove(c, &mut commands);
                 }
                 "cinematic stopped".to_owned()
             }
@@ -128,10 +130,15 @@ pub(crate) fn route(
                 None => format!("cinematic: video/{name}.bik not found"),
                 Some(path) => {
                     if let Some(c) = &playing {
-                        commands.entity(c.root).despawn();
-                        commands.remove_resource::<frame::IntroPlaying>();
+                        remove(c, &mut commands);
                     }
-                    match start(&path, &mut commands, &mut images, audio.as_deref(), None) {
+                    match start(
+                        &path,
+                        &mut commands,
+                        &mut images,
+                        audio.as_deref(),
+                        Kind::Console,
+                    ) {
                         Ok(info) => info,
                         Err(e) => format!("cinematic: {e}"),
                     }
@@ -194,7 +201,7 @@ fn play_intro(
             commands,
             images,
             audio,
-            Some(std::mem::take(&mut queue)),
+            Kind::Intro(std::mem::take(&mut queue)),
         ) {
             Ok(info) => {
                 diag::info!(Console, "intro: {info}");
@@ -211,7 +218,18 @@ fn start(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     audio: Option<&audio::AudioRuntime>,
-    intro: Option<Vec<PathBuf>>,
+    kind: Kind,
+) -> Result<String, bink::Error> {
+    start_looped(path, commands, images, audio, kind, false)
+}
+
+fn start_looped(
+    path: &Path,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    audio: Option<&audio::AudioRuntime>,
+    kind: Kind,
+    looped: bool,
 ) -> Result<String, bink::Error> {
     let bink = bink::Bink::open(path)?;
     let h = *bink.header();
@@ -260,10 +278,19 @@ fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let stream = h.audio.and(audio).map(audio::AudioRuntime::open_stream);
     let thread_stop = stop.clone();
+    let again = looped.then(|| path.to_owned());
     std::thread::Builder::new()
         .name("iw4l-bink".into())
         .spawn(move || {
-            decode(bink, size, stream, frames_tx, recycle_rx, &thread_stop);
+            decode(
+                bink,
+                again,
+                size,
+                stream,
+                frames_tx,
+                recycle_rx,
+                &thread_stop,
+            );
         })
         .map_err(bink::Error::Io)?;
 
@@ -276,7 +303,7 @@ fn start(
         started: None,
         pending: None,
         console_was_open: true,
-        intro,
+        kind,
     });
     let fps = f64::from(h.fps_num) / f64::from(h.fps_den);
     let sound = match h.audio {
@@ -290,8 +317,10 @@ fn start(
     ))
 }
 
+/// `again`: reopen this file at the end and keep going (looped cinematics).
 fn decode(
     mut bink: bink::Bink,
+    again: Option<PathBuf>,
     size: usize,
     stream: Option<audio::PcmStream>,
     frames: SyncSender<Msg>,
@@ -307,7 +336,14 @@ fn decode(
             return;
         }
         pcm.clear();
-        match bink.next_frame(&mut pcm) {
+        let mut next = bink.next_frame(&mut pcm);
+        if let (Ok(false), Some(path)) = (&next, &again) {
+            next = bink::Bink::open(path).and_then(|reopened| {
+                bink = reopened;
+                bink.next_frame(&mut pcm)
+            });
+        }
+        match next {
             Ok(true) => {}
             Ok(false) => return,
             Err(e) => {
@@ -392,12 +428,20 @@ pub(crate) fn tick(
     pads: Query<&Gamepad>,
     frontend_pending: Option<Res<frame::FrontendPending>>,
     audio: Option<Res<audio::AudioRuntime>>,
+    readiness: Option<Res<session::SessionReadinessPolicy>>,
 ) {
     // A key that closes the console must not also skip the video; the intro
-    // holds until there is a menu to skip to.
+    // holds until there is a menu to skip to, the briefing until the map is
+    // ready, and the scripts end their own.
+    let skippable = match c.kind {
+        Kind::Console => true,
+        Kind::Intro(_) => frontend_pending.is_none(),
+        Kind::Script => false,
+        Kind::Load => readiness.is_some_and(|r| r.presentation_allowed),
+    };
     let skip = !c.console_was_open
         && !console.open
-        && !(c.intro.is_some() && frontend_pending.is_some())
+        && skippable
         && (keys.any_just_pressed([KeyCode::Escape, KeyCode::Enter, KeyCode::Space])
             || pads
                 .iter()
@@ -446,12 +490,109 @@ pub(crate) fn tick(
     }
     if ended {
         // Menu still loading: the near-black clear colour stays until it opens.
-        commands.entity(c.root).despawn();
-        commands.remove_resource::<Cinematic>();
-        // Next intro video, unless the player skipped the intro.
-        let rest = if skip { None } else { c.intro.take() };
-        if !rest.is_some_and(|q| play_intro(q, &mut commands, &mut images, audio.as_deref())) {
-            commands.remove_resource::<frame::IntroPlaying>();
+        if let Kind::Intro(rest) = &mut c.kind {
+            // Next intro video, unless the player skipped the intro.
+            let rest = std::mem::take(rest);
+            commands.entity(c.root).despawn();
+            commands.remove_resource::<Cinematic>();
+            if skip || !play_intro(rest, &mut commands, &mut images, audio.as_deref()) {
+                commands.remove_resource::<frame::IntroPlaying>();
+            }
+        } else {
+            remove(&c, &mut commands);
         }
+    }
+}
+
+/// Shows the authority's script cinematic: starts it when the scripts start
+/// one, takes it down when they stop it. A video that ends on its own stays
+/// ended; the sim's `IsCinematicPlaying` runs off the same length.
+// ponytail: listen/local only; remote clients see no script cinematic until it rides the snapshot meta (`ObjectiveState` + `meta_wire`).
+pub(crate) fn sync_script_cinematic(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    audio: Option<Res<audio::AudioRuntime>>,
+    authority: Option<Res<net::AuthorityWorld>>,
+    playing: Option<Res<Cinematic>>,
+    mut shown: Local<Option<sim::ScriptCinematic>>,
+) {
+    let current = match &authority {
+        // A step in flight holds the lock; look again next frame.
+        Some(authority) => match authority.try_lock() {
+            Some(world) => world.cinematic(),
+            None => return,
+        },
+        None => None,
+    };
+    if current == *shown {
+        return;
+    }
+    if let Some(c) = &playing
+        && (current.is_some() || matches!(c.kind, Kind::Script))
+    {
+        remove(c, &mut commands);
+    }
+    if let Some(next) = &current {
+        match find_video(&next.name) {
+            None => diag::warn!(Console, "cinematic: video/{}.bik not found", next.name),
+            Some(path) => match start_looped(
+                &path,
+                &mut commands,
+                &mut images,
+                audio.as_deref(),
+                Kind::Script,
+                next.looped,
+            ) {
+                Ok(info) => diag::info!(Console, "script {info}"),
+                Err(e) => diag::warn!(Console, "cinematic: {e}"),
+            },
+        }
+    }
+    *shown = current;
+}
+
+/// Plays `video/<map>_load.bik` when a map load starts, if the install has
+/// one, and holds the match until it ends or is skipped.
+// ponytail: `<map>_load.bik` naming is unverified against retail SP files.
+pub(crate) fn start_load_cinematic(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    audio: Option<Res<audio::AudioRuntime>>,
+    load: Option<Res<assets::MapLoadProcess>>,
+    signon: Option<Res<net::SignonState>>,
+    playing: Option<Res<Cinematic>>,
+    mut seen: Local<Option<u64>>,
+) {
+    if let Some(c) = &playing
+        && matches!(c.kind, Kind::Load)
+        && signon.is_some_and(|s| s.phase.is_failed())
+    {
+        remove(c, &mut commands);
+    }
+    let Some(load) = load else {
+        return;
+    };
+    if *seen == Some(load.request_id) {
+        return;
+    }
+    *seen = Some(load.request_id);
+    let Some(path) = find_video(&format!("{}_load", load.zone)) else {
+        return;
+    };
+    if let Some(c) = &playing {
+        remove(c, &mut commands);
+    }
+    match start(
+        &path,
+        &mut commands,
+        &mut images,
+        audio.as_deref(),
+        Kind::Load,
+    ) {
+        Ok(info) => {
+            diag::info!(Console, "briefing {info}");
+            commands.insert_resource(frame::LoadCinematicPlaying);
+        }
+        Err(e) => diag::warn!(Console, "briefing: {}: {e}", path.display()),
     }
 }

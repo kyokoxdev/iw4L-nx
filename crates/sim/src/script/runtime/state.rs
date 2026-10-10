@@ -42,10 +42,16 @@ pub(crate) struct Runtime {
     pub(crate) suspended_frames: usize,
     /// Endons that fired on a suspended thread; applied when its child yields.
     pub(crate) pending_unwinds: Vec<(u64, usize)>,
+    /// `childthread` child serial → the thread that spawned it.
+    pub(crate) parents: BTreeMap<u64, u64>,
+    /// Children whose parent ended; despawned after the scheduler pass.
+    pub(crate) orphans: Vec<u64>,
+    pub(crate) child_spawn: bool,
     pub(crate) entities: BTreeMap<u64, host::entities::ScriptEntity>,
     pub(crate) hud_slots: BTreeMap<u64, usize>,
     pub(crate) next_entity_number: i32,
     pub(crate) tables: Arc<BTreeMap<String, StringTable>>,
+    pub(crate) videos: Arc<BTreeMap<String, i32>>,
     pub(crate) rng: u32,
     pub(crate) pending_notifies: Vec<(Value, Arc<str>, Vec<Value>)>,
     pub(crate) signals: Vec<Arc<str>>,

@@ -396,6 +396,7 @@ impl MediaService {
                 if let Ok(workers) = retired_workers.recv() {
                     drop(workers);
                 }
+                diag::flush_thread_cache();
             })
         {
             diag::warn!(

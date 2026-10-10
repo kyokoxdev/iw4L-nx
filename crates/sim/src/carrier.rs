@@ -357,6 +357,14 @@ impl SimWorld {
             .slow_motion
     }
 
+    pub fn cinematic(&self) -> Option<crate::ScriptCinematic> {
+        self.ecs
+            .resource::<crate::script::Runtime>()
+            .engine
+            .cinematic
+            .clone()
+    }
+
     pub fn adopt_snapshot(&mut self, snapshot: &Snapshot) -> crate::AdoptReport {
         assert!(
             self.gsc_program_fingerprint().is_none(),

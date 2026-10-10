@@ -44,6 +44,11 @@ pub struct FrontendPending;
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct IntroPlaying;
 
+/// The map's `video/<map>_load.bik` briefing owns the screen; the match holds
+/// (no advancement, no admission) until it ends or is skipped.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct LoadCinematicPlaying;
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiDraw(pub bool);
 

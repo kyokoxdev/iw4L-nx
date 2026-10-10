@@ -344,7 +344,7 @@ fn truth(value: &Value) -> Result<bool, String> {
     }
 }
 
-fn scalar(value: &Value) -> Option<f32> {
+pub(super) fn scalar(value: &Value) -> Option<f32> {
     match value {
         Value::Int(n) => Some(*n as f32),
         Value::Float(n) => Some(*n),
@@ -809,6 +809,7 @@ fn instruction(
             }
             thread.stack.push(Value::Vector(v));
         }
+        Op::ChildThread => world.resource_mut::<Runtime>().child_spawn = true,
         Op::Jump(pc) => thread.frames.last_mut().unwrap().pc = pc,
         Op::JumpFalse(pc) => {
             if !truth(&pop(thread)?)? {
@@ -850,6 +851,10 @@ fn instruction(
                 Callee::Script(function) if spawn => {
                     frame_room(world, thread)?;
                     let child = new_thread(world, program, function as usize, receiver, args)?;
+                    let mut runtime = world.resource_mut::<Runtime>();
+                    if std::mem::take(&mut runtime.child_spawn) {
+                        runtime.parents.insert(child.serial, thread.serial);
+                    }
                     run_inline(world, program, thread, child, now)?;
                 }
                 Callee::Script(function) => {
@@ -1162,6 +1167,20 @@ fn retire(runtime: &mut Runtime, serial: u64) {
     runtime.waiters.retain(|w| w.thread != serial);
     runtime.endon_top.remove(&serial);
     dequeue(runtime, serial);
+    runtime.parents.remove(&serial);
+    if runtime.parents.is_empty() {
+        return;
+    }
+    let children: Vec<u64> = runtime
+        .parents
+        .iter()
+        .filter(|(_, parent)| **parent == serial)
+        .map(|(child, _)| *child)
+        .collect();
+    for child in children {
+        runtime.orphans.push(child);
+        retire(runtime, child);
+    }
 }
 
 fn dequeue(runtime: &mut Runtime, serial: u64) {
@@ -1343,6 +1362,11 @@ pub(crate) fn advance_scheduler(world: &mut World) {
         runtime.buckets.insert(now, current);
     }
     run_ready(world, &program, now);
+    for serial in std::mem::take(&mut world.resource_mut::<Runtime>().orphans) {
+        if let Some(entity) = find_thread(world, serial) {
+            world.despawn(entity);
+        }
+    }
     let deletes = std::mem::take(&mut world.resource_mut::<Runtime>().pending_deletes);
     for object in deletes {
         world.resource_mut::<Runtime>().delete_entity(object);
@@ -1514,7 +1538,11 @@ fn stack_effect(op: &Op) -> (usize, usize) {
         Op::Call(_, argc, method) | Op::Spawn(_, argc, method) => (argc + usize::from(method), 1),
         Op::Indirect(argc, method, _) => (argc + 1 + usize::from(method), 1),
         Op::Notify(argc) | Op::AwaitMatch(argc) => (argc + 2, 0),
-        Op::Jump(_) | Op::EnsureLocalArray(_) | Op::FrameEnd | Op::Return => (0, 0),
+        Op::Jump(_)
+        | Op::EnsureLocalArray(_)
+        | Op::FrameEnd
+        | Op::Return
+        | Op::ChildThread => (0, 0),
     }
 }
 

@@ -484,7 +484,9 @@ pub fn apply_prepared_match(
             script_level,
         )
         .map_err(|e| script_refusal(&zone, gametype, "install", &e))?;
+        // Campaign levels carry no multiplayer player-data schema to bind to.
         if *role == frame::RuntimeRole::Listen
+            && !asset_transport::campaign_zone_set()
             && let (Some(account), Some(local)) = (account.as_ref(), local.as_ref())
         {
             account
@@ -791,6 +793,48 @@ fn script_dvar_overrides() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Builtins that read `LevelData::videos`; MP scripts call none of them, so
+/// an MP load opens no video file.
+const CINEMATIC_NATIVES: [&str; 3] = [
+    "cinematicingame",
+    "cinematicingamesync",
+    "cinematicingameloop",
+];
+
+/// `video/<name>.bik` lengths in ms by lowercase stem; the first install's
+/// copy wins, as in `console::cinematic`.
+fn video_lengths(games_root: &std::path::Path) -> std::collections::BTreeMap<String, i32> {
+    let mut lengths = std::collections::BTreeMap::new();
+    for dir in asset_transport::video_dirs(games_root) {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("bik"))
+            {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let stem = stem.to_ascii_lowercase();
+            if lengths.contains_key(&stem) {
+                continue;
+            }
+            match bink::Bink::open(&path) {
+                Ok(video) => {
+                    let h = video.header();
+                    let ms = u64::from(h.frames) * u64::from(h.fps_den) * 1000
+                        / u64::from(h.fps_num.max(1));
+                    lengths.insert(stem, i32::try_from(ms).unwrap_or(i32::MAX));
+                }
+                Err(error) => diag::warn!(Sim, "video {}: {error}", path.display()),
+            }
+        }
+    }
+    lengths
+}
+
 fn script_refusal(
     zone: &str,
     gametype: &str,
@@ -1026,8 +1070,9 @@ fn preflight_match_install(
             Default::default()
         }
     };
-    let script_level = sim::script::LevelData {
+    let mut script_level = sim::script::LevelData {
         absent_effects,
+        videos: Default::default(),
         player_data_defaults: account_defaults.clone(),
         schemas: sources.0.schemas().clone(),
         entities: sim::script::parse_entity_string(sources.0.entities().unwrap_or("")),
@@ -1046,10 +1091,26 @@ fn preflight_match_install(
             })
             .collect(),
     };
-    let startup = sim::script::Iw4Startup::new(&sources, gametype, zone);
+    // Campaign levels load without their GSC until the campaign builtins exist:
+    // only the code scripts the engine itself calls.
+    let startup = if asset_transport::campaign_zone_set() {
+        sim::script::Iw4Startup {
+            roots: vec!["codescripts/delete".into(), "codescripts/struct".into()],
+            entries: Vec::new(),
+        }
+    } else {
+        sim::script::Iw4Startup::new(&sources, gametype, zone)
+    };
     let roots: Vec<&str> = startup.roots.iter().map(String::as_str).collect();
     let scripts = sim::script::Program::load(&sources, &roots, &sim::script::Catalog::iw4())
         .map_err(|e| script_refusal(zone, gametype, "compile", &e))?;
+    if CINEMATIC_NATIVES
+        .iter()
+        .any(|name| scripts.uses_native(name))
+        && let Some(id) = identity
+    {
+        script_level.videos = video_lengths(&id.games_root);
+    }
     let config = sources
         .0
         .config(MATCH_CONFIG)

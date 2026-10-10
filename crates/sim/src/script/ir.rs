@@ -69,6 +69,8 @@ pub(crate) enum Op {
     Call(Callee, usize, bool),
     Spawn(Callee, usize, bool),
     Indirect(usize, bool, bool),
+    /// The next `Spawn`/`Indirect` spawn is a `childthread`.
+    ChildThread,
     Array,
     ArrayKeys,
     EnsureLocalArray(u32),

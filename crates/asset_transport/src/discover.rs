@@ -314,7 +314,53 @@ pub fn zone_game_for_path(path: &Path) -> Option<crate::ZoneGame> {
     game.enabled().then_some(game)
 }
 
+/// The shared zones a load reads around the map: multiplayer's `*_mp` set, or
+/// the campaign's. Chosen once per map load; lookups of the multiplayer names
+/// resolve through it, so every caller of `common_mp` & co. follows.
+static CAMPAIGN_ZONES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_campaign_zone_set(campaign: bool) {
+    CAMPAIGN_ZONES.store(campaign, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn campaign_zone_set() -> bool {
+    CAMPAIGN_ZONES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `zone` in the active zone set: `Err` for a multiplayer zone the campaign
+/// set has no counterpart for (its localized zones).
+fn zone_in_set(zone: &str) -> Result<&str, String> {
+    if !campaign_zone_set() || MP_ONLY.with(std::cell::Cell::get) {
+        return Ok(zone);
+    }
+    match zone {
+        "common_mp" => Ok("common"),
+        "code_pre_gfx_mp" => Ok("code_pre_gfx"),
+        "code_post_gfx_mp" => Ok("code_post_gfx"),
+        "patch_mp" => Ok("patch"),
+        "ui_mp" => Ok("ui"),
+        _ if zone.starts_with("localized_") && zone.ends_with("_mp") => {
+            Err(format!("zone `{zone}.ff` has no campaign counterpart"))
+        }
+        _ => Ok(zone),
+    }
+}
+
+thread_local! {
+    static MP_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`find_zone_file`] outside the active zone set: shell content (menus) is
+/// multiplayer's whatever level is loading.
+pub fn find_mp_zone_file(root: &GamesRoot, zone: &str) -> Result<ZoneFile, String> {
+    MP_ONLY.with(|only| only.set(true));
+    let found = find_zone_file(root, zone);
+    MP_ONLY.with(|only| only.set(false));
+    found
+}
+
 pub fn find_zone_file_under(search_root: &Path, zone: &str) -> Result<ZoneFile, String> {
+    let zone = zone_in_set(zone)?;
     let file_name = format!("{zone}.ff");
     let mut iw4: Option<PathBuf> = None;
     let mut t5: Option<PathBuf> = None;
@@ -410,6 +456,11 @@ pub fn find_zone_file_version(
     zone: &str,
     version: u32,
 ) -> Result<ZoneFile, String> {
+    let zone = if version == IW4_ZONE_VERSION {
+        zone_in_set(zone)?
+    } else {
+        zone
+    };
     let file_name = format!("{zone}.ff");
     // Switch build is MW2-only: skip the full SD walk for other titles.
     if cfg!(target_os = "horizon") && version != IW4_ZONE_VERSION {
@@ -528,7 +579,7 @@ fn find_zone_stem(
     game: Option<crate::ZoneGame>,
     stem: &str,
 ) -> Result<ZoneFile, String> {
-    if stem.starts_with("mp_") {
+    if stem.starts_with("mp_") || campaign_zone_set() {
         return find_stem_file(root, game, stem);
     }
     let Some(prefixed) = resolve_mp_zone_alias(stem) else {
@@ -788,6 +839,46 @@ pub fn list_mp_map_packs(root: &GamesRoot) -> Vec<MapPack> {
         .collect()
 }
 
+/// IW4 campaign and Special Ops levels: every non-multiplayer IW4 zone with a
+/// `video/<stem>_load.bik` (multiplayer loads use `<map>_load.ff` instead).
+/// Stems are bare (`boneyard`), so look them up with `find_zone_file_version`,
+/// not `find_zone_file`: its MP alias would turn `boneyard` into `mp_boneyard`.
+pub fn list_sp_maps(root: &GamesRoot) -> Vec<String> {
+    let videos = video_dirs(&root.0)
+        .into_iter()
+        .flat_map(|dir| files_under(vec![dir]));
+    sp_maps_in(game_files(&root.0), videos)
+}
+
+fn sp_maps_in(
+    files: impl Iterator<Item = Result<PathBuf, String>>,
+    videos: impl Iterator<Item = Result<PathBuf, String>>,
+) -> Vec<String> {
+    let loads: std::collections::BTreeSet<String> = videos
+        .filter_map(Result::ok)
+        .filter_map(|path| {
+            path.file_name()?
+                .to_str()?
+                .to_ascii_lowercase()
+                .strip_suffix("_load.bik")
+                .map(str::to_owned)
+        })
+        .collect();
+    let stems: std::collections::BTreeSet<String> = files
+        .filter_map(Result::ok)
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("ff"))
+                && zone_game_for_path(path) == Some(crate::ZoneGame::Iw4)
+        })
+        .filter_map(|path| Some(path.file_stem()?.to_str()?.to_ascii_lowercase()))
+        .collect();
+    stems
+        .into_iter()
+        .filter(|stem| !stem.starts_with("mp_") && loads.contains(stem))
+        .collect()
+}
+
 fn map_pack_folder(zone_ff: &Path) -> String {
     game_root_for_zone(zone_ff)
         .ok()
@@ -803,6 +894,40 @@ fn map_pack_folder(zone_ff: &Path) -> String {
         })
         .filter(|folder| folder.starts_with("DLC"))
         .unwrap_or_else(|| "BASE".to_owned())
+}
+
+/// `zone` names an IW4 campaign or Special Ops level: see [`list_sp_maps`].
+pub fn is_campaign_level(root: &GamesRoot, zone: &str) -> bool {
+    let zone = zone.trim().to_ascii_lowercase();
+    let (game, stem) = split_zone_key(&zone);
+    if !matches!(game, None | Some(crate::ZoneGame::Iw4)) || stem.starts_with("mp_") {
+        return false;
+    }
+    video_dirs(&root.0)
+        .iter()
+        .any(|dir| dir.join(format!("{stem}_load.bik")).is_file())
+        && find_zone_file_version(root, stem, IW4_ZONE_VERSION).is_ok()
+}
+
+/// `video/` folders of every install under `root`, `main/video` first.
+pub fn video_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for folder in search_roots(root) {
+        let children = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir());
+        for base in std::iter::once(folder.clone()).chain(children) {
+            for sub in ["main/video", "video"] {
+                let dir = base.join(sub);
+                if dir.is_dir() && !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    dirs
 }
 
 pub fn ensure_artifacts_dir() -> Result<PathBuf, String> {
@@ -898,4 +1023,38 @@ fn language_archive(
         .ok_or("language prefix")?;
     let dir = chosen.parent().ok_or("language directory")?;
     Ok((dir.to_path_buf(), prefix.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sp_maps_are_iw4_zones_with_a_load_video() {
+        let zone = std::env::temp_dir()
+            .join(format!("iw4l_sp_maps_{}", std::process::id()))
+            .join("zone/english");
+        std::fs::create_dir_all(&zone).unwrap();
+        let mut iw4 = b"IWffu100".to_vec();
+        iw4.extend(IW4_ZONE_VERSION.to_le_bytes());
+        let mut t5 = b"IWffu100".to_vec();
+        t5.extend(T5_ZONE_VERSION.to_le_bytes());
+        for stem in [
+            "common",
+            "code_post_gfx",
+            "trainer",
+            "boneyard",
+            "so_bridge",
+            "mp_rust",
+            "mp_rust_load",
+        ] {
+            std::fs::write(zone.join(format!("{stem}.ff")), &iw4).unwrap();
+        }
+        std::fs::write(zone.join("Cuba.ff"), &t5).unwrap();
+        let videos = ["trainer", "boneyard", "mp_rust", "cuba", "credits"]
+            .map(|stem| Ok(PathBuf::from(format!("main/video/{stem}_load.bik"))));
+        let maps = sp_maps_in(files_under(vec![zone.clone()]), videos.into_iter());
+        std::fs::remove_dir_all(zone.parent().unwrap().parent().unwrap()).unwrap();
+        assert_eq!(maps, ["boneyard", "trainer"]);
+    }
 }

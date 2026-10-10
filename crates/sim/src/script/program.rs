@@ -42,6 +42,15 @@ impl Program {
     ) -> Result<Self, Fault> {
         super::compiler::compile(resolver, roots, catalog)
     }
+    /// What `load` would refuse at link time, all of it: failure message to
+    /// the modules that hit it. Used to find builtins a catalog lacks.
+    pub fn unresolved(
+        resolver: &impl SourceResolver,
+        roots: &[&str],
+        catalog: &Catalog,
+    ) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, Fault> {
+        super::compiler::unresolved(resolver, roots, catalog)
+    }
     pub fn modules(&self) -> &[ModuleIdentity] {
         &self.modules
     }
@@ -53,6 +62,10 @@ impl Program {
     }
     pub fn function_count(&self) -> usize {
         self.functions.len()
+    }
+    /// Whether any script calls this builtin.
+    pub fn uses_native(&self, name: &str) -> bool {
+        self.natives.iter().any(|native| native.name == name)
     }
     pub fn native_count(&self) -> usize {
         self.natives.len()

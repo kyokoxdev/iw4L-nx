@@ -164,8 +164,10 @@ pub use world_objects::{
     WorldObjectSnapshot, WorldObjectState, glass_blast_integer_damage,
 };
 
+mod cinematic;
 mod scene_effects;
 mod time_scale;
+pub use cinematic::ScriptCinematic;
 pub use scene_effects::{
     MAX_SCRIPT_EARTHQUAKES, ScriptEarthquake, ScriptFog, ScriptFogParams, ScriptSunFog,
 };

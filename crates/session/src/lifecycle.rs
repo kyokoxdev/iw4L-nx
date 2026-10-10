@@ -246,6 +246,7 @@ pub fn run_teardown(
         "AuthorityWorld Resource stays; clip is SimWorld::shutdown_game, not remove",
     ];
 
+    asset_transport::set_campaign_zone_set(false);
     diag::info!(
         Sim,
         "session: match torn down ({reason:?}); teardown ran, {} declared gaps",
@@ -433,6 +434,7 @@ fn run_session_swap(
             swap_id: fact.request_id,
             had_world,
         });
+        asset_transport::set_campaign_zone_set(false);
         diag::warn!(
             Sim,
             "session: map `{}` failed (swap #{}): {} — returned to menu",

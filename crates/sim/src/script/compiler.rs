@@ -174,6 +174,15 @@ impl Parser {
                         super::runtime::binary(op, a, b).map_err(|e| Fault::at(&location, e))?,
                     );
                 }
+                Op::Vector => {
+                    let mut v = [0.0; 3];
+                    for component in v.iter_mut().rev() {
+                        *component = super::runtime::scalar(&pop(&mut values)?).ok_or_else(
+                            || Fault::at(&location, "vector component must be a number"),
+                        )?;
+                    }
+                    values.push(Value::Vector(v));
+                }
                 _ => {
                     return Err(Fault::at(
                         &location,
@@ -275,11 +284,19 @@ impl Parser {
     }
 }
 
-pub(super) fn compile(
+struct Parsed {
+    functions: Vec<Function>,
+    names: BTreeMap<String, usize>,
+    modules: Vec<ModuleIdentity>,
+    tables: Tables,
+    imports: BTreeMap<String, Vec<String>>,
+}
+
+fn parse(
     resolver: &impl SourceResolver,
     roots: &[&str],
     catalog: &Catalog,
-) -> Result<Program, Fault> {
+) -> Result<Parsed, Fault> {
     let root_location = Location {
         module: "<loader>".into(),
         function: String::new(),
@@ -343,6 +360,47 @@ pub(super) fn compile(
             sha256: Sha256::digest(&bytes).into(),
         });
     }
+    Ok(Parsed {
+        functions,
+        names,
+        modules,
+        tables,
+        imports,
+    })
+}
+
+/// Every link failure in the program, by message, with the modules it came
+/// from. Parsing still stops at the first fault; linking does not.
+pub(super) fn unresolved(
+    resolver: &impl SourceResolver,
+    roots: &[&str],
+    catalog: &Catalog,
+) -> Result<BTreeMap<String, BTreeSet<String>>, Fault> {
+    let parsed = parse(resolver, roots, catalog)?;
+    let mut failures: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for pending in &parsed.tables.pending {
+        if let Err(message) = link(pending, &parsed.names, &parsed.imports, catalog) {
+            failures
+                .entry(message)
+                .or_default()
+                .insert(pending.module.clone());
+        }
+    }
+    Ok(failures)
+}
+
+pub(super) fn compile(
+    resolver: &impl SourceResolver,
+    roots: &[&str],
+    catalog: &Catalog,
+) -> Result<Program, Fault> {
+    let Parsed {
+        mut functions,
+        names,
+        mut modules,
+        tables,
+        imports,
+    } = parse(resolver, roots, catalog)?;
     let mut native_ids = BTreeMap::new();
     let mut natives = Vec::new();
     let mut resolved = Vec::with_capacity(tables.pending.len());
@@ -496,5 +554,32 @@ fn link(
             }
             _ => format!("unresolved function or unknown builtin {name}"),
         }),
+    }
+}
+
+#[cfg(test)]
+mod unresolved_tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_lists_every_unknown_builtin_without_stopping() {
+        let sources = BTreeMap::from([(
+            "maps/test".to_owned(),
+            "main()\n{\n    x = abs(1);\n    self setgoalpos(1);\n    spawn_thing();\n    helper();\n}\n\nhelper()\n{\n}\n".to_owned(),
+        )]);
+        let failures = unresolved(&sources, &["maps/test"], &Catalog::iw4_sp()).unwrap();
+        let messages: Vec<&str> = failures.keys().map(String::as_str).collect();
+        assert_eq!(
+            messages,
+            [
+                "unresolved function or unknown builtin spawn_thing",
+                "unresolved method or unknown builtin setgoalpos",
+            ]
+        );
+        assert!(
+            failures
+                .values()
+                .all(|modules| modules.contains("maps/test"))
+        );
     }
 }

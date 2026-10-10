@@ -234,6 +234,15 @@ fn approve_map_load(
             continue;
         }
         let games = asset_transport::GamesRoot(identity.games_root.clone());
+        let campaign = asset_transport::is_campaign_level(&games, &request.zone);
+        asset_transport::set_campaign_zone_set(campaign);
+        if campaign {
+            diag::info!(
+                World,
+                "match load: `{}` is a campaign level; campaign zone set",
+                request.zone
+            );
+        }
         let found = asset_transport::find_zone_file(&games, &request.zone);
         let zone = found
             .as_ref()

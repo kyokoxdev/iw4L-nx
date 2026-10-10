@@ -241,6 +241,8 @@ impl Plugin for ConsolePlugin {
             (
                 crate::cinematic::start_intro.run_if(run_once),
                 crate::cinematic::route,
+                crate::cinematic::start_load_cinematic,
+                crate::cinematic::sync_script_cinematic,
                 crate::cinematic::tick.run_if(resource_exists::<crate::cinematic::Cinematic>),
             )
                 .chain()

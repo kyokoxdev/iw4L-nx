@@ -25,6 +25,9 @@ pub struct LevelData {
     pub keys: BTreeMap<String, KeyType>,
     pub schemas: BTreeMap<String, Arc<structured_data_iw4::DefinitionSet>>,
     pub player_data_defaults: Option<crate::PlayerDataDefaults>,
+    /// `video/<name>.bik` lengths in ms by lowercase stem, for the cinematic
+    /// builtins.
+    pub videos: BTreeMap<String, i32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +125,7 @@ pub(crate) struct EngineState {
     pub match_data: super::match_data::MatchData,
     pub game_end_time: i32,
     pub slow_motion: Option<crate::ScriptSlowMotion>,
+    pub cinematic: Option<crate::ScriptCinematic>,
     pub ambient: Option<crate::ScriptAmbient>,
     pub ac130_ambient: Option<crate::ScriptAmbient>,
     pub players_ignore_radius_damage: bool,

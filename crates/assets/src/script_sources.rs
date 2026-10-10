@@ -44,6 +44,62 @@ impl ScriptSources {
         self.sources.get(module).map(|source| source.origin)
     }
 
+    pub fn modules(&self) -> impl Iterator<Item = &str> {
+        self.sources.keys().map(String::as_str)
+    }
+
+    /// Only the GSC and config rawfiles of one IW4 zone; nothing else is kept.
+    pub fn walk_iw4_zone(path: &std::path::Path) -> Result<Self, String> {
+        struct Walk(ScriptSources);
+        impl fastfile_iw4::AssetSink for Walk {
+            fn set_script_strings(&mut self, _: fastfile_iw4::ScriptStrings) {}
+            fn load_asset(
+                &mut self,
+                s: &mut fastfile_iw4::ZoneStream<'_>,
+                _: usize,
+                ty: fastfile_iw4::AssetType,
+                slot: fastfile_iw4::Ptr,
+            ) -> fastfile_iw4::Result<()> {
+                fastfile_iw4::load_asset_at_observed(s, ty, slot, self).map(|_| ())
+            }
+        }
+        impl fastfile_iw4::AssetLinkSink for Walk {
+            fn loaded(
+                &mut self,
+                _: &fastfile_iw4::ZoneStream<'_>,
+                _: fastfile_iw4::AssetType,
+                _: fastfile_iw4::Ptr,
+                _: Option<fastfile_iw4::Ptr>,
+            ) -> fastfile_iw4::Result<()> {
+                Ok(())
+            }
+            fn alias(
+                &mut self,
+                _: fastfile_iw4::AssetType,
+                _: fastfile_iw4::Ptr,
+                _: fastfile_iw4::Ptr,
+            ) -> fastfile_iw4::Result<()> {
+                Ok(())
+            }
+            fn capture_raw_file(
+                &mut self,
+                name: &str,
+                data: &[u8],
+                zlib_compressed: bool,
+            ) -> fastfile_iw4::Result<()> {
+                self.0.capture(name, data, zlib_compressed);
+                Ok(())
+            }
+        }
+        let image = asset_transport::open_zone(path).map_err(|e| e.to_string())?;
+        let header = image.header().map_err(|e| e.to_string())?;
+        let mut memory = asset_transport::ZoneMemory::for_header(&header);
+        let mut stream = memory.stream(&image.bytes).map_err(|e| e.to_string())?;
+        let mut walk = Walk(Self::default());
+        fastfile_iw4::load_zone(&mut stream, &mut walk).map_err(|e| e.to_string())?;
+        Ok(walk.0)
+    }
+
     pub fn len(&self) -> usize {
         self.sources.len()
     }
@@ -178,7 +234,7 @@ impl ScriptSources {
         self.entities = Some(entities);
     }
 
-    pub(crate) fn overlay(&mut self, other: Self) {
+    pub fn overlay(&mut self, other: Self) {
         self.sources.extend(other.sources);
         self.tables.extend(other.tables);
         self.schemas.extend(other.schemas);
