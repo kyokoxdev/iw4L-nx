@@ -170,6 +170,8 @@ pub(crate) enum EntityKind {
     Item(i32),
     Missile(crate::ProjectileId),
     Vehicle,
+    /// SP AI spawned from an `actor_*` spawner.
+    Actor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -408,7 +410,7 @@ impl Runtime {
                 presence,
                 matches!(
                     entity.kind,
-                    EntityKind::Spawned | EntityKind::Vehicle | EntityKind::Missile(_)
+                    EntityKind::Spawned | EntityKind::Vehicle | EntityKind::Actor | EntityKind::Missile(_)
                 ),
             ));
         }

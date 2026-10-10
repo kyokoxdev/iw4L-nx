@@ -70,5 +70,11 @@ Fork-only. Checked against retail files, except the load path.
    (team, weapon, character); campaign links an aitype for each `actor_*`
    spawner. Trainer's props, vehicles and drones animate and notetracks fire;
    scenes on actors wait on 6.
-6. AI actors (`PathData`, animscripts, combat) on the bot system, saves.
+6. AI actors — in progress. Actors are script entities (`EntityKind::Actor`,
+   `host/actors.rs`), not bot clients; their brain is to be the bot pipeline.
+   `dospawn`/`stalingradspawn` spend spawner `count`, run the aitype `main` and
+   `animscripts/init::main`, notify the spawner `spawned`. Spawner and AI
+   queries are real; each spawner's aitype `spawner()` runs before level main.
+   The campaign player is on `allies`. Not yet: placed AI, goals, movement,
+   sight, shooting, damage. Then saves.
 7. Switch: SP zones' memory budget.

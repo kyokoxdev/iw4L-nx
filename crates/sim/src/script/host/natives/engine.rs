@@ -897,42 +897,6 @@ fn register_entities(registry: &mut NativeRegistry) {
         runtime(world).set_object_field(id, "team", Value::string(&team));
         Ok(Value::Undefined)
     });
-    // SP: a drone is a script model standing in for the spawner's AI; its
-    // aitype `main` gives it team, weapon and character model, as for an actor.
-    registry.register(Method, "spawndrone", |world, receiver, _| {
-        let spawner = entity_id(world, receiver)?;
-        let (origin, angles, classname, fields) = {
-            let mut runtime = runtime(world);
-            let origin = runtime.object_field(spawner, "origin");
-            let angles = runtime.object_field(spawner, "angles");
-            let classname = runtime.entities[&spawner].classname.clone();
-            let fields = runtime.objects.get(&spawner).cloned().unwrap_or_default();
-            (origin, angles, classname, fields)
-        };
-        let Value::Vector(origin) = origin else {
-            return Err("spawner has no origin".into());
-        };
-        let id = spawn_entity(world, "script_model", origin, 0, None)?;
-        let mut runtime = runtime(world);
-        // ponytail: copies every spawner key but classname/targetname; narrow if a
-        // level looks drones up by a spawner key the engine would not copy.
-        let skip = [runtime.symbol("classname"), runtime.symbol("targetname")];
-        let drone = runtime.objects.get_mut(&id).unwrap();
-        for (field, value) in fields {
-            if !skip.contains(&field) {
-                drone.insert(field, value);
-            }
-        }
-        runtime.set_object_field(id, "origin", Value::Vector(origin));
-        runtime.set_object_field(id, "angles", angles);
-        runtime.set_object_field(id, "weapon", Value::string("none"));
-        let aitype = classname.strip_prefix("actor_").unwrap_or(&classname);
-        let main = format!("aitype/{}::main", aitype.to_ascii_lowercase());
-        let now = super::super::players::now_ms(world);
-        crate::script::runtime::run_now(world, &main, Value::Object(id), Vec::new(), now)
-            .map_err(|fault| format!("{main}: {fault:?}"))?;
-        Ok(Value::Object(id))
-    });
     registry.register(Function, "sortbydistance", |world, _, args| {
         let values = array_values(world, arg(args, 0)?)?;
         let origin = vector(args, 1)?;
@@ -2253,7 +2217,7 @@ pub const EXIT_LEVEL: &str = "engine:exitlevel";
 pub const MAP_RESTART: &str = "engine:map_restart";
 
 /// A `spawn`ed entity; script models and origins get a presence.
-fn spawn_entity(
+pub(crate) fn spawn_entity(
     world: &mut World,
     classname: &str,
     origin: [f32; 3],

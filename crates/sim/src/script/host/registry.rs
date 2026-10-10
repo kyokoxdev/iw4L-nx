@@ -67,6 +67,7 @@ impl Default for NativeRegistry {
         super::spectators::register(&mut registry);
         // Last: replaces the campaign stubs and the MP refusals of the same names.
         super::script_anim::register(&mut registry);
+        super::actors::register(&mut registry);
         registry
     }
 }

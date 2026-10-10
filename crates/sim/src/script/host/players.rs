@@ -1263,6 +1263,14 @@ pub(crate) fn sync_players(world: &mut World) {
                     Err(_) => return,
                 }
                 let campaign = !world.resource::<Runtime>().deferred_entries.is_empty();
+                // The SP player is always on allies (squads, friendly fire key on it).
+                if campaign {
+                    world.resource_mut::<Runtime>().set_object_field(
+                        object,
+                        "team",
+                        Value::string("allies"),
+                    );
+                }
                 if !campaign
                     && run_now(world, CONNECT, Value::Object(object), Vec::new(), now).is_err()
                 {
@@ -1282,6 +1290,7 @@ fn start_deferred(world: &mut World) {
         return;
     }
     world.resource_mut::<Runtime>().loading = true;
+    super::actors::init_spawners(world);
     for entry in entries {
         if let Err(fault) = crate::script::runtime::start(world, &entry, Value::level(), Vec::new())
         {

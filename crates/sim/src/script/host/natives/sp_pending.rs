@@ -132,19 +132,14 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "createthreatbiasgroup" => Undefined;
         Function "disconnectpaths" => Undefined;
         Function "freeentitysentient" => Undefined;
-        Function "getaiarray" => EmptyArray;
-        Function "getaicount" => Zero;
-        Function "getaispeciesarray" => EmptyArray;
         Function "getallnodes" => EmptyArray;
         Function "getcommandfromkey" => EmptyString;
         Function "getcorpsearray" => EmptyArray;
         Function "getkeybinding" => Unbound;
         Function "getnode" => Undefined;
         Function "getnodearray" => EmptyArray;
-        Function "getspawnerarray" => EmptyArray;
-        Function "getspawnerteamarray" => EmptyArray;
         Function "getthreatbias" => Zero;
-        Function "getweaponclipmodel" => Undefined;
+        Function "getweaponclipmodel" => EmptyString;
         Function "isenemyteam" => Zero;
         Function "issaverecentlyloaded" => Zero;
         Function "issavesuccessful" => One;
@@ -201,7 +196,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "dismountvehicle" => Undefined;
         Method "doesnodeallowstance" => Undefined;
         Method "dontinterpolate" => Undefined;
-        Method "dospawn" => Undefined;
         Method "dropweapon" => Undefined;
         Method "enabledeathshield" => Undefined;
         Method "enablehealthshield" => Undefined;
@@ -296,7 +290,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setturretignoregoals" => Undefined;
         Method "shoot" => Undefined;
         Method "shouldfacemotion" => Zero;
-        Method "stalingradspawn" => Undefined;
         Method "startcoverarrival" => Undefined;
         Method "startragdollfromimpact" => Undefined;
         Method "startusingheroonlylighting" => Undefined;

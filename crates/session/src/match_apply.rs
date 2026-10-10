@@ -1155,6 +1155,7 @@ fn preflight_match_install(
         let mut roots = vec![
             "codescripts/delete".into(),
             "codescripts/struct".into(),
+            "animscripts/init".into(),
             level.clone(),
         ];
         // Each `actor_<type>` spawner runs `aitype/<type>::main` on what it spawns.
