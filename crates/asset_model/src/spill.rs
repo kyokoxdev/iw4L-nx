@@ -31,6 +31,8 @@ struct Slot<T> {
     data: OnceLock<Arc<[T]>>,
     len: usize,
     file: Option<(PathBuf, String)>,
+    /// Hash of the bytes alone (the file name also hashes the label).
+    content: Option<u64>,
 }
 
 static SPILLED: AtomicU64 = AtomicU64::new(0);
@@ -49,6 +51,33 @@ pub fn spill_stats() -> (u64, u64, u64) {
 impl<T: Plain> Spill<T> {
     pub fn is_resident(&self) -> bool {
         self.0.data.get().is_some()
+    }
+
+    /// Element count, without reading a spilled array back.
+    pub fn len(&self) -> usize {
+        self.0.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.len == 0
+    }
+
+    /// Equal contents, compared by hash when both arrays are spilled so neither
+    /// is read back.
+    pub fn same_content(&self, other: &Self) -> bool
+    where
+        T: PartialEq,
+    {
+        if Arc::ptr_eq(&self.0, &other.0) {
+            return true;
+        }
+        if self.0.len != other.0.len {
+            return false;
+        }
+        match (self.0.content, other.0.content) {
+            (Some(a), Some(b)) => a == b,
+            _ => **self == **other,
+        }
     }
 
     /// The array as a shared slice, read back first if spilled.
@@ -101,12 +130,14 @@ impl<T: Plain> Spill<T> {
             write_atomic(&path, bytes)?;
             WRITTEN.fetch_add(bytes.len() as u64, Relaxed);
         }
+        let content = word_hash(0xcbf2_9ce4_8422_2325, bytes);
         let (len, size) = (data.len(), bytes.len() as u64);
         SPILLED.fetch_add(size, Relaxed);
         self.0 = Arc::new(Slot {
             data: OnceLock::new(),
             len,
             file: Some((path, label.to_owned())),
+            content: Some(content),
         });
         Ok(size)
     }
@@ -138,6 +169,7 @@ impl<T: Plain> From<Arc<[T]>> for Spill<T> {
             len: data.len(),
             data: OnceLock::from(data),
             file: None,
+            content: None,
         }))
     }
 }

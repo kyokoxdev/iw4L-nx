@@ -29,20 +29,29 @@ fn adapt_admitted_port(port: &crate::AdmittedExactPort) -> ExactColourPortGpu {
     let cached_source = cached_source
         .filter(|_| !cached_vertex_buffers.is_empty())
         .map(Arc::<str>::from);
+    let textures_layout =
+        crate::bind_group_layout_from_entries("iw4_exact_colour_textures", &textures, true);
+    let probe = super::super::bound_slots()
+        .then(|| {
+            super::super::probe_array::probe_array_variant(
+                port.abi(),
+                &port.module().source,
+                &vertex_buffers,
+                &textures_layout,
+            )
+        })
+        .flatten();
     ExactColourPortGpu {
         constants_layout: crate::bind_group_layout_from_entries(
             "iw4_exact_colour_constants",
             &constants,
             true,
         ),
-        textures_layout: crate::bind_group_layout_from_entries(
-            "iw4_exact_colour_textures",
-            &textures,
-            true,
-        ),
+        textures_layout,
         vertex_buffers,
         cached_source,
         cached_vertex_buffers,
+        probe,
         port: port.clone(),
     }
 }
@@ -299,6 +308,7 @@ fn schedule_admitted_pipelines(
                         cached_lighting: false,
                         mark_mesh: false,
                         forward_z: shadow,
+                        probe_array: false,
                     };
                     if scheduled.insert(key) {
                         current.push(request_exact_pipeline(registry, pipeline, device, key));
@@ -364,7 +374,7 @@ mod learned {
             format(key.target)?,
             format(key.depth_format)?,
             u8::try_from(key.samples).ok()?,
-            u8::from(key.mark_mesh) | u8::from(key.forward_z) << 1,
+            u8::from(key.mark_mesh) | u8::from(key.forward_z) << 1 | u8::from(key.probe_array) << 2,
         ]);
         out[34..].copy_from_slice(&encode_state(state)?);
         Some(out)
@@ -394,6 +404,7 @@ mod learned {
             cached_lighting: false,
             mark_mesh: record[33] & 1 != 0,
             forward_z: record[33] & 2 != 0,
+            probe_array: record[33] & 4 != 0,
         })
     }
 
@@ -429,6 +440,7 @@ mod learned {
                 cached_lighting: false,
                 mark_mesh: false,
                 forward_z: true,
+                probe_array: true,
             };
             let record = encode(&key, state).expect("encodable key");
             assert!(decode(&record) == Some(key));

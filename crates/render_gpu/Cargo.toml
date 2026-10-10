@@ -30,5 +30,8 @@ bevy.workspace = true
 [target.'cfg(target_os = "horizon")'.dependencies]
 platform_nx.workspace = true
 
+[dev-dependencies]
+naga = { version = "29", features = ["wgsl-in", "glsl-out"] }
+
 [lints]
 workspace = true

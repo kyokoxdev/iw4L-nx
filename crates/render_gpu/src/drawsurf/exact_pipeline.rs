@@ -19,19 +19,21 @@ use render_material::PortId;
 struct ModuleKey {
     port: PortId,
     cached_lighting: bool,
+    probe_array: bool,
 }
 
 #[derive(Clone)]
 pub(super) enum ExactModuleSource {
     Port(Arc<ValidatedPassWgsl>),
     CachedLighting(Arc<str>),
+    ProbeArray(Arc<str>),
 }
 
 impl ExactModuleSource {
     fn wgsl(&self) -> &str {
         match self {
             Self::Port(module) => &module.source,
-            Self::CachedLighting(source) => source,
+            Self::CachedLighting(source) | Self::ProbeArray(source) => source,
         }
     }
 }
@@ -176,6 +178,7 @@ impl ExactPipelineRegistry {
         let module = ModuleKey {
             port: key.port,
             cached_lighting: matches!(source, ExactModuleSource::CachedLighting(_)),
+            probe_array: matches!(source, ExactModuleSource::ProbeArray(_)),
         };
         self.queued
             .entry(module)
@@ -261,6 +264,8 @@ fn build_port(
         module.port.vertex_type,
         if module.cached_lighting {
             "/cached"
+        } else if module.probe_array {
+            "/probe_array"
         } else {
             ""
         }

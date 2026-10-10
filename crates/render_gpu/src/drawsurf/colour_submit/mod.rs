@@ -47,7 +47,7 @@ use super::gpu_prepare::{
 };
 use super::gpu_resources::{
     RuntimeProgramPortGpuExt, RuntimeUploadedImageRegistry, SamplerTable, TextureBindRefusal,
-    UploadedTextureBind, padded_upload_len, write_buffer_padded,
+    UploadedTextureBind, UploadedTextureIdentity, padded_upload_len, write_buffer_padded,
 };
 use super::shadowmap_spot_gpu::{
     SHADOWMAP_SPOT_COLOR_FORMAT, SHADOWMAP_SPOT_DEPTH_FORMAT, ShadowmapSpotGpu,
@@ -172,6 +172,8 @@ struct ExactColourPortGpu {
     vertex_buffers: Vec<VertexBufferLayout>,
     cached_source: Option<Arc<str>>,
     cached_vertex_buffers: Vec<VertexBufferLayout>,
+    /// World twin sampling every reflection probe from one cube array.
+    probe: Option<super::probe_array::ProbeArrayVariant>,
     port: super::AdmittedExactPort,
 }
 
@@ -218,6 +220,9 @@ pub(super) struct ExactColourPipelineKey {
     mark_mesh: bool,
 
     forward_z: bool,
+
+    /// World draw through the port's probe-array twin.
+    probe_array: bool,
 }
 
 fn exact_colour_target_format(target: TextureFormat, srgb_write: bool) -> TextureFormat {
@@ -321,8 +326,10 @@ fn exact_pipeline_plan(
         Some(CompareFunction::Always)
     };
     let cached_lighting = key.cached_lighting && port.cached_source.is_some();
-    let source = match (cached_lighting, port.cached_source.as_ref()) {
-        (true, Some(cached)) => ExactModuleSource::CachedLighting(cached.clone()),
+    let probe = port.probe.as_ref().filter(|_| key.probe_array);
+    let source = match (cached_lighting, port.cached_source.as_ref(), probe) {
+        (true, Some(cached), _) => ExactModuleSource::CachedLighting(cached.clone()),
+        (false, _, Some(probe)) => ExactModuleSource::ProbeArray(probe.source.clone()),
         _ => ExactModuleSource::Port(port.port.shared_module()),
     };
     let plan = ExactPipelinePlan {
@@ -337,6 +344,8 @@ fn exact_pipeline_plan(
         ),
         vertex_buffers: if cached_lighting && !port.cached_vertex_buffers.is_empty() {
             port.cached_vertex_buffers.clone()
+        } else if let Some(probe) = probe {
+            probe.vertex_buffers.clone()
         } else {
             let mut buffers = port.vertex_buffers.clone();
 
@@ -378,7 +387,10 @@ fn exact_pipeline_plan(
             ..Default::default()
         },
         constants_layout: registry.bind_group_layout(device, &port.constants_layout),
-        textures_layout: registry.bind_group_layout(device, &port.textures_layout),
+        textures_layout: registry.bind_group_layout(
+            device,
+            probe.map_or(&port.textures_layout, |probe| &probe.textures_layout),
+        ),
     };
     (source, plan)
 }
@@ -1233,6 +1245,19 @@ pub(super) static DRAW_CENSUS: [std::sync::atomic::AtomicU32; 14] =
 pub(super) static ROW_COST_US: [std::sync::atomic::AtomicU64; 6] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 6];
 
+/// Switch: why a world draw did not fold into the draw before it, by the
+/// first field that differed: same key but an index gap, pipeline, texture
+/// bind group, constants block, depth range, or the draw before was not world.
+/// Then texture breaks between draws of the same port where only the
+/// lightmap, or only the reflection probe, differs: what texture arrays fold.
+pub(super) static WORLD_BREAKS: [std::sync::atomic::AtomicU32; 8] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; 8];
+
+/// Switch: colour pass encode cost in µs: whole run (draw loop + pass end),
+/// then pass end alone (wgpu-core finishing the recorded pass).
+pub(super) static ENCODE_COST_US: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
 pub(super) fn row_clock() -> Option<std::time::Instant> {
     cfg!(target_os = "horizon").then(std::time::Instant::now)
 }
@@ -1266,6 +1291,10 @@ struct PreparedExactDraw {
     texture_slots: Arc<[u32]>,
 
     texture_bind: Option<BindGroup>,
+    /// Lightmap and reflection probe inputs `texture_bind` was built from.
+    surface: super::SurfaceSamplerInputs,
+    /// Drawn through the probe-array twin: reads the per-vertex probe stream.
+    probe_array: bool,
     start: u32,
     count: u32,
     tess: ExactTessBind,
@@ -1628,7 +1657,7 @@ struct RunPackCache {
     serial: u64,
     passes: Vec<Option<Arc<PassConstantBuffers>>>,
 
-    pipelines: Vec<Option<(usize, ExactPipelineSlot)>>,
+    pipelines: Vec<Option<(usize, ExactPipelineSlot, bool)>>,
     intern: HashMap<PackedBankKey, (Arc<PassConstantBuffers>, u32)>,
     intern_stamp: u32,
 }
@@ -1727,11 +1756,15 @@ impl ExactPrepare<'_> {
         executable: ExecutablePassView<'_>,
         surface: super::SurfaceSamplerInputs,
         after_scene_resolve: bool,
+        probe_array: bool,
     ) -> Result<(Arc<[u32]>, Option<BindGroup>), GpuSubmitRefusal> {
         let port_gpu = self
             .pipeline_res
             .get(executable.port)
             .expect("exact port was admitted before texture binding");
+        // Under the probe array every probe binds the same view, so the key
+        // drops the draw's probe and all its runs share one group.
+        let probe_view = self.uploaded.probe_array.as_ref().filter(|_| probe_array);
         let key = BoundTextureKey {
             identity: TextureBindIdentity {
                 port: executable.port,
@@ -1740,7 +1773,13 @@ impl ExactPrepare<'_> {
                     .map(|packed| packed.id)
                     .unwrap_or(0),
                 code: executable.code_sampler_id,
-                surface,
+                surface: super::SurfaceSamplerInputs {
+                    reflection_probe: match probe_view {
+                        Some(_) => Some(render_frame::SurfaceReflectionProbeId(u8::MAX)),
+                        None => surface.reflection_probe,
+                    },
+                    ..surface
+                },
             },
             spot_shadow_select: self.spot_shadow_select,
         };
@@ -1766,6 +1805,14 @@ impl ExactPrepare<'_> {
                     spot_shadow_select,
                 )
                 .map_err(GpuSubmitRefusal::TextureBind)?;
+            let mut textures = textures;
+            if let Some(view) = probe_view {
+                for bind in &mut textures {
+                    if matches!(bind.identity, UploadedTextureIdentity::ReflectionProbe(_)) {
+                        bind.view = view.clone();
+                    }
+                }
+            }
             texture_slot_words(device, table, &textures)
         };
         let shadow = matches!(self.textures, PrepareTextureTables::Shadow { .. });
@@ -1789,9 +1836,12 @@ impl ExactPrepare<'_> {
         }
         self.cost.tex_bind_miss_n = self.cost.tex_bind_miss_n.saturating_add(1);
         let slots = resolve(table)?;
-        let group = super::bound_slots().then(|| {
-            table.slot_bind_group(device, registry, &port_gpu.textures_layout, &slots, shadow)
-        });
+        let layout = match (&port_gpu.probe, probe_view) {
+            (Some(probe), Some(_)) => &probe.textures_layout,
+            _ => &port_gpu.textures_layout,
+        };
+        let group = super::bound_slots()
+            .then(|| table.slot_bind_group(device, registry, layout, &slots, shadow));
         texture_slots.insert(key, (Arc::clone(&slots), group.clone()));
         Ok((slots, group))
     }
@@ -2803,48 +2853,74 @@ impl ExactPrepare<'_> {
                     "ExecutablePass.port was admitted for a different tess vertex type"
                 );
                 let pipeline_res = self.pipeline_res;
-                let (port_index, pipeline) = match self.run_pack.pipelines.get(pass_index).copied()
-                {
-                    Some(Some(hit)) => hit,
-                    _ => {
-                        let port_index = pipeline_res.by_id.get(&executable.port).copied().ok_or(
-                            GpuSubmitRefusal::NoExactPort {
-                                pair: executable.shader_pair,
-                            },
-                        )?;
-                        let host_state = GfxPassState::from_prepared(executable.state);
-                        let state0 = host_state.apply_change_state_0_host(AlphaMode::Opaque, false);
-                        let state1 = host_state.apply_change_state_1_host();
-                        let color = exact_colour_target_format(target.color, state0.srgb_write);
-                        let key = ExactColourPipelineKey {
-                            target: color,
-                            depth_format: target.depth,
-                            samples: target.samples,
-                            state0,
-                            state1,
-                            port: executable.port,
-                            cached_lighting: false,
-                            mark_mesh: tess == ExactTessBind::MarkMesh
-                                && vertex_type == asset_iw4::vertex_decl::PACKED_VERTEX_TYPE,
-                            forward_z: target.forward_z,
-                        };
-
-                        let Some(pipeline) = self.registry.slot(&key) else {
-                            self.registry.discover(key, executable.state);
-                            return Err(GpuSubmitRefusal::PipelineNotReady);
-                        };
-                        if !self.registry.is_ready(pipeline) {
-                            return Err(GpuSubmitRefusal::PipelineNotReady);
+                let (port_index, pipeline, probe_array) =
+                    match self.run_pack.pipelines.get(pass_index).copied() {
+                        Some(Some(hit)) => hit,
+                        _ => {
+                            let port_index =
+                                pipeline_res.by_id.get(&executable.port).copied().ok_or(
+                                    GpuSubmitRefusal::NoExactPort {
+                                        pair: executable.shader_pair,
+                                    },
+                                )?;
+                            let host_state = GfxPassState::from_prepared(executable.state);
+                            let state0 =
+                                host_state.apply_change_state_0_host(AlphaMode::Opaque, false);
+                            let state1 = host_state.apply_change_state_1_host();
+                            let color = exact_colour_target_format(target.color, state0.srgb_write);
+                            let key = ExactColourPipelineKey {
+                                target: color,
+                                depth_format: target.depth,
+                                samples: target.samples,
+                                state0,
+                                state1,
+                                port: executable.port,
+                                cached_lighting: false,
+                                mark_mesh: tess == ExactTessBind::MarkMesh
+                                    && vertex_type == asset_iw4::vertex_decl::PACKED_VERTEX_TYPE,
+                                forward_z: target.forward_z,
+                                probe_array: false,
+                            };
+                            // The probe-array twin once built; the plain port until then.
+                            let probe_key = ExactColourPipelineKey {
+                                probe_array: true,
+                                ..key
+                            };
+                            let probe = (tess == ExactTessBind::World
+                                && !matches!(self.textures, PrepareTextureTables::Shadow { .. })
+                                && pipeline_res.ports[port_index].probe.is_some()
+                                && self.uploaded.probe_array.is_some()
+                                && self.geometry.world_probe.is_some())
+                            .then(|| match self.registry.slot(&probe_key) {
+                                Some(slot) => self.registry.is_ready(slot).then_some(slot),
+                                None => {
+                                    self.registry.discover(probe_key, executable.state);
+                                    None
+                                }
+                            })
+                            .flatten();
+                            let (pipeline, probe_array) = match probe {
+                                Some(slot) => (slot, true),
+                                None => {
+                                    let Some(pipeline) = self.registry.slot(&key) else {
+                                        self.registry.discover(key, executable.state);
+                                        return Err(GpuSubmitRefusal::PipelineNotReady);
+                                    };
+                                    if !self.registry.is_ready(pipeline) {
+                                        return Err(GpuSubmitRefusal::PipelineNotReady);
+                                    }
+                                    (pipeline, false)
+                                }
+                            };
+                            if let Some(slot) = self.run_pack.pipelines.get_mut(pass_index) {
+                                *slot = Some((port_index, pipeline, probe_array));
+                            }
+                            (port_index, pipeline, probe_array)
                         }
-                        if let Some(slot) = self.run_pack.pipelines.get_mut(pass_index) {
-                            *slot = Some((port_index, pipeline));
-                        }
-                        (port_index, pipeline)
-                    }
-                };
+                    };
                 let port_gpu = &pipeline_res.ports[port_index];
                 let (texture_slots, texture_bind) =
-                    self.bind_hit_textures(executable, surface, after_scene_resolve)?;
+                    self.bind_hit_textures(executable, surface, after_scene_resolve, probe_array)?;
                 // Shadow placement is applied after preparation, independently for each
                 // light and object. Its unplaced banks belong to the material run.
                 let unplaced_shadow = matches!(self.textures, PrepareTextureTables::Shadow { .. })
@@ -2915,6 +2991,8 @@ impl ExactPrepare<'_> {
                     constant_base,
                     texture_slots,
                     texture_bind,
+                    surface,
+                    probe_array,
                     start,
                     count,
                     tess,

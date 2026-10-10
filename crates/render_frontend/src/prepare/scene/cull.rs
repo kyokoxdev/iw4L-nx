@@ -142,6 +142,7 @@ pub fn apply_dpvs_cull(
     mut published_vis: ResMut<render_scene::PublishedCellVis>,
     prepared: Res<PreparedSceneView>,
     lock_pvs: Res<crate::prepare::scene::view_parms::RLockPvs>,
+    mut dips: Local<VisDipTrack>,
 ) {
     let _cull = perf::Span::RenderCullCpuMs.enter();
     stats.frustum_planes.clear();
@@ -168,7 +169,7 @@ pub fn apply_dpvs_cull(
     stats.view_prepared = 1;
     stats.lock_pvs = u8::from(lock_pvs.enabled && lock_pvs.frozen.is_some());
 
-    let eye_pos = lock_pvs.dpvs_eye(&prepared);
+    let eye_pos = lock_pvs.dpvs_walk_eye(&prepared);
     let eye = [eye_pos.x, eye_pos.y, eye_pos.z];
     let (fov, aspect) = lock_pvs.dpvs_fov_aspect(&prepared);
     let dpvs = &cull.dpvs;
@@ -475,6 +476,108 @@ pub fn apply_dpvs_cull(
     let mut smodel_vis_id = crate::assemble::drawsurf::list::CONTENT_ID_SEED;
     crate::assemble::drawsurf::list::mix_content_bytes(&mut smodel_vis_id, &cull.smodel_vis);
     stats.smodel_vis_id = smodel_vis_id;
+    dips.note_batches(&batch_visible, eye_cell, eye);
+    dips.note(VisSample {
+        surfaces,
+        smodels: cull.smodel_vis.iter().filter(|v| **v != 0).count() as u32,
+        cells: stats.visible_cells,
+        visits: stats.cell_clip_visits.len() as u32,
+        eye_cell,
+        eye,
+    });
+}
+
+/// Switch flicker probe: one frame whose visible set drops by a quarter and
+/// comes straight back is logged with what the walk saw on each side.
+#[derive(Default)]
+pub struct VisDipTrack {
+    last: [Option<VisSample>; 2],
+    logged: u32,
+    /// Batch visibility of the two culls before this one.
+    batches: [Vec<bool>; 2],
+    /// Batches drawn, dropped for one cull, then drawn again, since the last line.
+    holes: u32,
+    holes_max: u32,
+    culls: u32,
+    first_hole: Option<(usize, Option<usize>, [f32; 3])>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VisSample {
+    surfaces: u32,
+    smodels: u32,
+    cells: u32,
+    visits: u32,
+    eye_cell: Option<usize>,
+    eye: [f32; 3],
+}
+
+impl VisDipTrack {
+    /// Exact form of the dip probe: every world batch visible two culls ago and
+    /// now but not in between. Zero while walls blink means the blink is GPU-side.
+    fn note_batches(&mut self, cur: &[bool], eye_cell: Option<usize>, eye: [f32; 3]) {
+        let [a, b] = &self.batches;
+        if a.len() == cur.len() && b.len() == cur.len() {
+            let mut n = 0u32;
+            for i in 0..cur.len() {
+                if a[i] && !b[i] && cur[i] {
+                    n += 1;
+                    self.first_hole.get_or_insert((i, eye_cell, eye));
+                }
+            }
+            self.holes += n;
+            self.holes_max = self.holes_max.max(n);
+        }
+        self.batches.swap(0, 1);
+        self.batches[1].clear();
+        self.batches[1].extend_from_slice(cur);
+        self.culls += 1;
+        if self.culls == 300 {
+            diag::info!(
+                World,
+                "dpvs holes in 300 culls: batches={} max/cull={} first (batch, eye_cell, eye)={:?}",
+                self.holes,
+                self.holes_max,
+                self.first_hole
+            );
+            self.culls = 0;
+            self.holes = 0;
+            self.holes_max = 0;
+            self.first_hole = None;
+        }
+    }
+
+    fn note(&mut self, cur: VisSample) {
+        let dip = |a: u32, b: u32, c: u32| a >= 40 && b * 4 < a * 3 && c * 10 >= a * 9;
+        if let [Some(a), Some(b)] = self.last
+            && self.logged < 200
+            && (dip(a.surfaces, b.surfaces, cur.surfaces) || dip(a.smodels, b.smodels, cur.smodels))
+        {
+            self.logged += 1;
+            diag::info!(
+                World,
+                "dpvs dip: surfaces {}->{}->{} smodels {}->{}->{} cells {}->{}->{} visits {}->{}->{} eye_cell {:?}->{:?}->{:?} eye {:?}->{:?}",
+                a.surfaces,
+                b.surfaces,
+                cur.surfaces,
+                a.smodels,
+                b.smodels,
+                cur.smodels,
+                a.cells,
+                b.cells,
+                cur.cells,
+                a.visits,
+                b.visits,
+                cur.visits,
+                a.eye_cell,
+                b.eye_cell,
+                cur.eye_cell,
+                b.eye,
+                cur.eye
+            );
+        }
+        self.last = [self.last[1], Some(cur)];
+    }
 }
 
 pub(crate) fn log_script_model_gaps_once(

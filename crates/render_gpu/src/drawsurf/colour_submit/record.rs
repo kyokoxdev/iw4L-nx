@@ -508,7 +508,20 @@ pub(super) fn draw_exact_colour(
             diag::info!(
                 World,
                 "colour draws: ready={ready_draws} refused={refused_draws} not_ready={pipeline_not_ready} | per frame: world={} smodel={} smodel_cached={} smodel_skinned={} xmodel={} codemesh={} particle={} mark={} glass={} merged={} inst_adj={} inst_any={} instanced={} banded={}",
-                n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[12], n[13]
+                n[0],
+                n[1],
+                n[2],
+                n[3],
+                n[4],
+                n[5],
+                n[6],
+                n[7],
+                n[8],
+                n[9],
+                n[10],
+                n[11],
+                n[12],
+                n[13]
             );
             let ms: Vec<f32> = super::ROW_COST_US
                 .iter()
@@ -518,7 +531,41 @@ pub(super) fn draw_exact_colour(
             diag::info!(
                 World,
                 "colour rows ms/frame: wall={:.2} lanes={:.2} exec={:.2} hit={:.2} arena={:.2} tex_wait={:.2}",
-                ms[5], ms[4], ms[0], ms[1], ms[2], ms[3]
+                ms[5],
+                ms[4],
+                ms[0],
+                ms[1],
+                ms[2],
+                ms[3]
+            );
+            let b: Vec<u32> = super::WORLD_BREAKS
+                .iter()
+                .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed) / 300)
+                .collect();
+            let enc: Vec<f32> = super::ENCODE_COST_US
+                .iter()
+                .map(|c| c.swap(0, std::sync::atomic::Ordering::Relaxed) as f32 / 300_000.0)
+                .collect();
+            diag::info!(
+                World,
+                "world breaks per frame: gap={} pipeline={} textures={} (lightmap_only={} probe_only={}) constants={} depth={} after_other={} | colour encode ms/frame: run={:.2} pass_end={:.2}",
+                b[0],
+                b[1],
+                b[2],
+                b[6],
+                b[7],
+                b[3],
+                b[4],
+                b[5],
+                enc[0],
+                enc[1]
+            );
+            use std::sync::atomic::Ordering::Relaxed;
+            diag::info!(
+                World,
+                "texture epochs in 300 frames: table resets={} binding clears={}",
+                super::super::texture_table::TABLE_EPOCH_OPENS.swap(0, Relaxed),
+                super::binding::BINDING_CLEARS.swap(0, Relaxed)
             );
         }
     }

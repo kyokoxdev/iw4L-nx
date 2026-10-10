@@ -3,10 +3,12 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_asset::{ExtractedAssets, RenderAssets};
 use bevy::render::render_resource::{
-    AddressMode, Buffer, FilterMode, MipmapFilterMode, SamplerDescriptor, TextureView,
-    TextureViewDimension, TextureViewId,
+    AddressMode, Buffer, CommandEncoderDescriptor, Extent3d, FilterMode, MipmapFilterMode,
+    Origin3d, SamplerDescriptor, TexelCopyTextureInfo, TextureAspect, TextureDescriptor,
+    TextureDimension, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
+    TextureViewId,
 };
-use bevy::render::renderer::RenderQueue;
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
 use d3d9_state::{
     AddressMode as D3dAddressMode, DecodedSamplerState, SamplerDecodeError, TextureFilter,
@@ -142,6 +144,10 @@ pub struct RuntimeUploadedImageRegistry {
     replaced_revision: u64,
     pub material_images: Vec<Option<Result<UploadedTextureView, UploadedViewRefusal>>>,
     pub reflection_probes: Vec<Option<Result<TextureView, UploadedViewRefusal>>>,
+    /// Every reflection probe as one cube array, layer = probe index, once all
+    /// probes are uploaded with one size, format and mip count.
+    pub probe_array: Option<TextureView>,
+    probe_array_tried: bool,
     pub lightmaps: Vec<Option<RuntimeUploadedLightmapViews>>,
     pub model_lighting: Option<Result<TextureView, UploadedViewRefusal>>,
 
@@ -273,6 +279,122 @@ pub(crate) fn prepare_uploaded_image_registry(
     gpu_images: Res<RenderAssets<GpuImage>>,
     extracted: Option<Res<ExtractedAssets<GpuImage>>>,
     mut registry: ResMut<RuntimeUploadedImageRegistry>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+) {
+    refresh_uploaded_image_registry(
+        handles.as_deref(),
+        &gpu_images,
+        extracted.as_deref(),
+        &mut registry,
+    );
+    if super::bound_slots()
+        && !registry.probe_array_tried
+        && registry.pending.probes.is_empty()
+        && let Some(handles) = handles.as_deref()
+    {
+        registry.probe_array_tried = true;
+        registry.probe_array = build_probe_array(&device, &queue, handles, &gpu_images);
+        if registry.probe_array.is_some() {
+            registry.note(ViewChange::Published);
+        }
+    }
+}
+
+/// Copy every reflection probe cube into one cube array, so draws that differ
+/// only in probe share one texture binding and pick the layer per vertex.
+fn build_probe_array(
+    device: &RenderDevice,
+    queue: &RenderQueue,
+    handles: &ExtractedRuntimeImageHandles,
+    gpu_images: &RenderAssets<GpuImage>,
+) -> Option<TextureView> {
+    let probes: Option<Vec<&GpuImage>> = handles
+        .reflection_probes
+        .iter()
+        .map(|handle| gpu_images.get(handle.as_ref()?))
+        .collect();
+    let probes = probes.filter(|probes| !probes.is_empty());
+    let Some(probes) = probes else {
+        diag::info!(World, "probe array: off (a probe is missing or not uploaded)");
+        return None;
+    };
+    let first = &probes[0].texture_descriptor;
+    let uniform = probes.iter().all(|probe| {
+        let d = &probe.texture_descriptor;
+        d.size == first.size
+            && d.format == first.format
+            && d.mip_level_count == first.mip_level_count
+            && d.size.depth_or_array_layers == 6
+    });
+    if !uniform {
+        diag::info!(World, "probe array: off (probes differ in size, format or mips)");
+        return None;
+    }
+    let size = Extent3d {
+        width: first.size.width,
+        height: first.size.height,
+        depth_or_array_layers: 6 * probes.len() as u32,
+    };
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("iw4_reflection_probe_array"),
+        size,
+        mip_level_count: first.mip_level_count,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: first.format,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("iw4_reflection_probe_array"),
+    });
+    for (index, probe) in probes.iter().enumerate() {
+        for mip in 0..first.mip_level_count {
+            encoder.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture: &probe.texture,
+                    mip_level: mip,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip,
+                    origin: Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: 6 * index as u32,
+                    },
+                    aspect: TextureAspect::All,
+                },
+                // Block-compressed mips below one block copy as a whole block.
+                first.mip_level_size(mip)?.physical_size(first.format),
+            );
+        }
+    }
+    queue.submit([encoder.finish()]);
+    diag::info!(
+        World,
+        "probe array: {} probes {}x{} {:?} mips={}",
+        probes.len(),
+        size.width,
+        size.height,
+        first.format,
+        first.mip_level_count
+    );
+    Some(texture.create_view(&TextureViewDescriptor {
+        label: Some("iw4_reflection_probe_array"),
+        dimension: Some(TextureViewDimension::CubeArray),
+        ..Default::default()
+    }))
+}
+
+fn refresh_uploaded_image_registry(
+    handles: Option<&ExtractedRuntimeImageHandles>,
+    gpu_images: &RenderAssets<GpuImage>,
+    extracted: Option<&ExtractedAssets<GpuImage>>,
+    registry: &mut RuntimeUploadedImageRegistry,
 ) {
     let Some(handles) = handles else {
         if registry.source_handles.is_none() {
@@ -292,9 +414,11 @@ pub(crate) fn prepare_uploaded_image_registry(
         registry.source_handles = Some(handles.handles.clone());
         registry.slot_index = UploadedSlotIndex::from_handles(&handles.handles);
         registry.generation_id = handles.generation_id;
-        let change = refresh_all_uploaded_slots(&mut registry, &handles, &gpu_images);
+        registry.probe_array = None;
+        registry.probe_array_tried = false;
+        let change = refresh_all_uploaded_slots(registry, handles, gpu_images);
         registry.note(change);
-        registry.pending = uploaded_pending_from_registry(&registry);
+        registry.pending = uploaded_pending_from_registry(registry);
         return;
     }
 
@@ -313,9 +437,9 @@ pub(crate) fn prepare_uploaded_image_registry(
     match plan {
         UploadedRefresh::None => {}
         UploadedRefresh::Slots(slots) => {
-            let change = refresh_uploaded_slots(&mut registry, &handles, &gpu_images, &slots);
+            let change = refresh_uploaded_slots(registry, handles, gpu_images, &slots);
             registry.note(change);
-            retarget_uploaded_pending(&mut registry, &slots);
+            retarget_uploaded_pending(registry, &slots);
         }
     }
 }

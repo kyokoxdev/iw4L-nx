@@ -94,6 +94,7 @@ pub(super) struct RecordGeometry<'a> {
     pub(super) glass: RecordMesh<'a>,
     pub(super) world_layer: Option<&'a Buffer>,
     pub(super) world_effect: Option<&'a Buffer>,
+    pub(super) world_probe: Option<&'a Buffer>,
     pub(super) world_index_count: u32,
     pub(super) world_layout_epoch: u64,
 }
@@ -222,6 +223,7 @@ fn record_colour_run<'a>(
     draws: impl IntoIterator<Item = &'a PreparedExactDraw>,
     label: &'static str,
 ) -> ColourRecordResult {
+    let run_started = Instant::now();
     let mut result = ColourRecordResult::default();
     let attachments = [Some(attachment)];
     let mut pass = TrackedRenderPass::new(
@@ -249,6 +251,7 @@ fn record_colour_run<'a>(
     // by constants block (same mesh range), i.e. what instancing could fold.
     let mut instance_prev: Option<(DrawMergeKey, u32, u32)> = None;
     let mut instance_seen = std::collections::HashSet::new();
+    let mut prev_draw: Option<&PreparedExactDraw> = None;
     macro_rules! flush_pending {
         () => {
             if let Some(held) = pending.take() {
@@ -328,6 +331,41 @@ fn record_colour_run<'a>(
                 super::DRAW_CENSUS[11].fetch_add(1, Relaxed);
             }
             instance_prev = Some(shape);
+            if draw.tess == ExactTessBind::World
+                && !contiguous
+                && let Some(held) = pending.as_ref().map(|held| held.key)
+            {
+                let reason = if held.tess != ExactTessBind::World {
+                    5
+                } else if held.pipeline != key.pipeline {
+                    1
+                } else if held.texture_bind != key.texture_bind {
+                    2
+                } else if held.constant_base != key.constant_base
+                    || held.arena_lane != key.arena_lane
+                {
+                    3
+                } else if held.depth != key.depth {
+                    4
+                } else {
+                    0
+                };
+                super::WORLD_BREAKS[reason].fetch_add(1, Relaxed);
+                if reason == 2
+                    && let Some(prev) = prev_draw.filter(|prev| prev.port == draw.port)
+                {
+                    let (a, b) = (prev.surface, draw.surface);
+                    let lightmap = (a.primary_lightmap, a.secondary_lightmap)
+                        != (b.primary_lightmap, b.secondary_lightmap);
+                    let probe = a.reflection_probe != b.reflection_probe;
+                    if lightmap && !probe {
+                        super::WORLD_BREAKS[6].fetch_add(1, Relaxed);
+                    } else if probe && !lightmap {
+                        super::WORLD_BREAKS[7].fetch_add(1, Relaxed);
+                    }
+                }
+            }
+            prev_draw = Some(draw);
         }
         // Same band table as the held draw, indices continuing its range: the
         // shader picks this draw's block by vertex, so the held draw grows.
@@ -442,6 +480,19 @@ fn record_colour_run<'a>(
                 if let Some(layer) = input.geometry.world_layer {
                     pass.set_vertex_buffer(1, layer.slice(..));
                     result.bindings.state = result.bindings.state.saturating_add(1);
+                } else if draw.probe_array
+                    && let Some(effect) = input.geometry.world_effect
+                {
+                    // The probe twin declares slot 1 even for single-layer streams.
+                    pass.set_vertex_buffer(1, effect.slice(..));
+                }
+                if draw.probe_array
+                    && let Some(probe) = input.geometry.world_probe
+                {
+                    pass.set_vertex_buffer(
+                        super::super::probe_array::PROBE_VERTEX_SLOT,
+                        probe.slice(..),
+                    );
                 }
             }
             let index_format = if matches!(
@@ -533,6 +584,11 @@ fn record_colour_run<'a>(
     let drop_started = Instant::now();
     drop(pass);
     result.drop_ms = drop_started.elapsed().as_secs_f32() * 1000.0;
+    if cfg!(target_os = "horizon") {
+        use std::sync::atomic::Ordering::Relaxed;
+        super::ENCODE_COST_US[0].fetch_add(super::row_cost_us(Some(run_started)), Relaxed);
+        super::ENCODE_COST_US[1].fetch_add(super::row_cost_us(Some(drop_started)), Relaxed);
+    }
     result
 }
 

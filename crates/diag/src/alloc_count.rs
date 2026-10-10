@@ -174,17 +174,50 @@ pub struct ProcessCountingAllocator;
 /// Small blocks go through per-thread free lists on Switch only.
 const TCACHE: bool = cfg!(target_os = "horizon");
 
+/// Switch: blocks this large skip talc for newlib's malloc. Talc returns a
+/// 16 MiB block only once all of it is free, so a match's freed textures and
+/// arrays stayed inside talc while Mesa, which allocates from newlib, ran out.
+const DIRECT_MIN: usize = if cfg!(target_os = "horizon") {
+    1 << 20
+} else {
+    usize::MAX
+};
+
+fn direct(layout: Layout) -> bool {
+    layout.size() >= DIRECT_MIN
+}
+
+unsafe fn raw_alloc(layout: Layout) -> *mut u8 {
+    if direct(layout) {
+        return unsafe { std::alloc::System.alloc(layout) };
+    }
+    match tcache::class(layout) {
+        Some(class) if TCACHE => unsafe { tcache::alloc(class) },
+        _ => unsafe { BACKING.alloc(layout) },
+    }
+}
+
+unsafe fn raw_dealloc(ptr: *mut u8, layout: Layout) {
+    if direct(layout) {
+        return unsafe { std::alloc::System.dealloc(ptr, layout) };
+    }
+    match tcache::class(layout) {
+        Some(class) if TCACHE => unsafe { tcache::dealloc(ptr, class) },
+        _ => unsafe { BACKING.dealloc(ptr, layout) },
+    }
+}
+
 unsafe impl GlobalAlloc for ProcessCountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size() as u64);
-        match tcache::class(layout) {
-            Some(class) if TCACHE => unsafe { tcache::alloc(class) },
-            _ => unsafe { BACKING.alloc(layout) },
-        }
+        unsafe { raw_alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record_alloc(layout.size() as u64);
+        if direct(layout) {
+            return unsafe { std::alloc::System.alloc_zeroed(layout) };
+        }
         match tcache::class(layout) {
             Some(class) if TCACHE => unsafe {
                 let ptr = tcache::alloc(class);
@@ -199,10 +232,7 @@ unsafe impl GlobalAlloc for ProcessCountingAllocator {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         record_dealloc(layout.size() as u64);
-        match tcache::class(layout) {
-            Some(class) if TCACHE => unsafe { tcache::dealloc(ptr, class) },
-            _ => unsafe { BACKING.dealloc(ptr, layout) },
-        }
+        unsafe { raw_dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -210,25 +240,22 @@ unsafe impl GlobalAlloc for ProcessCountingAllocator {
         record_dealloc(layout.size() as u64);
         // SAFETY: `GlobalAlloc::realloc` contract: `new_size` fits `layout.align()`.
         let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
-        match (tcache::class(layout), tcache::class(new_layout)) {
-            (None, None) => unsafe { BACKING.realloc(ptr, layout, new_size) },
-            _ if !TCACHE => unsafe { BACKING.realloc(ptr, layout, new_size) },
-            // Either side is a cached class: its block must come from (and go
-            // back to) the class lists, so move instead of resizing in place.
-            (old, new) => unsafe {
-                let moved = match new {
-                    Some(class) => tcache::alloc(class),
-                    None => BACKING.alloc(new_layout),
-                };
-                if !moved.is_null() {
-                    moved.copy_from_nonoverlapping(ptr, layout.size().min(new_size));
-                    match old {
-                        Some(class) => tcache::dealloc(ptr, class),
-                        None => BACKING.dealloc(ptr, layout),
-                    }
-                }
-                moved
-            },
+        if direct(layout) && direct(new_layout) {
+            return unsafe { std::alloc::System.realloc(ptr, layout, new_size) };
+        }
+        let cached =
+            TCACHE && (tcache::class(layout).is_some() || tcache::class(new_layout).is_some());
+        if !direct(layout) && !direct(new_layout) && !cached {
+            return unsafe { BACKING.realloc(ptr, layout, new_size) };
+        }
+        // The block changes owner (class list, talc or newlib): move it.
+        unsafe {
+            let moved = raw_alloc(new_layout);
+            if !moved.is_null() {
+                moved.copy_from_nonoverlapping(ptr, layout.size().min(new_size));
+                raw_dealloc(ptr, layout);
+            }
+            moved
         }
     }
 }
@@ -247,8 +274,9 @@ mod tcache {
     const MAX: usize = 512;
     const CLASSES: usize = MAX / STEP;
     // ponytail: fixed refill/cap, and an exiting thread strands its lists
-    // (at most CAP blocks a class); hand them back on thread exit if
-    // short-lived threads ever add up.
+    // (at most CAP blocks a class) unless it calls `flush_thread_cache` last;
+    // short-lived threads do. A TLS destructor would cover every thread, but
+    // registering one allocates from inside the allocator.
     const REFILL: u32 = 16;
     const CAP: u32 = 64;
 
@@ -330,6 +358,19 @@ mod tcache {
         }
     }
 
+    /// Hands every block this thread holds back to the shared allocator.
+    pub(super) fn flush() {
+        let _ = LISTS.try_with(|lists| {
+            for (class, cell) in lists.iter().enumerate() {
+                let mut list = cell.get();
+                while !list.head.is_null() {
+                    unsafe { BACKING.dealloc(pop(&mut list), block(class)) };
+                }
+                cell.set(list);
+            }
+        });
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -337,7 +378,10 @@ mod tcache {
         #[test]
         fn classes_reuse_and_spill() {
             let at = |size, align| class(Layout::from_size_align(size, align).unwrap());
-            assert_eq!((at(1, 1), at(16, 8), at(17, 8), at(512, 16)), (Some(0), Some(0), Some(1), Some(31)));
+            assert_eq!(
+                (at(1, 1), at(16, 8), at(17, 8), at(512, 16)),
+                (Some(0), Some(0), Some(1), Some(31))
+            );
             assert_eq!((at(513, 8), at(64, 32)), (None, None));
 
             unsafe {
@@ -356,6 +400,10 @@ mod tcache {
                 }
                 let len = LISTS.with(|lists| lists[5].get().len);
                 assert!(len > CAP / 2 && len <= CAP, "len {len}");
+
+                // A thread about to exit gives every cached block back.
+                flush();
+                assert!(LISTS.with(|lists| lists.iter().all(|l| l.get().len == 0)));
             }
         }
     }
@@ -396,6 +444,14 @@ pub fn process_live_heap_bytes() -> Option<u64> {
     )
 }
 
+/// Call last on a short-lived thread: on Switch its small-block cache would
+/// otherwise stay allocated after it exits.
+pub fn flush_thread_cache() {
+    if TCACHE {
+        tcache::flush();
+    }
+}
+
 /// Bytes this thread allocated minus bytes it freed, so far. A span's delta
 /// is what that span left live, less what it freed of other threads' memory.
 pub fn thread_net_alloc_bytes() -> Option<i64> {
@@ -403,7 +459,10 @@ pub fn thread_net_alloc_bytes() -> Option<i64> {
         return None;
     }
     let s = slot();
-    Some(s.alloc_bytes.load(Ordering::Relaxed) as i64 - s.dealloc_bytes.load(Ordering::Relaxed) as i64)
+    Some(
+        s.alloc_bytes.load(Ordering::Relaxed) as i64
+            - s.dealloc_bytes.load(Ordering::Relaxed) as i64,
+    )
 }
 
 /// Allocations this thread has made so far, for per-span churn.

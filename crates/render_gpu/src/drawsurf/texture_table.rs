@@ -74,6 +74,10 @@ pub(super) struct TableEpoch {
     pub replaced_revision: u64,
 }
 
+/// Switch flicker probe: table resets since the last colour diagnostics line.
+pub(super) static TABLE_EPOCH_OPENS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Resource, Default)]
 pub(super) struct ExactTextureTable {
     epoch: TableEpoch,
@@ -116,6 +120,7 @@ impl ExactTextureTable {
         if self.epoch == epoch {
             return;
         }
+        TABLE_EPOCH_OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.epoch = epoch;
         for lane in &mut self.views {
             lane.clear();
@@ -202,11 +207,9 @@ impl ExactTextureTable {
             .zip(slots)
             .flat_map(|(pair, &word)| {
                 let lane = match pair[0].ty {
-                    BindingType::Texture { view_dimension, .. } => match view_dimension {
-                        TextureViewDimension::Cube => 1,
-                        TextureViewDimension::D3 => 2,
-                        _ => 0,
-                    },
+                    BindingType::Texture { view_dimension, .. } => {
+                        super::probe_array::bound_slot_lane(view_dimension)
+                    }
                     _ => unreachable!("bound slot layouts pair a texture with a sampler"),
                 };
                 let texture = (word & 0xffff) as u16;

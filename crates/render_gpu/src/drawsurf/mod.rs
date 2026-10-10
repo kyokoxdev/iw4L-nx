@@ -14,6 +14,7 @@ mod learned;
 mod model_lighting_tiles;
 mod postfx;
 mod postfx_dof;
+mod probe_array;
 mod products;
 mod resolved_scene;
 pub(crate) mod scene_depth;

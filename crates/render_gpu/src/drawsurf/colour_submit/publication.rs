@@ -11,6 +11,8 @@ pub struct ExtractedStaticGeometry {
     pub world_layer: Arc<Vec<u8>>,
     pub world_indices: Arc<Vec<u32>>,
     pub world_surface_ranges: Arc<Vec<(u32, u32)>>,
+    /// Reflection probe per world vertex; empty when the map cannot carry one.
+    pub world_probes: Arc<Vec<u32>>,
     pub world_vertex_refusal: Option<render_frame::WorldVertexRefusal>,
     pub smodel_vertices: Arc<Vec<[u8; asset_iw4::size::GFX_PACKED_VERTEX]>>,
     pub smodel_indices: Arc<Vec<u32>>,

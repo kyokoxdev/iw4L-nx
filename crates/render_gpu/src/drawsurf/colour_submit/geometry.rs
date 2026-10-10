@@ -17,6 +17,8 @@ pub(super) struct ExactColourGeometry {
     pub(super) world_vertex: Option<Buffer>,
     pub(super) world_layer: Option<Buffer>,
     pub(super) world_effect: Option<Buffer>,
+    /// Reflection probe per world vertex (`u32`), for the probe-array variant.
+    pub(super) world_probe: Option<Buffer>,
     pub(super) world_index: Option<Buffer>,
     pub(super) world_surface_ranges: Vec<(u32, u32)>,
     pub(super) world_vertex_count: usize,
@@ -152,6 +154,7 @@ pub(super) fn upload_exact_geometry(
         geometry.world_vertex = None;
         geometry.world_layer = None;
         geometry.world_effect = None;
+        geometry.world_probe = None;
         geometry.world_index = None;
         geometry.world_cpu_indices.clear();
         geometry.world_surface_ranges.clear();
@@ -192,6 +195,14 @@ pub(super) fn upload_exact_geometry(
                 contents: bytemuck::cast_slice(&vec![0u32; geometry.world_vertex_count]),
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             }));
+            let probes = source.world().static_geometry.world_probes.as_slice();
+            if probes.len() == geometry.world_vertex_count {
+                geometry.world_probe = Some(device.create_buffer_with_data(&BufferInitDescriptor {
+                    label: Some("iw4_exact_colour_world_probe_vb"),
+                    contents: bytemuck::cast_slice(probes),
+                    usage: BufferUsages::VERTEX,
+                }));
+            }
             geometry.world_index = Some(device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("iw4_exact_colour_world_ib"),
                 contents: bytemuck::cast_slice(
@@ -819,6 +830,7 @@ pub(super) fn record_geometry<'a>(
         glass: mesh(ExactTessBind::Glass),
         world_layer: geometry.world_layer.as_ref(),
         world_effect: geometry.world_effect.as_ref(),
+        world_probe: geometry.world_probe.as_ref(),
         world_index_count: pretess.logical_index_count(),
         world_layout_epoch: pretess.layout_epoch(),
     }

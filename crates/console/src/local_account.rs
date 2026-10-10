@@ -174,7 +174,12 @@ pub(crate) fn save(
     let spawned = std::thread::Builder::new()
         .name("account-save".into())
         .stack_size(256 * 1024)
-        .spawn(move || save_current(&writer_path, &next, expected.as_ref()));
+        .spawn(move || {
+            let result = save_current(&writer_path, &next, expected.as_ref());
+            drop((writer_path, next, expected));
+            diag::flush_thread_cache();
+            result
+        });
     let result = match spawned {
         Ok(handle) if !exiting => {
             persistence.writing = Some((snapshot, handle));

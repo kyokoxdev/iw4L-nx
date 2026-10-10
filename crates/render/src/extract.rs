@@ -291,6 +291,12 @@ pub fn seal_render_frame(
                 None => empty_static(),
             }
         };
+    let world_probes = match world.as_ref() {
+        Some(plan) if !skip_world_smodel && world_vertex_refusal.is_none() => {
+            take_published(plan.probe_share.as_ref()).0
+        }
+        _ => Arc::new(Vec::new()),
+    };
     let empty_smodel = || {
         (
             Arc::new(Vec::new()),
@@ -556,6 +562,7 @@ pub fn seal_render_frame(
             world_layer,
             world_indices,
             world_surface_ranges,
+            world_probes,
             world_vertex_refusal,
             smodel_vertices,
             smodel_indices,

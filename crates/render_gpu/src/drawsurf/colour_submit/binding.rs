@@ -30,11 +30,16 @@ pub(super) struct BoundTextureKey {
     pub(super) spot_shadow_select: Option<u8>,
 }
 
+/// Switch flicker probe: colour binding cache clears since the last diagnostics line.
+pub(super) static BINDING_CLEARS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
 impl ExactColourBindingCache {
     pub(super) fn open_epoch(&mut self, generation: MaterialGenerationId, views_revision: u64) {
         if self.generation == generation && self.views_revision == views_revision {
             return;
         }
+        BINDING_CLEARS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.generation = generation;
         self.views_revision = views_revision;
         for slots in &mut self.textures {

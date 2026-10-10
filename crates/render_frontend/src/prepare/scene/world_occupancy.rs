@@ -334,9 +334,9 @@ pub fn place(
 }
 
 /// World render scale, `IW4L_RENDER_SCALE` in 0.25..=1. The Switch defaults
-/// to 0.75 (960x540 of 720p), the way the 360/PS3 ports drew below 720p.
+/// to 0.625 (800x450 of 720p), the way the 360/PS3 ports drew below 720p.
 fn render_scale() -> f32 {
-    let default = if cfg!(target_os = "horizon") { 0.75 } else { 1.0 };
+    let default = if cfg!(target_os = "horizon") { 0.625 } else { 1.0 };
     std::env::var("IW4L_RENDER_SCALE")
         .ok()
         .and_then(|value| value.trim().parse::<f32>().ok())

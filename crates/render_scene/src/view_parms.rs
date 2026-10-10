@@ -155,8 +155,8 @@ pub struct HeldCullView {
 /// Rotation the held view absorbs: its FOV is this much wider on every side.
 pub const HOLD_TURN_RAD: f32 = 8.0 * std::f32::consts::PI / 180.0;
 /// Eye travel the held view absorbs: every frustum plane sits this far out.
-/// Portal clipping still uses the held eye, so a doorway can reveal far cells
-/// up to this many units late. 48 holds about three frames of a run at the
+/// The portal walk runs from the live eye, so the cell set follows the camera
+/// and only the frustum is held. 48 holds about three frames of a run at the
 /// Switch's ~11 fps; at 16 the draw lists were rebuilt nearly every frame.
 pub const HOLD_EYE_UNITS: f32 = 48.0;
 
@@ -229,9 +229,22 @@ impl RLockPvs {
         self.cull_view().map_or(live.eye, |f| f.eye)
     }
 
+    /// `r_lockPvs` only. The held view widens the frustum, but the portal
+    /// walk must start from where the camera is: from the held eye, cells
+    /// seen through a doorway the camera has since stepped up to stay culled.
+    fn frozen_view(&self) -> Option<&LockPvsView> {
+        self.frozen.as_ref().filter(|_| self.enabled)
+    }
+
+    /// Eye the portal walk starts from, see [`RLockPvs::frozen_view`].
+    #[must_use]
+    pub fn dpvs_walk_eye(&self, live: &PreparedSceneView) -> Vec3 {
+        self.frozen_view().map_or(live.eye, |f| f.eye)
+    }
+
     #[must_use]
     pub fn dpvs_forward(&self, live: &PreparedSceneView) -> Vec3 {
-        self.cull_view().map_or(live.forward, |f| f.forward)
+        self.frozen_view().map_or(live.forward, |f| f.forward)
     }
 
     #[must_use]
@@ -244,7 +257,7 @@ impl RLockPvs {
 
     #[must_use]
     pub fn dpvs_portal_bevels(&self, live: &PreparedSceneView) -> Option<dpvs_iw4::PortalBevels> {
-        self.cull_view()
+        self.frozen_view()
             .map_or(live.portal_bevels, |f| f.portal_bevels)
     }
 

@@ -340,12 +340,15 @@ pub fn spawn_pending_fpv(
     let idle_sampled = view.idle_name.is_some();
     diag::info!(
         Fpv,
-        "fpv: equipped `{}` ({}; prepared before Ready) hands={:?} weapon_family={} — instance {:.2}ms",
+        "fpv: equipped `{}` ({}; prepared before Ready) hands={:?} weapon_family={} — instance {:.2}ms; gun materials [{}], colour-map skips {} [{}]",
         view.gun_name,
         idle_kind,
         view.hands,
         view.namespace.as_str(),
         instance_started.elapsed().as_secs_f64() * 1000.0,
+        census.mat_hints.join(","),
+        census.gun_colormap_skip_n,
+        census.gun_colormap_skip_names.join(","),
     );
     session_vm.0 = Some(SessionFpvMeshesHandles {
         weapon_id: request.weapon_id,

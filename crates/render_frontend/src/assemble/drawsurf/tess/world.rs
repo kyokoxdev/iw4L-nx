@@ -48,6 +48,9 @@ pub struct WorldDrawGpuPlan {
     pub index_share: Option<Arc<Vec<u32>>>,
     pub range_share: Option<Arc<Vec<(u32, u32)>>>,
     pub layer_share: Option<Arc<Vec<u8>>>,
+    /// Reflection probe of each vertex, from the surfaces that index it; empty
+    /// when a vertex is shared by surfaces with different probes.
+    pub probe_share: Option<Arc<Vec<u32>>>,
     pub decoded_share: Option<Arc<Vec<WorldVertex>>>,
 }
 
@@ -93,6 +96,10 @@ impl WorldDrawGpuPlan {
 
     pub fn vertex_layer_rows(&self) -> &[u8] {
         super::published_rows(&self.layer_share)
+    }
+
+    pub fn vertex_probe_rows(&self) -> &[u32] {
+        super::published_rows(&self.probe_share)
     }
 
     pub fn publish_extract_shares(&mut self) {
@@ -237,6 +244,7 @@ impl WorldDrawGpuPlan {
                 index_share: Some(Arc::new(Vec::new())),
                 range_share: Some(Arc::new(Vec::new())),
                 layer_share: Some(Arc::new(vertex_layer)),
+                probe_share: Some(Arc::new(Vec::new())),
                 decoded_share: Some(Arc::new(vertices)),
             };
             plan.publish_extract_shares();
@@ -257,7 +265,7 @@ impl WorldDrawGpuPlan {
                 batch_to_mat.get(batch).copied().unwrap_or(u32::MAX)
             })
             .collect();
-        let surface_sampler_inputs = cull
+        let surface_sampler_inputs: Vec<SurfaceSamplerInputs> = cull
             .surface_batch_ranges
             .iter()
             .map(|&(batch, _, _)| {
@@ -276,6 +284,8 @@ impl WorldDrawGpuPlan {
             })
             .collect();
 
+        let vertex_probes =
+            vertex_probes(vertices.len(), &indices, &surface_ranges, &surface_sampler_inputs);
         let upload_pending = !vertices.is_empty() && !indices.is_empty();
         let mut plan = Self {
             packed_vertices,
@@ -287,10 +297,76 @@ impl WorldDrawGpuPlan {
             index_share: Some(Arc::new(indices)),
             range_share: Some(Arc::new(surface_ranges)),
             layer_share: Some(Arc::new(vertex_layer)),
+            probe_share: Some(Arc::new(vertex_probes)),
             decoded_share: Some(Arc::new(vertices)),
         };
         plan.publish_extract_shares();
         plan
+    }
+}
+
+/// Each vertex's reflection probe, taken from the surfaces whose index ranges
+/// reach it, so one draw over runs with different probes can pick its probe
+/// per vertex. Empty when any vertex is reached by two probes.
+fn vertex_probes(
+    vertex_count: usize,
+    indices: &[u32],
+    surface_ranges: &[(u32, u32)],
+    surface_samplers: &[SurfaceSamplerInputs],
+) -> Vec<u32> {
+    const UNSET: u32 = u32::MAX;
+    let mut probes = vec![UNSET; vertex_count];
+    let mut shared = 0u32;
+    for (&(start, count), samplers) in surface_ranges.iter().zip(surface_samplers) {
+        let probe = samplers.reflection_probe.map_or(0, |id| u32::from(id.0));
+        let range = start as usize..(start as usize).saturating_add(count as usize);
+        for &vertex in indices.get(range).unwrap_or_default() {
+            let Some(slot) = probes.get_mut(vertex as usize) else {
+                continue;
+            };
+            if *slot == UNSET {
+                *slot = probe;
+            } else if *slot != probe {
+                shared = shared.saturating_add(1);
+            }
+        }
+    }
+    if shared > 0 {
+        diag::info!(
+            World,
+            "world vertex probes: {shared} vertex reads span two probes; per-vertex probe off"
+        );
+        return Vec::new();
+    }
+    for slot in &mut probes {
+        if *slot == UNSET {
+            *slot = 0;
+        }
+    }
+    probes
+}
+
+#[cfg(test)]
+mod vertex_probe_tests {
+    use super::*;
+
+    fn probe(id: u8) -> SurfaceSamplerInputs {
+        SurfaceSamplerInputs {
+            reflection_probe: Some(SurfaceReflectionProbeId(id)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn vertices_take_their_surface_probe_and_shared_ones_turn_it_off() {
+        let indices = [0, 1, 2, 3, 4, 5];
+        let ranges = [(0, 3), (3, 3)];
+        assert_eq!(
+            vertex_probes(7, &indices, &ranges, &[probe(2), probe(5)]),
+            vec![2, 2, 2, 5, 5, 5, 0]
+        );
+        let shared = [0, 1, 2, 2, 3, 4];
+        assert!(vertex_probes(5, &shared, &ranges, &[probe(2), probe(5)]).is_empty());
     }
 }
 

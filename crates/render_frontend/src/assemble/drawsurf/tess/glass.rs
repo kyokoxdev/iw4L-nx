@@ -787,6 +787,7 @@ pub(crate) fn enqueue_glass_model_lighting(
 pub(crate) fn apply_glass_model_lighting(
     resolved: Res<ResolvedModelLightingTable>,
     mut plan: ResMut<GfxGlassMeshPlan>,
+    mut frames: Local<u32>,
 ) {
     if !plan.built || plan.lighting_runtime.is_some() {
         return;
@@ -833,6 +834,23 @@ pub(crate) fn apply_glass_model_lighting(
         }
     }
     let nonzero = plan.draws.iter().filter(|d| d.lighting_handle != 0).count() as u32;
+    // Switch red-glass probe: panes left unlit are either off the FPV frustum
+    // (`offscreen`) or refused by the lighting cache (`failed`).
+    *frames += 1;
+    if *frames % 300 == 0 && attempted > 0 {
+        let probe0 = plan.draws.iter().filter(|d| d.reflection_probe_index == 0).count();
+        diag::info!(
+            World,
+            "glass lighting: panes={} offscreen={} assigned={} reused={} failed={} lit={} probe0={}",
+            attempted,
+            attempted - assigned - reused - failed,
+            assigned,
+            reused,
+            failed,
+            nonzero,
+            probe0
+        );
+    }
     plan.lighting_runtime = Some(GlassLightingRuntime {
         attempted,
         assigned,

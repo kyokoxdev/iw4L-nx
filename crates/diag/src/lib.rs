@@ -6,7 +6,7 @@ mod sd_log;
 pub mod wgsl_dump;
 
 pub use alloc_count::{
-    ProcessAllocationStats, ProcessCountingAllocator, counting_enabled,
+    ProcessAllocationStats, ProcessCountingAllocator, counting_enabled, flush_thread_cache,
     process_allocation_saturated, process_allocation_slots_used, process_allocations,
     process_live_heap_bytes, release_freed_heap, thread_alloc_count, thread_net_alloc_bytes,
 };

@@ -112,6 +112,20 @@ fn composition_key(composition: &Arc<PreparedFpvComposition>) -> usize {
 mod material;
 use material::{admit_material, admit_surface};
 
+/// Same vertices and indices. Switch: spilled arrays compare by content hash
+/// first, so a camo model that matches stays on the SD card.
+fn same_view_geometry(a: &asset_model::FpvSkel, b: &asset_model::FpvSkel) -> bool {
+    a.vertex_count() == b.vertex_count()
+        && a.indices.same_content(&b.indices)
+        && (a.packed_vertices.same_content(&b.packed_vertices)
+            || (0..b.vertex_count()).all(|i| {
+                a.position(i) == b.position(i)
+                    && a.normal(i) == b.normal(i)
+                    && a.uv(i) == b.uv(i)
+                    && a.color(i) == b.color(i)
+            }))
+}
+
 impl FpvPreparationJob {
     fn new(
         owner: FpvPreparationOwner,
@@ -498,14 +512,7 @@ impl FpvPreparationJob {
                             || camo.skel.bone_names != base.skel.bone_names
                             || camo.skel.surface_vertex_ranges != base.skel.surface_vertex_ranges
                             || camo.skel.surface_index_ranges != base.skel.surface_index_ranges
-                            || camo.skel.vertex_count() != base.skel.vertex_count()
-                            || !(0..base.skel.vertex_count()).all(|i| {
-                                camo.skel.position(i) == base.skel.position(i)
-                                    && camo.skel.normal(i) == base.skel.normal(i)
-                                    && camo.skel.uv(i) == base.skel.uv(i)
-                                    && camo.skel.color(i) == base.skel.color(i)
-                            })
-                            || *camo.skel.indices != *base.skel.indices
+                            || !same_view_geometry(&camo.skel, &base.skel)
                         {
                             return Err("appearance topology mismatch".to_owned());
                         }
