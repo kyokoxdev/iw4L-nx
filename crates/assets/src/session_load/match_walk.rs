@@ -174,6 +174,7 @@ pub(super) async fn walk_prepared_match(
         spawns: dm_spawns,
         mut bodies,
         fpv_meshes: map_fpv,
+        world_weapons: map_world_weapons,
         xanims: map_xanims,
         weapons: map_weapons,
         mut facts,
@@ -368,6 +369,11 @@ pub(super) async fn walk_prepared_match(
     let map_fpv_added = fpv_meshes.absorb(map_fpv);
     fpv_meshes.set_map_namespace(map_namespace);
 
+    // Campaign guns' world models live in the level zone (same name: the level's wins).
+    if asset_transport::campaign_zone_set() {
+        let added = world_weapons.absorb(map_world_weapons);
+        report.push(format!("map world guns: {added} absorbed"));
+    }
     world_weapons.seal_identity();
     weapons.resolve_world_model_edges(&world_weapons);
     let world_model_edges = weapons.world_model_edge_census();

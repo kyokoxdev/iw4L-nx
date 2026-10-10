@@ -78,7 +78,7 @@ fn parse_acceptance_flag(
     Ok((out, acceptance))
 }
 
-const USAGE: &str = "usage: iw4l [--no-cheats] [--cmds '<script>'] map <zone> | serve <zone> | menu | play <demo>\n       iw4l export-gltf <zone>\n       iw4l check-scripts <zone>...\n       iw4l --help";
+const USAGE: &str = "usage: iw4l [--no-cheats] [--cmds '<script>'] map <zone> | serve <zone> | menu | play <demo>\n       iw4l export-gltf <zone>\n       iw4l check-scripts <zone>... [<root module>...]\n       iw4l --help";
 
 pub fn parse_launch_args(mut args: impl Iterator<Item = String>) -> Result<LaunchMode, String> {
     match args.next().as_deref() {
@@ -108,7 +108,7 @@ pub fn parse_launch_args(mut args: impl Iterator<Item = String>) -> Result<Launc
             let zones: Vec<String> = args.filter(|zone| !zone.is_empty()).collect();
             if zones.is_empty() {
                 return Err(
-                    "usage: iw4l check-scripts <zone>... (load order; later zones win)".into(),
+                    "usage: iw4l check-scripts <zone>... [<root module>...] (load order; later zones win)".into(),
                 );
             }
             Ok(LaunchMode::CheckScripts(zones))

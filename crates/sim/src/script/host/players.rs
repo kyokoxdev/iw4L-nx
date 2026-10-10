@@ -1230,6 +1230,7 @@ pub(crate) fn sync_players(world: &mut World) {
                 if let Some(slot) = world.resource_mut::<Runtime>().players.get_mut(&client) {
                     slot.begun = true;
                 }
+                start_deferred(world);
             }
             Some(_) => {}
             None => {
@@ -1261,7 +1262,10 @@ pub(crate) fn sync_players(world: &mut World) {
                         .set_object_field(object, "pers", pers),
                     Err(_) => return,
                 }
-                if run_now(world, CONNECT, Value::Object(object), Vec::new(), now).is_err() {
+                let campaign = !world.resource::<Runtime>().deferred_entries.is_empty();
+                if !campaign
+                    && run_now(world, CONNECT, Value::Object(object), Vec::new(), now).is_err()
+                {
                     return;
                 }
             }
@@ -1269,6 +1273,22 @@ pub(crate) fn sync_players(world: &mut World) {
         deliver_answers(world, client);
     }
     settle_deaths(world);
+}
+
+/// Starts held campaign entries; precache stays open until their first wait.
+fn start_deferred(world: &mut World) {
+    let entries = std::mem::take(&mut world.resource_mut::<Runtime>().deferred_entries);
+    if entries.is_empty() {
+        return;
+    }
+    world.resource_mut::<Runtime>().loading = true;
+    for entry in entries {
+        if let Err(fault) = crate::script::runtime::start(world, &entry, Value::level(), Vec::new())
+        {
+            world.resource_mut::<Runtime>().fault = Some(fault);
+            return;
+        }
+    }
 }
 
 pub(crate) fn team_name(team: i32) -> &'static str {

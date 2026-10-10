@@ -11,9 +11,10 @@ Fork-only. Checked against retail files, except the load path.
   Resolve stems with `find_zone_file_version`, not `find_zone_file` (it aliases
   `boneyard` to `mp_boneyard`). Special Ops levels layer over a base level zone.
 - `Catalog::iw4_sp()`: the generated MP list plus the hand-kept
-  `profile/iw4_sp_catalog.rs` (only the video builtins so far).
-- `iw4l check-scripts <zone>...`: links each GSC module in the zones (load
-  order, later wins) as its own root against `Catalog::iw4_sp()`, prints parse
+  `profile/iw4_sp_catalog.rs` (every name `maps/trainer` reaches).
+- `iw4l check-scripts <zone>... [<root module>...]`: links the named roots
+  (`maps/trainer`), or else each GSC module in the zones (load order, later
+  wins) as its own root, against `Catalog::iw4_sp()`, prints parse
   faults and unresolved names, exits 1 if any. Retail ships unloaded scripts
   that do not parse (`animscripts/traverse/stairs_*`).
 - Compiler: `childthread` (ends with its spawning thread), vector constants.
@@ -32,9 +33,7 @@ Fork-only. Checked against retail files, except the load path.
 | common zone is `common_mp` | `assets::match_load::approve_map_load`, `session_load/common_cache.rs`, `common_walks.rs` |
 | MP zone alias on bare stems | `asset_transport::discover::find_zone_stem` |
 | spawns are `mp_dm_spawn*` | `gamemode_iw4::ffa`, `asset_world::map_entities` |
-| session links against `Catalog::iw4()` | `session::match_apply` (SP needs `iw4_sp()`) |
 | frontend tiles say NOT AVAILABLE | `crates/ui/menus/frontend.json` |
-An unknown builtin refuses the install, so SP GSC waits on a full `IW4_SP`.
 
 ## Slices
 
@@ -50,7 +49,14 @@ An unknown builtin refuses the install, so SP GSC waits on a full `IW4_SP`.
    Left: campaign still runs the MP match flow as `dm` (FFA label, dm spawn
    lookup); level GSC needs a gametype-less campaign mode.
 3. Frontend: Campaign tile lists `list_sp_maps`.
-4. Fill `IW4_SP`; run `maps/_load` with AI natives stubbed; in-world video
-   (`CINEMATIC_*` textures) once a mission needs it.
+4. Level GSC — in progress. Campaign runs `maps/<level>::main` plus
+   `codescripts/{delete,struct}` against `iw4_sp()`, started once the local
+   player begins (SP scripts expect the player before `main`). Builtins not
+   built yet are stubs (`natives/sp_pending.rs`, typed defaults, first call
+   logged as `campaign builtin X not built yet`). Campaign weapon script names
+   are bare (`m4_grunt`); level-zone world gun models join the catalog.
+   SP `playsound` notifies after a fixed 2 s; SP profile fields last one
+   session. Trainer runs; its faults left need actors, anim trees, vehicles.
+   In-world video (`CINEMATIC_*` textures) once a mission needs it.
 5. Script anim trees, AI actors (`PathData`, animscripts, combat), saves.
 6. Switch: SP zones' memory budget.

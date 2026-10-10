@@ -502,12 +502,13 @@ pub fn apply_prepared_match(
         for (name, value) in &script_dvars {
             sim.set_gsc_dvar(name, value);
         }
-        if script_entries.is_empty() {
-            sim.start_gsc_without_entries();
-        }
-        for entry in script_entries {
-            sim.start_gsc(&entry, sim::script::Value::level(), Vec::new())
-                .map_err(|e| script_refusal(&zone, gametype, "entry", &e))?;
+        if asset_transport::campaign_zone_set() {
+            sim.defer_gsc_until_player(script_entries);
+        } else {
+            for entry in script_entries {
+                sim.start_gsc(&entry, sim::script::Value::level(), Vec::new())
+                    .map_err(|e| script_refusal(&zone, gametype, "entry", &e))?;
+            }
         }
         let load_hold = AuthorityLoadHold(true);
         if let Some(glass) = scene.fx_glass.as_ref() {
@@ -1106,18 +1107,24 @@ fn preflight_match_install(
             })
             .collect(),
     };
-    // Campaign levels load without their GSC until the campaign builtins exist:
-    // only the code scripts the engine itself calls.
-    let startup = if asset_transport::campaign_zone_set() {
-        sim::script::Iw4Startup {
-            roots: vec!["codescripts/delete".into(), "codescripts/struct".into()],
-            entries: Vec::new(),
-        }
+    // A campaign level runs its own `maps/<level>::main`; SP has no code callbacks.
+    let (startup, catalog_builtins) = if asset_transport::campaign_zone_set() {
+        let level = format!("maps/{zone}");
+        let startup = sim::script::Iw4Startup {
+            entries: vec![format!("{level}::main")],
+            roots: vec![
+                "codescripts/delete".into(),
+                "codescripts/struct".into(),
+                level,
+            ],
+        };
+        (startup, sim::script::Catalog::iw4_sp())
     } else {
-        sim::script::Iw4Startup::new(&sources, gametype, zone)
+        let startup = sim::script::Iw4Startup::new(&sources, gametype, zone);
+        (startup, sim::script::Catalog::iw4())
     };
     let roots: Vec<&str> = startup.roots.iter().map(String::as_str).collect();
-    let scripts = sim::script::Program::load(&sources, &roots, &sim::script::Catalog::iw4())
+    let scripts = sim::script::Program::load(&sources, &roots, &catalog_builtins)
         .map_err(|e| script_refusal(zone, gametype, "compile", &e))?;
     if CINEMATIC_NATIVES
         .iter()

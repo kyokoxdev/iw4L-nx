@@ -1547,8 +1547,22 @@ fn register_sound_and_fx(registry: &mut NativeRegistry) {
             let alias = string(args, 0)?;
             let origin = origin_of(world, receiver)?;
             play_sound_at(world, origin, &alias)?;
-            if args.len() != 1 {
-                return Err("expected one sound alias argument".into());
+            // SP: (alias, notify, stop_on_death); the notify fires when the sound ends.
+            // ponytail: fixed length; use the alias's sound length once sim carries it.
+            const SOUND_NOTIFY_MS: i64 = 2000;
+            if args.len() > 3 {
+                return Err("expected a sound alias and at most a notify and a flag".into());
+            }
+            if args.len() > 1 {
+                let name = string(args, 1)?;
+                let now = i64::from(crate::level_time_ms(
+                    world.resource::<crate::step::StepRequest>().tick,
+                ));
+                world.resource_mut::<Runtime>().timed_notifies.push((
+                    now + SOUND_NOTIFY_MS,
+                    receiver.clone(),
+                    name.into(),
+                ));
             }
             Ok(Value::Undefined)
         });

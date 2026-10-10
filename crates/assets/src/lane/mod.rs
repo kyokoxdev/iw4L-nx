@@ -44,6 +44,8 @@ pub struct LoadedWorld {
     pub spawns: Vec<asset_world::SpawnPoint>,
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
+    /// World gun models the level zone carries (campaign guns).
+    pub world_weapons: WorldWeaponBuild,
     pub xanims: XAnimBuild,
     /// WeaponDefs the level zone carries; the match absorbs the ones its
     /// common zone lacks.
@@ -260,6 +262,7 @@ impl LoadedWorld {
             spawns: Default::default(),
             bodies: Default::default(),
             fpv_meshes: Default::default(),
+            world_weapons: Default::default(),
             xanims: Default::default(),
             weapons: None,
             facts: Default::default(),

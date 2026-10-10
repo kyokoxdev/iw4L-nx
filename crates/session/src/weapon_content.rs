@@ -29,6 +29,7 @@ pub(crate) fn compile(
     let rules = WeaponHostRules::default();
     let mut refused = Vec::new();
     let groups = weapons.configuration_transition_groups();
+    let campaign = asset_transport::campaign_zone_set();
     let rows = weapons.published_weapons().map(|weapon| {
         let id = weapon.wire_id();
         let execution = weapons
@@ -76,7 +77,12 @@ pub(crate) fn compile(
             penetration: weapons
                 .penetration_facts_of(id)
                 .unwrap_or(weapon_iw4::BulletPenFacts::default()),
-            script_name: weapons.script_name_of(id),
+            // SP scripts name guns bare (`m4_grunt`); MP appends `_mp`.
+            script_name: if campaign {
+                weapons.name_of(id).to_owned()
+            } else {
+                weapons.script_name_of(id)
+            },
             setup,
             world_model: (
                 weapons.world_model_of(id).unwrap_or("").to_owned(),

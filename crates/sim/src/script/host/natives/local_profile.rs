@@ -1,7 +1,25 @@
 use super::super::args::{arg, kind, string};
 use super::player::player;
 use crate::LocalPlayerProfile;
-use crate::script::{Namespace::Method, NativeRegistry, Value};
+use crate::script::{Namespace::Method, NativeRegistry, Runtime, Value};
+
+/// Campaign profile fields, lowercase, with the value a fresh profile reads.
+const SP_FIELDS: &[(&str, i32)] = &[
+    ("haseverplayed_sp", 0),
+    ("takecoverwarnings", -1),
+    ("highestmission", 0),
+    ("autoaim", 0),
+    ("invertedpitch", 0),
+    ("cheatpoints", 0),
+    ("missionhighestdifficulty", 0),
+];
+
+fn sp_default(name: &str) -> Option<Value> {
+    SP_FIELDS
+        .iter()
+        .find(|(field, _)| name.eq_ignore_ascii_case(field))
+        .map(|(_, value)| Value::Int(*value))
+}
 
 pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(
@@ -12,11 +30,17 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
                 return Ok(Value::Undefined);
             }
             let name = string(args, 0)?;
-            world
-                .resource::<LocalPlayerProfile>()
-                .get(&name)
-                .map(|value| Value::Int(i32::from(value)))
-                .ok_or_else(|| format!("unknown local player profile field {name}"))
+            if let Some(value) = world.resource::<LocalPlayerProfile>().get(&name) {
+                return Ok(Value::Int(i32::from(value)));
+            }
+            let fresh = sp_default(&name)
+                .ok_or_else(|| format!("unknown local player profile field {name}"))?;
+            let stored = world
+                .resource::<Runtime>()
+                .sp_profile
+                .get(&name.to_ascii_lowercase())
+                .cloned();
+            Ok(stored.unwrap_or(fresh))
         },
     );
     registry.register(
@@ -31,7 +55,15 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             }
             let name = string(args, 0)?;
             if world.resource::<LocalPlayerProfile>().get(&name).is_none() {
-                return Err(format!("unknown local player profile field {name}"));
+                if sp_default(&name).is_none() {
+                    return Err(format!("unknown local player profile field {name}"));
+                }
+                let value = arg(args, 1)?.clone();
+                world
+                    .resource_mut::<Runtime>()
+                    .sp_profile
+                    .insert(name.to_ascii_lowercase(), value);
+                return Ok(Value::Undefined);
             }
             let value = match arg(args, 1)? {
                 Value::Int(value) => *value as u8,

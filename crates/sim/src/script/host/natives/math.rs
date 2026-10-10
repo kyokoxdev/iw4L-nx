@@ -142,6 +142,16 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Function, "vectordot", |_, _, args| {
         Ok(Value::Float(dot(vector(args, 0)?, vector(args, 1)?)))
     });
+    registry.register(Function, "squared", |_, _, args| {
+        let x = float(args, 0)?;
+        Ok(Value::Float(x * x))
+    });
+    registry.register(Function, "vectorlerp", |_, _, args| {
+        let (a, b, t) = (vector(args, 0)?, vector(args, 1)?, float(args, 2)?);
+        Ok(Value::Vector(std::array::from_fn(|i| {
+            a[i] + (b[i] - a[i]) * t
+        })))
+    });
     registry.register(Function, "vectornormalize", |_, _, args| {
         Ok(Value::Vector(normalize(vector(args, 0)?)))
     });

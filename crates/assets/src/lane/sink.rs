@@ -234,6 +234,7 @@ pub(crate) struct ZoneWalkSink {
     script_strings: ScriptStrings,
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
+    pub world_weapons: WorldWeaponBuild,
     pub xanims: XAnimBuild,
     /// The level's own WeaponDefs (campaign levels carry theirs; MP maps none).
     pub weapons: WeaponCatalog,
@@ -349,12 +350,14 @@ impl ZoneWalkSink {
         self.xanims.set_capture_zone(zone);
         self.map_xmodels.set_capture_zone(zone);
         self.fpv_meshes.set_capture_zone(zone);
+        self.world_weapons.set_capture_zone(zone);
     }
 
     pub(crate) fn set_capture_ns(&mut self, ns: asset_core::AssetNamespace) {
         self.materials.set_capture_ns(ns);
         self.xanims.set_capture_ns(ns);
         self.fpv_meshes.set_capture_ns(ns);
+        self.world_weapons.set_capture_ns(ns);
         self.tracers.set_capture_ns(ns);
         self.fx.set_capture_ns(ns);
         self.fx_models.set_capture_ns(ns);
@@ -1222,6 +1225,7 @@ impl AssetSink for ZoneWalkSink {
         self.script_strings = strings;
         self.bodies.set_strings(strings);
         self.fpv_meshes.set_strings(strings);
+        self.world_weapons.set_strings(strings);
         self.xanims.set_strings(strings);
         self.weapons.set_strings(strings);
     }
@@ -1292,6 +1296,7 @@ impl AssetLinkSink for ZoneWalkSink {
                 &self.phys_presets,
             );
             self.fpv_meshes.capture(stream, &self.materials);
+            self.world_weapons.capture(stream, &self.materials);
             self.bodies.capture(stream, &self.materials);
             self.models.capture(stream);
             self.fx_models.capture(stream, &self.materials);

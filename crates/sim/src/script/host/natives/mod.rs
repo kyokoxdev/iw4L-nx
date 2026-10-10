@@ -6,4 +6,5 @@ pub mod math;
 pub mod player;
 mod scene_effects;
 pub(crate) mod skill;
+pub(crate) mod sp_pending;
 pub mod t5;

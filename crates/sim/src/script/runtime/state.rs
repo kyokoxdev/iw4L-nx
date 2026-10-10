@@ -19,6 +19,12 @@ pub(crate) struct Runtime {
     pub(crate) dying: Vec<u64>,
     pub(crate) last_tick: Option<crate::Tick>,
     pub(crate) started: bool,
+    /// Campaign level entries held until the local player begins: SP level
+    /// scripts expect the player entity before `main` runs.
+    pub(crate) deferred_entries: Vec<String>,
+    /// SP profile fields scripts read and write. ponytail: session-scoped,
+    /// persist with campaign saves (Phase 7).
+    pub(crate) sp_profile: BTreeMap<String, Value>,
     pub(crate) objects: BTreeMap<u64, BTreeMap<u32, Value>>,
     pub(crate) next_object: u64,
     pub(crate) arrays: BTreeMap<u64, BTreeMap<ArrayKey, Value>>,
@@ -54,6 +60,8 @@ pub(crate) struct Runtime {
     pub(crate) videos: Arc<BTreeMap<String, i32>>,
     pub(crate) rng: u32,
     pub(crate) pending_notifies: Vec<(Value, Arc<str>, Vec<Value>)>,
+    /// Notifies due at a level time (ms), e.g. SP `playsound` done notifies.
+    pub(crate) timed_notifies: Vec<(i64, Value, Arc<str>)>,
     pub(crate) signals: Vec<Arc<str>>,
     pub(crate) engine: host::entities::EngineState,
     pub(crate) players: BTreeMap<u32, host::players::PlayerSlot>,

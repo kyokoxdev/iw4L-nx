@@ -357,6 +357,9 @@ fn run_check_scripts(games: asset_transport::GamesRoot, zones: Vec<String>) {
     }
     let version = asset_transport::zone_version(asset_core::ZoneGame::Iw4);
     let mut scripts = assets::ScriptSources::default();
+    // An argument with a `/` is a root module (`maps/trainer`); the rest are zones.
+    let (roots, zones): (Vec<String>, Vec<String>) =
+        zones.into_iter().partition(|arg| arg.contains('/'));
     for zone in &zones {
         let found = asset_transport::find_zone_file_version(&games, zone, version)
             .unwrap_or_else(|error| fatal(&format!("check-scripts: {error}")));
@@ -365,8 +368,12 @@ fn run_check_scripts(games: asset_transport::GamesRoot, zones: Vec<String>) {
         println!("{zone}: {} scripts", walked.len());
         scripts.overlay(walked);
     }
-    // Each module is its own root: shipped scripts nothing loads may not parse.
-    let roots: Vec<&str> = scripts.modules().collect();
+    // Without named roots each module is its own: shipped scripts nothing loads may not parse.
+    let roots: Vec<&str> = if roots.is_empty() {
+        scripts.modules().collect()
+    } else {
+        roots.iter().map(String::as_str).collect()
+    };
     let catalog = sim::script::Catalog::iw4_sp();
     let mut failures =
         std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();

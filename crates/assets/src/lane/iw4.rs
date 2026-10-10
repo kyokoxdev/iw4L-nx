@@ -237,6 +237,7 @@ impl ZoneLane for Iw4Lane {
         let phys_presets = std::mem::take(&mut sink.phys_presets);
         let bodies = std::mem::take(&mut sink.bodies);
         let fpv_meshes = std::mem::take(&mut sink.fpv_meshes);
+        let world_weapons = std::mem::take(&mut sink.world_weapons);
         let map_xanims = std::mem::take(&mut sink.xanims);
         let mut map_weapons = std::mem::take(&mut sink.weapons);
         map_weapons.resolve_reticles(&materials);
@@ -430,6 +431,7 @@ impl ZoneLane for Iw4Lane {
                 spawns: dm_spawns,
                 bodies,
                 fpv_meshes,
+                world_weapons,
                 xanims: map_xanims,
                 weapons: Some(map_weapons),
                 facts: crate::MapFacts {
@@ -674,6 +676,7 @@ impl ZoneLane for Iw4Lane {
                     spawns: dm_spawns,
                     bodies,
                     fpv_meshes,
+                    world_weapons,
                     xanims: map_xanims,
                     weapons: Some(map_weapons),
                     facts: crate::MapFacts {
@@ -717,6 +720,7 @@ impl ZoneLane for Iw4Lane {
                     spawns: dm_spawns,
                     bodies,
                     fpv_meshes,
+                    world_weapons,
                     xanims: map_xanims,
                     weapons: Some(map_weapons),
                     facts: crate::MapFacts {

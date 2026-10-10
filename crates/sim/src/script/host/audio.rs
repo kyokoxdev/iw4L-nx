@@ -6,7 +6,8 @@ fn change(world: &mut World, args: &[Value], stop: bool, ac130: bool) -> Result<
     if if stop {
         args.len() > 1
     } else {
-        !(1..=2).contains(&args.len())
+        // SP adds a third timescale argument.
+        !(1..=3).contains(&args.len())
     } {
         return Err("wrong number of ambient arguments".into());
     }

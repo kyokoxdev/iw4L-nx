@@ -472,8 +472,12 @@ impl Runtime {
                 values.insert(ArrayKey::Integer(index), Value::Object(id));
                 id
             } else {
-                self.create_entity(EntityKind::Map, classname)
-                    .map_err(|error| map_entity_census(entities, &error))?
+                let id = self
+                    .create_entity(EntityKind::Map, classname)
+                    .map_err(|error| map_entity_census(entities, &error))?;
+                // An engine field: reads 0 when the map leaves it out.
+                self.set_object_field(id, "spawnflags", Value::Int(0));
+                id
             };
             let mut radius = None;
             let mut height = None;

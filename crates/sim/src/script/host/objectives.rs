@@ -66,6 +66,14 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             state,
             ..Default::default()
         };
+        // SP form: (index, state, text, position). ponytail: text dropped until
+        // the campaign objectives screen exists.
+        if matches!(args.get(2), Some(Value::LocalizedString(_))) {
+            if let Some(target) = args.get(3) {
+                place(world, index, target)?;
+            }
+            return Ok(Value::Undefined);
+        }
         if let Some(target) = args.get(2) {
             place(world, index, target)?;
         }

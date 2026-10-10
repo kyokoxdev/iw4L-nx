@@ -20,12 +20,14 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             parts.next().unwrap_or(0.0)
         })))
     });
-    registry.register(Function, "setdvar", |world, _, args| {
-        let name = dvar_name(args)?;
-        let value = dvar_value(args)?;
-        set_dvar(world, &name, &value);
-        Ok(Value::Undefined)
-    });
+    for name in ["setdvar", "setsaveddvar"] {
+        registry.register(Function, name, |world, _, args| {
+            let name = dvar_name(args)?;
+            let value = dvar_value(args)?;
+            set_dvar(world, &name, &value);
+            Ok(Value::Undefined)
+        });
+    }
     registry.register(Function, "setdvarifuninitialized", |world, _, args| {
         if args.len() != 2 {
             return Err("wrong number of parameters".into());

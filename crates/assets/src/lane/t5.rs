@@ -283,6 +283,7 @@ impl ZoneLane for T5Lane {
                 spawns: dm_spawns,
                 bodies,
                 fpv_meshes,
+                world_weapons: Default::default(),
                 facts: crate::MapFacts {
                     t5_teamset: t5_teamset.clone(),
                     script_sound: script_sound.clone(),
@@ -470,6 +471,7 @@ impl ZoneLane for T5Lane {
                     spawns: dm_spawns,
                     bodies,
                     fpv_meshes,
+                    world_weapons: Default::default(),
                     facts: crate::MapFacts {
                         minimap_corners,
                         north_yaw,
@@ -498,6 +500,7 @@ impl ZoneLane for T5Lane {
                     spawns: dm_spawns,
                     bodies,
                     fpv_meshes,
+                    world_weapons: Default::default(),
                     facts: crate::MapFacts {
                         t5_teamset: t5_teamset.clone(),
                         script_sound: script_sound.clone(),

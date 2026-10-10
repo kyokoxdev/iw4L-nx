@@ -158,10 +158,11 @@ impl SimWorld {
         crate::script::install(&mut self.ecs, program, natives, level)
     }
 
-    /// Marks the installed program started though no entry thread runs: a
-    /// level whose own scripts are skipped still steps.
-    pub fn start_gsc_without_entries(&mut self) {
-        self.ecs.resource_mut::<crate::script::Runtime>().started = true;
+    /// Holds level entries until the first player begins (campaign).
+    pub fn defer_gsc_until_player(&mut self, entries: Vec<String>) {
+        let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
+        runtime.started = true;
+        runtime.deferred_entries = entries;
     }
 
     pub fn start_gsc(
