@@ -1,12 +1,16 @@
 use crate::random::{FxRandomChannel, sample_at};
 
+/// Switch: a shot pane spawned up to 64 shards living 5 s, and frame time
+/// collapsed while they fell. Fewer, larger shards, gone within 2 s of falling.
+const SWITCH: bool = cfg!(target_os = "horizon");
+
 pub const FX_GLASS_SHATTER_BRANCH_SCALE: f32 = -3.0;
 
 pub const FX_GLASS_SHATTER_TWO_PI: f32 = 6.283_185_482_025_146_5;
 
 pub const FX_GLASS_FRINGE_MAXCOVERAGE: f32 = 0.2;
 
-pub const FX_GLASS_SHARD_MAXSIZE: f32 = 300.0;
+pub const FX_GLASS_SHARD_MAXSIZE: f32 = if SWITCH { 1200.0 } else { 300.0 };
 
 pub const FX_GLASS_FRINGE_MAXSIZE: f32 = 150.0;
 
@@ -14,15 +18,15 @@ pub const FX_GLASS_MAX_PIECES_PER_FRAME: f32 = 100.0;
 
 pub const FX_GLASS_SPLIT_OP_CAP: u32 = 48;
 
-pub const FX_GLASS_SHARD_LIFETIME_MSEC: i32 = 5000;
+pub const FX_GLASS_SHARD_LIFETIME_MSEC: i32 = if SWITCH { 1500 } else { 5000 };
 
-pub const FX_GLASS_SETTLED_LIFETIME_MSEC: i32 = 1500;
+pub const FX_GLASS_SETTLED_LIFETIME_MSEC: i32 = if SWITCH { 1200 } else { 1500 };
 
 pub const FX_GLASS_SETTLED_FADE_MSEC: i32 = 250;
 
-pub const FX_GLASS_SETTLED_CAP: u32 = 64;
+pub const FX_GLASS_SETTLED_CAP: u32 = if SWITCH { 16 } else { 64 };
 
-pub const FX_GLASS_AIRBORNE_PER_BREAK: u32 = 64;
+pub const FX_GLASS_AIRBORNE_PER_BREAK: u32 = if SWITCH { 12 } else { 64 };
 
 pub const FX_GLASS_RESTITUTION: f32 = 0.15;
 
@@ -36,11 +40,11 @@ pub const FX_GLASS_PENDING_MIN_MSEC: i32 = 150;
 
 pub const FX_GLASS_PENDING_MAX_MSEC: i32 = 1000;
 
-pub const FX_GLASS_ACCENT_BOUNCE_CAP: u32 = 16;
+pub const FX_GLASS_ACCENT_BOUNCE_CAP: u32 = if SWITCH { 4 } else { 16 };
 
-pub const FX_GLASS_AIRBORNE_CAP: u32 = 256;
+pub const FX_GLASS_AIRBORNE_CAP: u32 = if SWITCH { 32 } else { 256 };
 
-pub const FX_GLASS_SHATTER_FX_PER_FRAME: u32 = 6;
+pub const FX_GLASS_SHATTER_FX_PER_FRAME: u32 = if SWITCH { 2 } else { 6 };
 
 pub const FX_GLASS_LANDING_CELL: f32 = 64.0;
 
