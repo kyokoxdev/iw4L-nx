@@ -350,6 +350,7 @@ fn occupy_after_teardown(
             menu.write(ReturnedToMenu {
                 swap_id: pending.id,
                 had_world: pending.tore_down_world,
+                reason: Some(teardown_reason_for(&pending.target)),
             });
             Some(SessionSwapCompletion {
                 id: pending.id,
@@ -433,6 +434,7 @@ fn run_session_swap(
         menu.write(ReturnedToMenu {
             swap_id: fact.request_id,
             had_world,
+            reason: None,
         });
         asset_transport::set_campaign_zone_set(false);
         diag::warn!(
@@ -455,7 +457,9 @@ fn run_session_swap(
             pending.abort_install = false;
         }
         let expected_teardown = teardown_reason_for(&pending.target);
-        let menu_accepts_replaced = matches!(pending.target, SessionSwapTarget::Menu { .. });
+        // A leave can arrive after a match-end teardown was requested: a return to the menu
+        // finishes on whichever teardown comes, but it must still wait for one.
+        let menu_accepts_any = matches!(pending.target, SessionSwapTarget::Menu { .. });
         match pending.phase {
             SessionSwapPhase::Requested if has_world.is_some_and(|world| world.0) => {
                 teardown.0 = Some(expected_teardown);
@@ -464,10 +468,9 @@ fn run_session_swap(
             }
             SessionSwapPhase::Requested | SessionSwapPhase::WaitingForTeardown
                 if matches!(pending.phase, SessionSwapPhase::Requested)
-                    || torn.read().any(|fact| {
-                        fact.reason == expected_teardown
-                            || (menu_accepts_replaced && fact.reason == TeardownReason::Replaced)
-                    }) =>
+                    || torn
+                        .read()
+                        .any(|fact| fact.reason == expected_teardown || menu_accepts_any) =>
             {
                 finish = occupy_after_teardown(
                     pending,
