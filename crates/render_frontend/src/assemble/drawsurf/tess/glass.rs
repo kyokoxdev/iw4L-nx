@@ -17,13 +17,13 @@ use entity_iw4::{
 };
 
 use super::fx::FxPassMaterial;
-use crate::adapters::anim::dyn_ent::{fpv_frustum_planes, sphere_behind_frustum};
+use crate::adapters::anim::dyn_ent::sphere_behind_frustum;
 use crate::assemble::drawsurf::material_runtime::RuntimeMaterialCatalog;
-use crate::prepare::scene::camera::FpvLens;
 use crate::prepare::scene::model_lighting_cache::{
     ModelLightingOwner, ModelLightingRequest, ModelLightingRequests, ResolvedModelLighting,
     ResolvedModelLightingTable, WorldModelLightingCache,
 };
+use crate::prepare::scene::view_parms::{PreparedSceneView, RLockPvs};
 use crate::prepare::scene::world::WorldScene;
 use render_frame::PackedVertexRefusal;
 
@@ -744,7 +744,8 @@ pub(crate) fn apply_cg_glass_tess(
 pub(crate) fn enqueue_glass_model_lighting(
     cache: Option<Res<WorldModelLightingCache>>,
     scene: Option<Res<WorldScene>>,
-    cameras: Query<(&GlobalTransform, &Projection, &Camera), With<FpvLens>>,
+    prepared: Res<PreparedSceneView>,
+    lock_pvs: Res<RLockPvs>,
     mut requests: ResMut<ModelLightingRequests>,
     mut plan: ResMut<GfxGlassMeshPlan>,
 ) {
@@ -758,7 +759,14 @@ pub(crate) fn enqueue_glass_model_lighting(
         return;
     };
     let box_half = lighting_iw4::lighting_query_box_half(1.0);
-    let planes = fpv_frustum_planes(&cameras);
+    // This frame's view, as the world cull sees it. The lens `GlobalTransform` is
+    // last frame's until PostUpdate, so a fast turn drew panes entering the screen
+    // unlit for a frame (red glass flashes while spinning on Switch).
+    let planes: &[[f32; 4]] = if prepared.ready {
+        lock_pvs.dpvs_frustum(&prepared)
+    } else {
+        &[]
+    };
     for draw in plan.draws.iter_mut() {
         let owner = ModelLightingOwner::Glass(draw.piece);
         draw.lighting_prev = u32::from(cache.handle_for(owner));
@@ -767,7 +775,7 @@ pub(crate) fn enqueue_glass_model_lighting(
         // is off screen, and a pane drawn without lighting takes probe 0 and the default
         // lighting (the red-tinted windows on Terminal).
         let radius = draw.radius.max(GLASS_FRUSTUM_LIGHT_RADIUS);
-        if sphere_behind_frustum(draw.origin, radius, &planes) {
+        if sphere_behind_frustum(draw.origin, radius, planes) {
             draw.lighting_handle = 0;
             draw.reflection_probe_index = 0;
             continue;

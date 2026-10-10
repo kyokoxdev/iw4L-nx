@@ -166,10 +166,14 @@ fn spawn_heap_sampler() {
                     last = used;
                     // The rest of `used` is C: Mesa, GL buffers and textures.
                     let rust = diag::process_live_heap_bytes().unwrap_or(0) >> 20;
+                    // talc held-but-free = claimed - allocated; the rest of C is Mesa.
+                    let (claimed, allocated) = diag::talc_heap_bytes();
                     let line = format!(
-                        "t={}ms {} rust={rust}MB",
+                        "t={}ms {} rust={rust}MB talc={}/{}MB",
                         start.elapsed().as_millis(),
-                        platform_nx::heap_line()
+                        platform_nx::heap_line(),
+                        allocated >> 20,
+                        claimed >> 20
                     );
                     platform_nx::breadcrumb(&line);
                     diag::info!(Launch, "{line}");

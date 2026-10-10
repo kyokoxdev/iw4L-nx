@@ -10,6 +10,8 @@ pub use alloc_count::{
     process_allocation_saturated, process_allocation_slots_used, process_allocations,
     process_live_heap_bytes, release_freed_heap, thread_alloc_count, thread_net_alloc_bytes,
 };
+#[cfg(target_os = "horizon")]
+pub use alloc_count::talc_heap_bytes;
 
 use std::{
     fs::{File, OpenOptions},

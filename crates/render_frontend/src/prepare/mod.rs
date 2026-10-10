@@ -137,6 +137,7 @@ impl Plugin for RenderPreparePlugin {
                         .before(WorkerCmdSet::CellDynModel),
                     crate::assemble::drawsurf::tess::glass::enqueue_glass_model_lighting
                         .after(crate::prepare::scene::model_lighting_cache::begin_dyn_model_lighting_frame)
+                        .after(stamp_prepared_scene_view)
                         .after(crate::assemble::drawsurf::tess::glass::apply_cg_glass_tess)
                         .after(WorkerCmdSet::SkinModel)
                         .after(crate::adapters::anim::script_model::ScriptModelSkinSet)

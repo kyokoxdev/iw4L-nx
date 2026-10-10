@@ -121,16 +121,27 @@ static BACKING: std::alloc::System = std::alloc::System;
 /// newlib's malloc (dlmalloc 2.6) keeps large bins sorted, so on a fragmented
 /// match heap each free walked a bin: retiring a match's assets took 13–27 s
 /// of frees, and every thread queued behind those walks on newlib's one lock.
-/// Talc frees in O(1); it takes 16 MiB blocks from newlib and hands a block
-/// back once everything in it is freed.
+/// Talc frees in O(1); it takes 2 MiB blocks from newlib and hands a block
+/// back once everything in it is freed. 16 MiB blocks stayed pinned by a few
+/// survivors after a match teardown (~1 GB held per match), and the next
+/// load's large newlib allocs found no room.
 #[cfg(target_os = "horizon")]
 static BACKING: talc::TalcLock<
     nx_mutex::NxMutex,
     talc::source::GlobalAllocSource<std::alloc::System>,
 > = talc::TalcLock::new(talc::source::GlobalAllocSource::with_block_size(
     std::alloc::System,
-    16 << 20,
+    2 << 20,
 ));
+
+/// Switch: (claimed from newlib, allocated) bytes inside talc; the gap is
+/// freed space talc still holds.
+#[cfg(target_os = "horizon")]
+pub fn talc_heap_bytes() -> (usize, usize) {
+    let talc = BACKING.lock();
+    let counters = talc.counters();
+    (counters.claimed_bytes, counters.allocated_bytes)
+}
 
 /// libnx's kernel-arbitrated mutex: no allocation, and a waiter sleeps
 /// instead of spinning against a holder on its own core.
@@ -175,7 +186,7 @@ pub struct ProcessCountingAllocator;
 const TCACHE: bool = cfg!(target_os = "horizon");
 
 /// Switch: blocks this large skip talc for newlib's malloc. Talc returns a
-/// 16 MiB block only once all of it is free, so a match's freed textures and
+/// block only once all of it is free, so a match's freed textures and
 /// arrays stayed inside talc while Mesa, which allocates from newlib, ran out.
 const DIRECT_MIN: usize = if cfg!(target_os = "horizon") {
     1 << 20
