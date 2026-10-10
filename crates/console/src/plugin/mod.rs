@@ -160,6 +160,7 @@ impl Plugin for ConsolePlugin {
                             crate::frontend::route,
                             crate::class_menu::route,
                             crate::barracks_menu::route,
+                            crate::campaign_menu::route,
                         )
                             .chain(),
                         crate::feature_dispatch::route_capture_commands,
@@ -783,6 +784,7 @@ fn setup_console(
     crate::frontend::register(&mut registry);
     crate::class_menu::register(&mut registry);
     crate::barracks_menu::register(&mut registry);
+    crate::campaign_menu::register(&mut registry);
     let font = fonts.add(Font::from_bytes(EMBEDDED_FONT.to_vec()));
     commands.insert_resource(ConsoleFont(font.clone()));
 

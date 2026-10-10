@@ -33,7 +33,7 @@ Fork-only. Checked against retail files, except the load path.
 | common zone is `common_mp` | `assets::match_load::approve_map_load`, `session_load/common_cache.rs`, `common_walks.rs` |
 | MP zone alias on bare stems | `asset_transport::discover::find_zone_stem` |
 | spawns are `mp_dm_spawn*` | `gamemode_iw4::ffa`, `asset_world::map_entities` |
-| frontend tiles say NOT AVAILABLE | `crates/ui/menus/frontend.json` |
+| Special Ops tile says NOT AVAILABLE | `crates/ui/menus/frontend.json` |
 
 ## Slices
 
@@ -48,7 +48,9 @@ Fork-only. Checked against retail files, except the load path.
    common zone lacks the name. Every campaign level loads (load-only sweep).
    Left: campaign still runs the MP match flow as `dm` (FFA label, dm spawn
    lookup); level GSC needs a gametype-less campaign mode.
-3. Frontend: Campaign tile lists `list_sp_maps`.
+3. Frontend — done. The Campaign tile opens `iw4l_campaign`: `list_sp_maps`
+   without `so_*`, in story order (`console::campaign_menu`), 20 rows; a row
+   requests the level like `map <level>`. Names are stems (`AF CAVES`).
 4. Level GSC — in progress. Campaign runs `maps/<level>::main` plus
    `codescripts/{delete,struct}` against `iw4_sp()`, started once the local
    player begins (SP scripts expect the player before `main`). Builtins not

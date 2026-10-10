@@ -1,4 +1,5 @@
 mod barracks_menu;
+mod campaign_menu;
 pub mod binds;
 mod cinematic;
 mod class_dispatch;
