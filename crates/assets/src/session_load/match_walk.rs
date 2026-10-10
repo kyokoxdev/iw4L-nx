@@ -175,6 +175,7 @@ pub(super) async fn walk_prepared_match(
         mut bodies,
         fpv_meshes: map_fpv,
         xanims: map_xanims,
+        weapons: map_weapons,
         mut facts,
         arena_bytes: s1_map_bytes,
         sound,
@@ -297,6 +298,18 @@ pub(super) async fn walk_prepared_match(
         asset_transport::process_resident_bytes().unwrap_or(0),
     ));
 
+    // Campaign levels carry their own guns; a name the common zone holds stays the common's.
+    if let Some(mut map_weapons) = map_weapons {
+        let captured = map_weapons.len();
+        map_weapons.retain(|namespace, name| !weapons.holds(namespace, name));
+        report.push(format!(
+            "map weapons: {} absorbed of {captured} captured",
+            map_weapons.len()
+        ));
+        if !map_weapons.is_empty() {
+            weapons.absorb(map_weapons.into_build());
+        }
+    }
     let common_xanim_count = xanims.len();
     let map_xanim_count = map_xanims.len();
     let t5_xanim_added = xanims.absorb(t5_xanims);

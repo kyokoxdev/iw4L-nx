@@ -353,10 +353,15 @@ thread_local! {
 /// [`find_zone_file`] outside the active zone set: shell content (menus) is
 /// multiplayer's whatever level is loading.
 pub fn find_mp_zone_file(root: &GamesRoot, zone: &str) -> Result<ZoneFile, String> {
-    MP_ONLY.with(|only| only.set(true));
-    let found = find_zone_file(root, zone);
-    MP_ONLY.with(|only| only.set(false));
-    found
+    with_mp_zones(|| find_zone_file(root, zone))
+}
+
+/// Runs `f` with every lookup on this thread outside the active zone set.
+pub fn with_mp_zones<R>(f: impl FnOnce() -> R) -> R {
+    let outer = MP_ONLY.with(|only| only.replace(true));
+    let result = f();
+    MP_ONLY.with(|only| only.set(outer));
+    result
 }
 
 pub fn find_zone_file_under(search_root: &Path, zone: &str) -> Result<ZoneFile, String> {

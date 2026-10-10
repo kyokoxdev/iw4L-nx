@@ -158,6 +158,12 @@ impl SimWorld {
         crate::script::install(&mut self.ecs, program, natives, level)
     }
 
+    /// Marks the installed program started though no entry thread runs: a
+    /// level whose own scripts are skipped still steps.
+    pub fn start_gsc_without_entries(&mut self) {
+        self.ecs.resource_mut::<crate::script::Runtime>().started = true;
+    }
+
     pub fn start_gsc(
         &mut self,
         name: &str,
@@ -455,5 +461,12 @@ pub fn try_step(
     msec: i32,
     reason: StepReason,
 ) -> Result<crate::TickResult, crate::script::Fault> {
-    world.run(tick, input, msec, reason)
+    // A refusal before the frame (no program, stale tick) is as terminal as a
+    // script fault; keeping it on the runtime lets `take_script_fault` report it.
+    world.run(tick, input, msec, reason).inspect_err(|fault| {
+        let mut runtime = world.ecs.resource_mut::<crate::script::Runtime>();
+        if runtime.fault.is_none() {
+            runtime.fault = Some(fault.clone());
+        }
+    })
 }

@@ -57,7 +57,16 @@ pub fn update_admission(
         audio.as_ref().map(|report| report.0),
     );
     if let Some(hold) = hold.as_mut() {
-        hold.0 = !decision.advancement || briefing.is_some();
+        let held = !decision.advancement || briefing.is_some();
+        if hold.0 != held {
+            diag::info!(
+                Sim,
+                "authority hold={held} advancement={} briefing={}",
+                decision.advancement,
+                briefing.is_some()
+            );
+        }
+        hold.0 = held;
     }
     if let Some(live) = live.as_ref() {
         admission

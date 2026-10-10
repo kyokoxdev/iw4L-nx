@@ -52,6 +52,10 @@ pub struct MatchBootstrap {
     pub intermission_view: Option<AuthoredSpawnPoint>,
 
     pub airstrike_height: Option<f32>,
+
+    /// Campaign level: no gametype script, so the engine spawns a joining
+    /// player at the level start itself.
+    pub campaign: bool,
 }
 
 impl Default for MatchBootstrap {
@@ -68,6 +72,7 @@ impl Default for MatchBootstrap {
             time_limit_ms,
             intermission_view: None,
             airstrike_height: None,
+            campaign: false,
         }
     }
 }

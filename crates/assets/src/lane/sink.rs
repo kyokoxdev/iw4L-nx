@@ -235,6 +235,8 @@ pub(crate) struct ZoneWalkSink {
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
     pub xanims: XAnimBuild,
+    /// The level's own WeaponDefs (campaign levels carry theirs; MP maps none).
+    pub weapons: WeaponCatalog,
 
     pub xmodel_coll: asset_world::XModelCollCatalog,
 
@@ -356,6 +358,7 @@ impl ZoneWalkSink {
         self.tracers.set_capture_ns(ns);
         self.fx.set_capture_ns(ns);
         self.fx_models.set_capture_ns(ns);
+        self.weapons.set_capture_ns(ns);
     }
 }
 
@@ -1220,6 +1223,7 @@ impl AssetSink for ZoneWalkSink {
         self.bodies.set_strings(strings);
         self.fpv_meshes.set_strings(strings);
         self.xanims.set_strings(strings);
+        self.weapons.set_strings(strings);
     }
 
     fn begin_assets(&mut self, count: usize) {
@@ -1269,6 +1273,9 @@ impl AssetLinkSink for ZoneWalkSink {
             }
         }
         self.materials.loaded(stream, ty, slot, insert_slot)?;
+        if ty == AssetType::Weapon {
+            self.weapons.capture(stream);
+        }
         if ty == AssetType::Fx {
             self.fx.note_loaded(slot, insert_slot);
         }
@@ -2074,6 +2081,19 @@ impl ModelCensus {
                 kit_name(kits.kit(false)),
                 kit_name(kits.kit(true))
             ));
+            if kits.kit(false).is_none_or(|kit| kit.arms.is_none()) {
+                let arms: Vec<&str> = self
+                    .walked_names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| asset_model::is_arms_model(name))
+                    .collect();
+                report.push(format!(
+                    "map soldier kit gap: no arms matched; arms models: [{}] soldier models: [{}]",
+                    arms.join(" "),
+                    self.soldier_names.join(" ")
+                ));
+            }
         }
         report
     }

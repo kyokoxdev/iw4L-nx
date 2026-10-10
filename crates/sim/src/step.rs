@@ -938,8 +938,18 @@ fn apply_action(
     match *action {
         ClientAction::JoinMatch { request_id: _ } => {
             let meta = world.client_meta_mut(id);
-            if meta.lifecycle == ClientLifecycle::Connecting {
-                meta.lifecycle = ClientLifecycle::ChoosingClass;
+            if meta.lifecycle != ClientLifecycle::Connecting {
+                return ActionOutcome::Applied;
+            }
+            meta.lifecycle = ClientLifecycle::ChoosingClass;
+            let start = world
+                .bootstrap_ref()
+                .campaign
+                .then(|| crate::spawn::pick_ffa_spawn(&world.bootstrap_ref().spawns))
+                .flatten()
+                .map(|(_, point)| (point.origin, point.angles));
+            if let Some((origin, angles)) = start {
+                crate::script_player::spawn(world, tick, id, origin, angles, "playing");
             }
 
             ActionOutcome::Applied
