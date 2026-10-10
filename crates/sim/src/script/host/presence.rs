@@ -31,6 +31,8 @@ struct Wanted {
     solid: bool,
     part_ops: Vec<(Arc<str>, bool)>,
     anim_op: Option<Option<Arc<str>>>,
+    /// The script tree's active nodes; `Some(None)` drops back to the bind pose.
+    tree: Option<Option<xmodel_runtime::XAnimTreeSnapshot>>,
 }
 
 fn near(a: [f32; 3], b: [f32; 3]) -> bool {
@@ -391,10 +393,12 @@ fn collect_wanted(world: &mut World) -> Vec<Wanted> {
         let entity = runtime.entities.get_mut(&object).unwrap();
         let part_ops = std::mem::take(&mut entity.part_ops);
         let anim_op = entity.anim_op.take();
+        let tree = entity.anim.as_ref().map(|anim| anim.snapshot());
         let attachments = entity.attachments.clone();
         let collision_only = matches!(entity.kind, EntityKind::Missile(_));
         let unchanged = part_ops.is_empty()
             && anim_op.is_none()
+            && tree.is_none()
             && runtime.shown.get(&object).is_some_and(|shown| {
                 !shown.moving
                     && shown.hidden == hidden
@@ -421,6 +425,7 @@ fn collect_wanted(world: &mut World) -> Vec<Wanted> {
             solid,
             part_ops,
             anim_op,
+            tree,
         });
     }
     wanted
@@ -478,6 +483,9 @@ fn present_model(frame: &mut FrameWorld, want: &Wanted) {
         }
         Some(None) => dobj.clear_script_model_play_anim(),
         None => {}
+    }
+    if let Some(tree) = &want.tree {
+        dobj.set_script_tree(tree.clone());
     }
 }
 

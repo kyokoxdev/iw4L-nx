@@ -155,7 +155,11 @@ impl ScriptSources {
 
     pub(crate) fn capture(&mut self, name: &str, data: &[u8], compressed: bool) {
         let name = normalize(name);
-        if name.ends_with(".cfg") || name.ends_with(".shock") || name == "radiant/keys.txt" {
+        if name.ends_with(".cfg")
+            || name.ends_with(".shock")
+            || name.ends_with(".atr")
+            || name == "radiant/keys.txt"
+        {
             if let Some(text) = asset_world::decode_rawfile_text(data, compressed) {
                 self.configs.insert(name, text);
             }

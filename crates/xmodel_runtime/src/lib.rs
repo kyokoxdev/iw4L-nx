@@ -28,7 +28,7 @@ pub use semantic::{
     XAnimSemanticNode, XAnimSemanticNodeKind, XAnimTreeSnapshot,
 };
 pub use xanim_clip::{
-    AnimClip, ClipError, ClipNotify, FrameIndices, Keyed, RawDeltaTrans, RawXAnimParts, Rotation,
+    AnimClip, ClipError, ClipNotify, FrameIndices, Keyed, RawDeltaQuat, RawDeltaTrans, RawXAnimParts, Rotation,
     SampledTrack, Track, Translation, intern_bone_name,
 };
 pub use xanim_tree::{

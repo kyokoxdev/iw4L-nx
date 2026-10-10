@@ -817,6 +817,20 @@ pub struct XAnimPartsGeometry {
     pub indices_are_bytes: bool,
 
     pub delta_trans: XAnimDeltaTransGeometry,
+    /// Yaw-only root rotation (`int16[2]` per key: z, w).
+    pub delta_quat2: XAnimDeltaQuatGeometry,
+    /// Full root rotation (`int16[4]` per key).
+    pub delta_quat: XAnimDeltaQuatGeometry,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct XAnimDeltaQuatGeometry {
+    pub size: u16,
+    /// `frame0` when `size == 0`.
+    pub constant: Option<Ptr>,
+    pub frames: Option<Ptr>,
+    pub indices: Option<Ptr>,
+    pub indices_are_bytes: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

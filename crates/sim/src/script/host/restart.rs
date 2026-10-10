@@ -17,6 +17,7 @@ pub(crate) struct RestartPlan {
     pub schemas: BTreeMap<String, Arc<structured_data_iw4::DefinitionSet>>,
     pub player_data_defaults: Option<Arc<crate::PlayerDataDefaults>>,
     pub videos: Arc<BTreeMap<String, i32>>,
+    pub anim: Arc<super::script_anim::AnimLibrary>,
 }
 
 impl std::fmt::Debug for RestartPlan {

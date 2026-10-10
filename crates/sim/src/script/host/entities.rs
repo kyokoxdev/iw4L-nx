@@ -28,6 +28,8 @@ pub struct LevelData {
     /// `video/<name>.bik` lengths in ms by lowercase stem, for the cinematic
     /// builtins.
     pub videos: BTreeMap<String, i32>,
+    /// Script animation trees and their clips (campaign levels).
+    pub anim: super::script_anim::AnimLibrary,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,6 +211,8 @@ pub(crate) struct ScriptEntity {
     pub can_radius_damage: bool,
     pub part_ops: Vec<(Arc<str>, bool)>,
     pub anim_op: Option<Option<Arc<str>>>,
+    /// Script animation tree (`useanimtree`, `setanim`, `animscripted`).
+    pub anim: Option<Box<super::script_anim::EntityAnim>>,
     pub loop_sound: Option<Arc<str>>,
     pub usable: Option<Usable>,
     pub trigger_policy: super::triggers::TriggerPolicy,
@@ -322,6 +326,7 @@ impl Runtime {
                 can_radius_damage: true,
                 part_ops: Vec::new(),
                 anim_op: None,
+                anim: None,
                 loop_sound: None,
                 usable: None,
                 trigger_policy: Default::default(),
@@ -366,6 +371,7 @@ impl Runtime {
                 can_radius_damage: true,
                 part_ops: Vec::new(),
                 anim_op: None,
+                anim: None,
                 loop_sound: None,
                 usable: None,
                 trigger_policy: Default::default(),

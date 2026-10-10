@@ -25,6 +25,8 @@ pub struct RawXAnimParts {
     pub indices: Vec<u16>,
 
     pub delta_trans: Option<RawDeltaTrans>,
+    /// Root rotation keys, xyzw scaled by 32767; a yaw-only part keeps x = y = 0.
+    pub delta_quat: Option<RawDeltaQuat>,
 }
 
 /// Shared copy of a bone name. Thousands of anims name the same few hundred
@@ -56,6 +58,13 @@ pub struct RawDeltaTrans {
     pub indices: Vec<u16>,
 
     pub packed: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RawDeltaQuat {
+    /// Key frame of each value; empty for a constant rotation.
+    pub indices: Vec<u16>,
+    pub values: Vec<[i16; 4]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +151,7 @@ pub struct AnimClip {
     pub notifies: Vec<ClipNotify>,
 
     pub delta_translation: Translation,
+    pub delta_rotation: Rotation,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +306,7 @@ impl AnimClip {
         cursor.finish()?;
 
         let delta_translation = decode_delta_trans(parts).unwrap_or(Translation::Default);
+        let delta_rotation = decode_delta_quat(parts);
 
         Ok(Self {
             name: parts.name.clone(),
@@ -305,6 +316,7 @@ impl AnimClip {
             tracks,
             notifies: parts.notifies.clone(),
             delta_translation,
+            delta_rotation,
         })
     }
 
@@ -345,6 +357,14 @@ impl AnimClip {
         v
     }
 
+    /// Root rotation at `frac` of the clip (xyzw, identity without a delta).
+    #[must_use]
+    pub fn abs_delta_quat(&self, frac: f32) -> Quat {
+        self.delta_rotation
+            .sample(frac.clamp(0.0, 1.0) * f32::from(self.numframes))
+            .unwrap_or([0.0, 0.0, 0.0, 1.0])
+    }
+
     pub fn move_speed(&self) -> f32 {
         let duration = self.duration();
         if duration == 0.0 {
@@ -363,6 +383,27 @@ impl AnimClip {
     #[must_use]
     pub fn has_delta(&self) -> bool {
         !matches!(self.delta_translation, Translation::Default)
+    }
+}
+
+fn decode_delta_quat(parts: &RawXAnimParts) -> Rotation {
+    let Some(delta) = parts.delta_quat.as_ref().filter(|_| parts.flags & ANIM_DELTA != 0) else {
+        return Rotation::Default;
+    };
+    let quat = |v: &[i16; 4]| -> Quat {
+        let q = v.map(|c| f32::from(c) / 32767.0);
+        let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+        if len > 0.0 { q.map(|c| c / len) } else { [0.0, 0.0, 0.0, 1.0] }
+    };
+    match delta.values.as_slice() {
+        [] => Rotation::Default,
+        [only] if delta.indices.is_empty() => Rotation::FullConstant(quat(only)),
+        values => Keyed::new(
+            values.iter().map(quat).collect(),
+            delta.indices.clone(),
+            &parts.name,
+        )
+        .map_or(Rotation::Default, Rotation::FullKeyed),
     }
 }
 

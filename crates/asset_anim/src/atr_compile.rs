@@ -35,6 +35,17 @@ pub(crate) fn compile_multiplayer(
     Ok(Arc::new(definition))
 }
 
+/// Any `animtrees/<name>.atr`, keeping the animations GSC names (`%anim`) and
+/// everything under a `complete` node, like the script loader does.
+pub fn compile_script_tree(
+    atr: &[u8],
+    names: &HashSet<String>,
+) -> Result<Arc<CompiledAnimTreeDefinition>, AtrCompileError> {
+    let mut ignored = 0usize;
+    let children = parse_atr(atr, names, &mut ignored)?;
+    Ok(Arc::new(flatten_tree(children, ignored, names.len())?))
+}
+
 fn harvest_script_anim_names(script: &[u8], names: &mut HashSet<String>) {
     let mut parser = AtrParser::new(script);
     loop {

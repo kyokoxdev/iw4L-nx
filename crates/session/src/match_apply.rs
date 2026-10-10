@@ -817,6 +817,47 @@ const CINEMATIC_NATIVES: [&str; 3] = [
     "cinematicingameloop",
 ];
 
+/// The `animtrees/<name>.atr` trees the scripts name (`#using_animtree`),
+/// keeping only the animations they reference; clips come from the xanim catalog.
+fn script_anim_library(
+    sources: &assets::ScriptSources,
+    scripts: &sim::script::Program,
+    xanims: &Arc<asset_anim::XAnimCatalog>,
+) -> sim::script::AnimLibrary {
+    let mut trees = std::collections::BTreeMap::new();
+    for (tree, names) in scripts.animations() {
+        let Some(atr) = sources.config(&format!("animtrees/{tree}.atr")) else {
+            diag::warn!(Sim, "gsc: animtrees/{tree}.atr is not in the zones");
+            continue;
+        };
+        let names = names.into_iter().collect();
+        match asset_anim::compile_script_tree(atr.as_bytes(), &names) {
+            Ok(compiled) => {
+                let nodes = compiled
+                    .nodes()
+                    .iter()
+                    .map(|node| sim::script::AnimTreeNode {
+                        name: node.name.as_str().into(),
+                        parent: node.parent,
+                        flags: node.flags,
+                        first_child: node.first_child,
+                        child_count: node.child_count,
+                    })
+                    .collect();
+                trees.insert(tree, Arc::new(sim::script::AnimTree::new(nodes)));
+            }
+            Err(error) => diag::warn!(Sim, "gsc: animtrees/{tree}.atr: {error}"),
+        }
+    }
+    let xanims = Arc::clone(xanims);
+    sim::script::AnimLibrary {
+        trees,
+        clips: Some(Arc::new(move |name: &str| {
+            xanims.clip(asset_core::AssetNamespace::Iw4, name)
+        })),
+    }
+}
+
 /// `video/<name>.bik` lengths in ms by lowercase stem; the first install's
 /// copy wins, as in `console::cinematic`.
 fn video_lengths(games_root: &std::path::Path) -> std::collections::BTreeMap<String, i32> {
@@ -1106,6 +1147,7 @@ fn preflight_match_install(
                 (name.clone(), table)
             })
             .collect(),
+        anim: Default::default(),
     };
     // A campaign level runs its own `maps/<level>::main`; SP has no code callbacks.
     let (startup, catalog_builtins) = if asset_transport::campaign_zone_set() {
@@ -1133,6 +1175,7 @@ fn preflight_match_install(
     {
         script_level.videos = video_lengths(&id.games_root);
     }
+    script_level.anim = script_anim_library(&sources.0, &scripts, &xanims.0);
     let config = sources
         .0
         .config(MATCH_CONFIG)

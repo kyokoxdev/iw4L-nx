@@ -1334,6 +1334,7 @@ pub(crate) fn advance_scheduler(world: &mut World) {
     world.resource_mut::<Runtime>().last_tick = Some(tick);
     let now = i64::from(tick.0) * i64::from(crate::MATCH_TICK_MS);
     super::host::mechanics::deliver_finished(world);
+    super::host::script_anim::advance(world);
     let mut runtime = world.resource_mut::<Runtime>();
     let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut runtime.timed_notifies)
         .into_iter()

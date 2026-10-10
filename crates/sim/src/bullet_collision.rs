@@ -546,6 +546,19 @@ impl AuthorityDObjState {
         self.materialize_error = None;
     }
 
+    /// A script animation tree's nodes this tick (see `script_anim`).
+    pub fn set_script_tree(&mut self, tree: Option<xmodel_runtime::XAnimTreeSnapshot>) {
+        if self.play_anim.is_none() && self.semantic_state.tree == tree {
+            return;
+        }
+        self.play_anim = None;
+        self.pose_revision = self.pose_revision.wrapping_add(1);
+        self.semantic_state.tree = tree;
+        self.semantic_state.pose_revision = self.pose_revision;
+        self.current_collision = None;
+        self.materialized_pose_revision = None;
+    }
+
     pub fn advance_script_model_play_anim(&mut self, dt_seconds: f32) -> f32 {
         let Some(play) = self.play_anim else {
             return 0.0;

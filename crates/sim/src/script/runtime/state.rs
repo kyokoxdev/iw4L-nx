@@ -58,6 +58,7 @@ pub(crate) struct Runtime {
     pub(crate) next_entity_number: i32,
     pub(crate) tables: Arc<BTreeMap<String, StringTable>>,
     pub(crate) videos: Arc<BTreeMap<String, i32>>,
+    pub(crate) anim_library: Arc<host::script_anim::AnimLibrary>,
     pub(crate) rng: u32,
     pub(crate) pending_notifies: Vec<(Value, Arc<str>, Vec<Value>)>,
     /// Notifies due at a level time (ms), e.g. SP `playsound` done notifies.

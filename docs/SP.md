@@ -60,5 +60,12 @@ Fork-only. Checked against retail files, except the load path.
    SP `playsound` notifies after a fixed 2 s; SP profile fields last one
    session. Trainer runs; its faults left need actors, anim trees, vehicles.
    In-world video (`CINEMATIC_*` textures) once a mission needs it.
-5. Script anim trees, AI actors (`PathData`, animscripts, combat), saves.
-6. Switch: SP zones' memory budget.
+5. Script anim trees — in progress. `host/script_anim.rs`: `useanimtree`,
+   the `setanim`/`setflaggedanim` family, `clearanim`, anim time/weight,
+   `animscripted` with root motion (zone `delta_quat` keys), notetrack
+   notifies, `getanimlength` and the clip queries. Trees are the level's
+   `animtrees/<tree>.atr`, kept to the `%anim` names scripts use
+   (`session::match_apply::script_anim_library`); clips from the xanim catalog.
+   Trainer's prop and vehicle trees bind every clip; scenes on actors wait on 6.
+6. AI actors (`PathData`, animscripts, combat) on the bot system, saves.
+7. Switch: SP zones' memory budget.

@@ -19,6 +19,7 @@ pub use error::{Fault, Location};
 pub(crate) use host::controls::{
     action_slot_command, command_buttons, player_commands, select_location,
 };
+pub use host::script_anim::{AnimLibrary, AnimTree, AnimTreeNode, ClipSource};
 pub use host::entities::{
     KeyType, LevelData, StringTable, parse_entity_string, parse_radiant_keys,
 };
