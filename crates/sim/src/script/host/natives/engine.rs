@@ -888,24 +888,49 @@ fn register_entities(registry: &mut NativeRegistry) {
         } else {
             None
         };
-        let presence = if matches!(classname.as_str(), "script_model" | "script_origin") {
-            Some(super::super::presence::spawn_presence(world, origin)?)
-        } else {
-            None
+        spawn_entity(world, &classname, origin, flags, cylinder).map(Value::Object)
+    });
+    // SP aitype `spawner()`: the team `getspawnerteamarray` filters on.
+    registry.register(Method, "setspawnerteam", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let team = string(args, 0)?;
+        runtime(world).set_object_field(id, "team", Value::string(&team));
+        Ok(Value::Undefined)
+    });
+    // SP: a drone is a script model standing in for the spawner's AI; its
+    // aitype `main` gives it team, weapon and character model, as for an actor.
+    registry.register(Method, "spawndrone", |world, receiver, _| {
+        let spawner = entity_id(world, receiver)?;
+        let (origin, angles, classname, fields) = {
+            let mut runtime = runtime(world);
+            let origin = runtime.object_field(spawner, "origin");
+            let angles = runtime.object_field(spawner, "angles");
+            let classname = runtime.entities[&spawner].classname.clone();
+            let fields = runtime.objects.get(&spawner).cloned().unwrap_or_default();
+            (origin, angles, classname, fields)
         };
-        let number =
-            presence.and_then(|id| crate::frame::FrameWorld::from_world(world).gentity_number(id));
+        let Value::Vector(origin) = origin else {
+            return Err("spawner has no origin".into());
+        };
+        let id = spawn_entity(world, "script_model", origin, 0, None)?;
         let mut runtime = runtime(world);
-        let id = runtime.create_entity(EntityKind::Spawned, &classname)?;
-        runtime.set_object_field(id, "origin", Value::Vector(origin));
-        runtime.set_object_field(id, "angles", Value::Vector(ZERO));
-        runtime.set_object_field(id, "spawnflags", Value::Int(flags));
-        let entity = runtime.entities.get_mut(&id).unwrap();
-        entity.cylinder = cylinder;
-        entity.presence = presence;
-        if let Some(number) = number {
-            entity.number = number;
+        // ponytail: copies every spawner key but classname/targetname; narrow if a
+        // level looks drones up by a spawner key the engine would not copy.
+        let skip = [runtime.symbol("classname"), runtime.symbol("targetname")];
+        let drone = runtime.objects.get_mut(&id).unwrap();
+        for (field, value) in fields {
+            if !skip.contains(&field) {
+                drone.insert(field, value);
+            }
         }
+        runtime.set_object_field(id, "origin", Value::Vector(origin));
+        runtime.set_object_field(id, "angles", angles);
+        runtime.set_object_field(id, "weapon", Value::string("none"));
+        let aitype = classname.strip_prefix("actor_").unwrap_or(&classname);
+        let main = format!("aitype/{}::main", aitype.to_ascii_lowercase());
+        let now = super::super::players::now_ms(world);
+        crate::script::runtime::run_now(world, &main, Value::Object(id), Vec::new(), now)
+            .map_err(|fault| format!("{main}: {fault:?}"))?;
         Ok(Value::Object(id))
     });
     registry.register(Function, "sortbydistance", |world, _, args| {
@@ -1038,6 +1063,7 @@ fn register_appearance(registry: &mut NativeRegistry) {
         let model = string(args, 0)?;
         let id = entity_id(world, receiver)?;
         runtime(world).set_object_field(id, "model", Value::string(&model));
+        runtime(world).new_models.push(id);
         crate::script::host::players::dress_insertion_glow(world, id, &model);
         Ok(Value::Undefined)
     });
@@ -2225,3 +2251,32 @@ fn register_refused(registry: &mut NativeRegistry) {
 
 pub const EXIT_LEVEL: &str = "engine:exitlevel";
 pub const MAP_RESTART: &str = "engine:map_restart";
+
+/// A `spawn`ed entity; script models and origins get a presence.
+fn spawn_entity(
+    world: &mut World,
+    classname: &str,
+    origin: [f32; 3],
+    flags: i32,
+    cylinder: Option<(f32, f32)>,
+) -> Result<u64, String> {
+    let presence = if matches!(classname, "script_model" | "script_origin") {
+        Some(super::super::presence::spawn_presence(world, origin)?)
+    } else {
+        None
+    };
+    let number =
+        presence.and_then(|id| crate::frame::FrameWorld::from_world(world).gentity_number(id));
+    let mut runtime = runtime(world);
+    let id = runtime.create_entity(EntityKind::Spawned, classname)?;
+    runtime.set_object_field(id, "origin", Value::Vector(origin));
+    runtime.set_object_field(id, "angles", Value::Vector(ZERO));
+    runtime.set_object_field(id, "spawnflags", Value::Int(flags));
+    let entity = runtime.entities.get_mut(&id).unwrap();
+    entity.cylinder = cylinder;
+    entity.presence = presence;
+    if let Some(number) = number {
+        entity.number = number;
+    }
+    Ok(id)
+}

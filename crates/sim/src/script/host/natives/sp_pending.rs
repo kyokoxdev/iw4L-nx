@@ -12,6 +12,9 @@ enum Stub {
     One,
     EmptyArray,
     ZeroVector,
+    EmptyString,
+    /// `getkeybinding` for an unbound command: `["count"] = 0`.
+    Unbound,
     /// The receiver's origin.
     Origin,
     /// An argument passed through (`getstartorigin` returns its origin).
@@ -40,6 +43,22 @@ fn pending(
         Stub::One => Value::Int(1),
         Stub::EmptyArray => return new_array(world, Vec::new()),
         Stub::ZeroVector => Value::Vector([0.0; 3]),
+        Stub::EmptyString => Value::string(""),
+        Stub::Unbound => {
+            let array = new_array(world, Vec::new())?;
+            if let Value::Array(id) = array {
+                world
+                    .resource_mut::<Runtime>()
+                    .arrays
+                    .get_mut(&id)
+                    .unwrap()
+                    .insert(
+                        crate::script::ArrayKey::String("count".into()),
+                        Value::Int(0),
+                    );
+            }
+            array
+        }
         Stub::Origin => match receiver {
             Value::Object(id) => entity_field(world, *id, "origin"),
             _ => Value::Undefined,
@@ -117,9 +136,9 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "getaicount" => Zero;
         Function "getaispeciesarray" => EmptyArray;
         Function "getallnodes" => EmptyArray;
-        Function "getcommandfromkey" => Undefined;
+        Function "getcommandfromkey" => EmptyString;
         Function "getcorpsearray" => EmptyArray;
-        Function "getkeybinding" => Undefined;
+        Function "getkeybinding" => Unbound;
         Function "getnode" => Undefined;
         Function "getnodearray" => EmptyArray;
         Function "getspawnerarray" => EmptyArray;
@@ -277,7 +296,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setturretignoregoals" => Undefined;
         Method "shoot" => Undefined;
         Method "shouldfacemotion" => Zero;
-        Method "spawndrone" => Undefined;
         Method "stalingradspawn" => Undefined;
         Method "startcoverarrival" => Undefined;
         Method "startragdollfromimpact" => Undefined;

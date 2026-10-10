@@ -59,6 +59,8 @@ pub(crate) struct Runtime {
     pub(crate) tables: Arc<BTreeMap<String, StringTable>>,
     pub(crate) videos: Arc<BTreeMap<String, i32>>,
     pub(crate) anim_library: Arc<host::script_anim::AnimLibrary>,
+    /// Notetrack notifies seen so far, `(flag, note)`; each logs once.
+    pub(crate) anim_notes_seen: std::collections::BTreeSet<(Arc<str>, Arc<str>)>,
     pub(crate) rng: u32,
     pub(crate) pending_notifies: Vec<(Value, Arc<str>, Vec<Value>)>,
     /// Notifies due at a level time (ms), e.g. SP `playsound` done notifies.
@@ -80,6 +82,8 @@ pub(crate) struct Runtime {
     pub(crate) exit_level: bool,
     pub(crate) shown: BTreeMap<u64, host::presence::Shown>,
     pub(crate) retired_presence: Vec<(crate::ScriptModelId, bool)>,
+    /// Entities given a model this tick, before `present` (see `presence::settled`).
+    pub(crate) new_models: Vec<u64>,
     pub(crate) next_spawned_presence: u32,
     pub(crate) blasts: Vec<host::entity_damage::ScriptBlast>,
     pub(crate) hits: Vec<host::entity_damage::ScriptHit>,

@@ -107,7 +107,50 @@ pub(crate) fn spawn_presence(world: &mut World, origin: [f32; 3]) -> Result<Scri
 /// native or field store made earlier in the same tick.
 pub(crate) fn settled(world: &mut World) -> FrameWorld<'_> {
     settle_collision(world);
+    settle_models(world);
     FrameWorld::from_world(world)
+}
+
+/// A `setmodel` this tick has a skeleton at once, as in the engine, so tag
+/// queries in the same frame (`setmodel` then `gettagorigin`) see it.
+fn settle_models(world: &mut World) {
+    let mut runtime = world.resource_mut::<Runtime>();
+    if runtime.new_models.is_empty() {
+        return;
+    }
+    let placed: Vec<(u64, ScriptModelId)> = std::mem::take(&mut runtime.new_models)
+        .into_iter()
+        .filter_map(|id| Some((id, runtime.entities.get(&id)?.presence?)))
+        .collect();
+    let wanted: Vec<(ScriptModelId, Arc<str>, [f32; 3], [f32; 3])> = placed
+        .into_iter()
+        .filter_map(|(object, presence)| {
+            let model = model_field(&mut runtime, object)?;
+            let origin = vector(&mut runtime, object, "origin");
+            let angles = vector(&mut runtime, object, "angles");
+            Some((presence, model, origin, angles))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let mut frame = FrameWorld::from_world(world);
+    for (presence, model, origin, angles) in wanted {
+        let capability = frame.model_capability(&model).flatten();
+        let Some(row) = frame.collision_owner_mut(presence) else {
+            continue;
+        };
+        match row.dobj.as_mut() {
+            Some(dobj) if dobj.current_model == *model => {}
+            Some(dobj) => dobj.replace_model(&model, capability),
+            None => {
+                row.dobj = Some(AuthorityDObjState::at_pose(
+                    &model, capability, origin, angles,
+                ));
+                row.followed_pose = Some((origin, angles));
+            }
+        }
+    }
 }
 
 /// Collision rows only. Networked mover state is left to `present`: posing a
@@ -205,6 +248,7 @@ fn publish_killcam_cameras(world: &mut World) {
 }
 
 fn present(world: &mut World, now: i32) {
+    world.resource_mut::<Runtime>().new_models.clear();
     let retired = std::mem::take(&mut world.resource_mut::<Runtime>().retired_presence);
     let wanted = collect_wanted(world);
     if retired.is_empty() && wanted.is_empty() {
@@ -269,6 +313,14 @@ fn present(world: &mut World, now: i32) {
         let reshaped = want.model != shown.model || want.attachments != shown.attachments;
         if reshaped || !want.part_ops.is_empty() || want.anim_op.is_some() {
             present_model(&mut frame, &want);
+        }
+        // A script tree advances every tick, model change or not.
+        if let Some(tree) = &want.tree
+            && let Some(dobj) = frame
+                .collision_owner_mut(want.presence)
+                .and_then(|row| row.dobj.as_mut())
+        {
+            dobj.set_script_tree(tree.clone());
         }
         updates.push((
             want.object,
@@ -483,9 +535,6 @@ fn present_model(frame: &mut FrameWorld, want: &Wanted) {
         }
         Some(None) => dobj.clear_script_model_play_anim(),
         None => {}
-    }
-    if let Some(tree) = &want.tree {
-        dobj.set_script_tree(tree.clone());
     }
 }
 

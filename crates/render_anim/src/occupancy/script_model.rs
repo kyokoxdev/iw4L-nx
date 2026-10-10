@@ -486,6 +486,7 @@ fn occupy_script_model_scene_ents(
     lod_skinned: Res<render_scene::LodRampSkinnedDvar>,
     presented: Res<net::PresentedSnapshot>,
     local: Res<net::LocalPresentClient>,
+    mut undrawable: Local<std::collections::HashSet<String>>,
 ) {
     let Some(assets) = assets else {
         return;
@@ -503,6 +504,22 @@ fn occupy_script_model_scene_ents(
             continue;
         }
         let Some(skels) = presented_skel_arcs(&assets, &owner.dobj_state) else {
+            for descriptor in &owner.dobj_state.composition.models {
+                let why = match assets.get_name(&descriptor.model) {
+                    None => "not in the scene catalog",
+                    Some(asset_world::MapXModelSceneAsset::Unavailable { reason }) => reason,
+                    Some(
+                        asset_world::MapXModelSceneAsset::Iw4(skel)
+                        | asset_world::MapXModelSceneAsset::Iw5(skel)
+                        | asset_world::MapXModelSceneAsset::T6(skel)
+                        | asset_world::MapXModelSceneAsset::T5(skel),
+                    ) if skel.pose.is_none() => "no pose source",
+                    Some(_) => continue,
+                };
+                if undrawable.insert(descriptor.model.to_string()) {
+                    diag::warn!(World, "script model {} not drawn: {why}", descriptor.model);
+                }
+            }
             continue;
         };
         let skel_refs: Vec<&asset_model::ModelSkel> =

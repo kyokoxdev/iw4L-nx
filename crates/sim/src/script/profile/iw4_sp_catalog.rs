@@ -224,6 +224,7 @@ pub(super) const IW4_SP: &[Builtin] = &[
     Builtin::new(Method, "shoot", Entity, false),
     Builtin::new(Method, "shouldfacemotion", Entity, false),
     Builtin::new(Method, "spawndrone", Entity, false),
+    Builtin::new(Method, "setspawnerteam", Entity, false),
     Builtin::new(Method, "stalingradspawn", Entity, false),
     Builtin::new(Method, "startcoverarrival", Entity, false),
     Builtin::new(Method, "startragdollfromimpact", Entity, false),

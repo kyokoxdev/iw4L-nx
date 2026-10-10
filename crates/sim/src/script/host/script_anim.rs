@@ -243,11 +243,14 @@ impl EntityAnim {
             self.knob_siblings(node, blend);
         }
         let mut current = self.tree.nodes[node as usize].parent;
+        // `knoball` knobs the ancestors below its root; from the root up it is
+        // a plain `setanim`, so an off root (`%body` on a fresh drone) comes on.
+        let mut knobbing = mode.knob_all_to.is_some();
         while let Some(parent) = current {
-            if let Some(root) = mode.knob_all_to {
-                if parent == root {
-                    break;
-                }
+            if mode.knob_all_to == Some(parent) {
+                knobbing = false;
+            }
+            if knobbing {
                 self.knob_siblings(parent, blend);
                 self.set_goal(parent, 1.0, blend);
             } else if !mode.limited && self.states[parent as usize].goal_weight == 0.0 {
@@ -332,7 +335,10 @@ impl EntityAnim {
             self.revision = self.revision.wrapping_add(1);
         }
         notes.sort_by(|a, b| a.0.total_cmp(&b.0));
-        notes.into_iter().map(|(_, flag, note)| (flag, note)).collect()
+        notes
+            .into_iter()
+            .map(|(_, flag, note)| (flag, note))
+            .collect()
     }
 
     /// The nearest notify flag on the node or above it.
@@ -594,7 +600,9 @@ pub(crate) fn start_scripted(
 
 fn yaw_of(q: [f32; 4]) -> f32 {
     let [x, y, z, w] = q;
-    (2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z)).to_degrees()
+    (2.0 * (w * z + x * y))
+        .atan2(1.0 - 2.0 * (y * y + z * z))
+        .to_degrees()
 }
 
 fn rotate(angles: [f32; 3], v: [f32; 3]) -> [f32; 3] {
@@ -618,7 +626,11 @@ pub(crate) fn root_pose(
             origin[1] + offset[1],
             origin[2] + offset[2],
         ],
-        [angles[0], math_iw4::angle_normalize_360(angles[1] + yaw), angles[2]],
+        [
+            angles[0],
+            math_iw4::angle_normalize_360(angles[1] + yaw),
+            angles[2],
+        ],
     )
 }
 
@@ -655,6 +667,9 @@ pub(crate) fn advance(world: &mut World) {
             runtime.set_object_field(id, "angles", Value::Vector(angles));
         }
         for (flag, note) in notes {
+            if runtime.anim_notes_seen.insert((flag.clone(), note.clone())) {
+                diag::info!(Sim, "gsc: script anim notify {flag} {note}");
+            }
             runtime
                 .pending_notifies
                 .push((Value::Object(id), flag, vec![Value::string(&note)]));
@@ -850,15 +865,14 @@ mod tests {
     use super::*;
 
     fn tree() -> Arc<AnimTree> {
-        let node = |name: &str, parent: Option<u16>, first_child: u16, child_count: u16| {
-            AnimTreeNode {
+        let node =
+            |name: &str, parent: Option<u16>, first_child: u16, child_count: u16| AnimTreeNode {
                 name: name.into(),
                 parent,
                 flags: 0,
                 first_child,
                 child_count,
-            }
-        };
+            };
         // root -> body -> {idle, walk}
         Arc::new(AnimTree::new(vec![
             node("root", None, 1, 1),
@@ -916,6 +930,11 @@ mod tests {
             .count();
         assert_eq!(ends, 1);
         let snapshot = anim.snapshot().unwrap();
-        assert!(snapshot.nodes.iter().any(|n| n.clip.as_deref() == Some("walk")));
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|n| n.clip.as_deref() == Some("walk"))
+        );
     }
 }

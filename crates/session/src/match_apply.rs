@@ -1152,13 +1152,25 @@ fn preflight_match_install(
     // A campaign level runs its own `maps/<level>::main`; SP has no code callbacks.
     let (startup, catalog_builtins) = if asset_transport::campaign_zone_set() {
         let level = format!("maps/{zone}");
+        let mut roots = vec![
+            "codescripts/delete".into(),
+            "codescripts/struct".into(),
+            level.clone(),
+        ];
+        // Each `actor_<type>` spawner runs `aitype/<type>::main` on what it spawns.
+        let aitypes: std::collections::BTreeSet<String> = script_level
+            .entities
+            .iter()
+            .flat_map(|entity| entity.iter())
+            .filter(|(key, _)| key == "classname")
+            .filter_map(|(_, value)| value.strip_prefix("actor_"))
+            .map(|aitype| format!("aitype/{}", aitype.to_ascii_lowercase()))
+            .filter(|module| sources.0.read(module).is_ok())
+            .collect();
+        roots.extend(aitypes);
         let startup = sim::script::Iw4Startup {
             entries: vec![format!("{level}::main")],
-            roots: vec![
-                "codescripts/delete".into(),
-                "codescripts/struct".into(),
-                level,
-            ],
+            roots,
         };
         (startup, sim::script::Catalog::iw4_sp())
     } else {

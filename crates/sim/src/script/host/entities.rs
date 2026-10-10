@@ -481,8 +481,9 @@ impl Runtime {
                 let id = self
                     .create_entity(EntityKind::Map, classname)
                     .map_err(|error| map_entity_census(entities, &error))?;
-                // An engine field: reads 0 when the map leaves it out.
+                // Engine fields: read 0 when the map leaves them out.
                 self.set_object_field(id, "spawnflags", Value::Int(0));
+                self.set_object_field(id, "angles", Value::Vector([0.0; 3]));
                 id
             };
             let mut radius = None;

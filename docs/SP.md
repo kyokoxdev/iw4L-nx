@@ -66,6 +66,9 @@ Fork-only. Checked against retail files, except the load path.
    notifies, `getanimlength` and the clip queries. Trees are the level's
    `animtrees/<tree>.atr`, kept to the `%anim` names scripts use
    (`session::match_apply::script_anim_library`); clips from the xanim catalog.
-   Trainer's prop and vehicle trees bind every clip; scenes on actors wait on 6.
+   `spawndrone` is a script model run through its `aitype/<type>::main`
+   (team, weapon, character); campaign links an aitype for each `actor_*`
+   spawner. Trainer's props, vehicles and drones animate and notetracks fire;
+   scenes on actors wait on 6.
 6. AI actors (`PathData`, animscripts, combat) on the bot system, saves.
 7. Switch: SP zones' memory budget.

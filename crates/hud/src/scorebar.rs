@@ -305,7 +305,8 @@ pub(crate) fn update_scorebar(
     if !surface.is_ready() {
         return;
     }
-    if view.is_some_and(|v| v.in_killcam()) {
+    // Campaign has no score; its level runs on the MP match flow for now.
+    if view.is_some_and(|v| v.in_killcam()) || asset_transport::campaign_zone_set() {
         hide(&mut pass);
         return;
     }
