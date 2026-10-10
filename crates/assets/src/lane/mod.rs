@@ -45,6 +45,9 @@ pub struct LoadedWorld {
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
     pub xanims: XAnimBuild,
+    /// WeaponDefs the level zone carries; the match absorbs the ones its
+    /// common zone lacks.
+    pub weapons: Option<asset_game::WeaponCatalog>,
     pub facts: crate::MapFacts,
     /// Bytes the zone arenas held while the walk read them. The arenas
     /// themselves die with the walk; only their size travels.
@@ -258,6 +261,7 @@ impl LoadedWorld {
             bodies: Default::default(),
             fpv_meshes: Default::default(),
             xanims: Default::default(),
+            weapons: None,
             facts: Default::default(),
             arena_bytes: Default::default(),
             sound: Default::default(),

@@ -235,6 +235,8 @@ pub(crate) struct ZoneWalkSink {
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
     pub xanims: XAnimBuild,
+    /// The level's own WeaponDefs (campaign levels carry theirs; MP maps none).
+    pub weapons: WeaponCatalog,
 
     pub xmodel_coll: asset_world::XModelCollCatalog,
 
@@ -356,6 +358,7 @@ impl ZoneWalkSink {
         self.tracers.set_capture_ns(ns);
         self.fx.set_capture_ns(ns);
         self.fx_models.set_capture_ns(ns);
+        self.weapons.set_capture_ns(ns);
     }
 }
 
@@ -1220,6 +1223,7 @@ impl AssetSink for ZoneWalkSink {
         self.bodies.set_strings(strings);
         self.fpv_meshes.set_strings(strings);
         self.xanims.set_strings(strings);
+        self.weapons.set_strings(strings);
     }
 
     fn begin_assets(&mut self, count: usize) {
@@ -1269,6 +1273,9 @@ impl AssetLinkSink for ZoneWalkSink {
             }
         }
         self.materials.loaded(stream, ty, slot, insert_slot)?;
+        if ty == AssetType::Weapon {
+            self.weapons.capture(stream);
+        }
         if ty == AssetType::Fx {
             self.fx.note_loaded(slot, insert_slot);
         }

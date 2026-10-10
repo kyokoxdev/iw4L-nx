@@ -2048,6 +2048,12 @@ impl WeaponBuild {
         census
     }
 
+    pub fn holds(&self, namespace: crate::AssetNamespace, name: &str) -> bool {
+        self.registry
+            .by_namespaced
+            .contains_key(&(namespace, name.to_owned()))
+    }
+
     pub fn absorb(&mut self, mut other: Self) {
         self.registry
             .vehicle_compass

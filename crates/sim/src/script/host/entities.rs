@@ -281,11 +281,14 @@ impl Runtime {
                 return Err("exceeded maximum number of script hud elements".into());
             }
             -1
+        } else if classname.starts_with("info_vehicle_node") {
+            // A vehicle node is its own script class, not a gentity.
+            -1
         } else {
             if self
                 .entities
                 .values()
-                .filter(|e| e.kind != EntityKind::HudElem)
+                .filter(|e| e.kind != EntityKind::HudElem && e.number >= 0)
                 .count()
                 >= MAX_SCRIPT_ENTITIES
             {
@@ -469,7 +472,8 @@ impl Runtime {
                 values.insert(ArrayKey::Integer(index), Value::Object(id));
                 id
             } else {
-                self.create_entity(EntityKind::Map, classname)?
+                self.create_entity(EntityKind::Map, classname)
+                    .map_err(|error| map_entity_census(entities, &error))?
             };
             let mut radius = None;
             let mut height = None;
@@ -535,4 +539,29 @@ impl Runtime {
 }
 
 pub(crate) const MAX_SCRIPT_ENTITIES: usize = 2048 - 64;
+
+/// `error` plus the map's entity-spawning classnames by count, largest first.
+fn map_entity_census(entities: &[Vec<(String, String)>], error: &str) -> String {
+    let mut counts = BTreeMap::<&str, usize>::new();
+    for pairs in entities {
+        let classname = pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("classname"))
+            .map_or("", |(_, v)| v.as_str());
+        if !(classname.starts_with("node_")
+            || classname.starts_with("info_vehicle_node")
+            || classname == "script_struct")
+        {
+            *counts.entry(classname).or_default() += 1;
+        }
+    }
+    let mut counts: Vec<_> = counts.into_iter().collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    let total: usize = counts.iter().map(|(_, n)| n).sum();
+    let census: Vec<String> = counts.iter().map(|(c, n)| format!("{c}={n}")).collect();
+    format!(
+        "{error} ({total} map entities, cap {MAX_SCRIPT_ENTITIES}: {})",
+        census.join(" ")
+    )
+}
 pub(crate) const MAX_HUD_ELEMS: usize = 1024;

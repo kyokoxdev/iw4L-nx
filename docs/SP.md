@@ -45,8 +45,10 @@ An unknown builtin refuses the install, so SP GSC waits on a full `IW4_SP`.
    map, skips GSC, spawns at `info_player_start`. Done when you can walk it.
    Holds on desktop for trainer: the engine spawns the joining player
    (`MatchBootstrap::campaign`), kits come from `body_*` + the level's one
-   `*_viewhands`. Left: the level's own weapons (`trainer.ff`) are not
-   captured — only common zones feed the weapon registry — so no gun or hands.
+   `*_viewhands`. The level zone's WeaponDefs join the registry where the
+   common zone lacks the name. Every campaign level loads (load-only sweep).
+   Left: campaign still runs the MP match flow as `dm` (FFA label, dm spawn
+   lookup); level GSC needs a gametype-less campaign mode.
 3. Frontend: Campaign tile lists `list_sp_maps`.
 4. Fill `IW4_SP`; run `maps/_load` with AI natives stubbed; in-world video
    (`CINEMATIC_*` textures) once a mission needs it.

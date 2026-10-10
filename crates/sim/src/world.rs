@@ -1004,11 +1004,15 @@ impl SimState {
             self.area_entity_world = None;
             return;
         };
-        let world_bounds =
-            clipmap_iw4::AreaBounds::from_mins_maxs(world_model.mins, world_model.maxs)
-                .unwrap_or_else(|_| {
-                    panic!("area query: world cmodel Bounds are invalid");
-                });
+        // Retail arcadia/ending ship a world model with z mins above maxs; the box is the same.
+        let (mins, maxs) = (world_model.mins, world_model.maxs);
+        let world_bounds = clipmap_iw4::AreaBounds::from_mins_maxs(
+            std::array::from_fn(|axis| mins[axis].min(maxs[axis])),
+            std::array::from_fn(|axis| mins[axis].max(maxs[axis])),
+        )
+        .unwrap_or_else(|error| {
+            panic!("area query: world cmodel Bounds are invalid ({mins:?}..{maxs:?}): {error:?}");
+        });
         self.area_entity_world = Some(clipmap_iw4::AreaEntityWorld::new(world_bounds));
     }
 
