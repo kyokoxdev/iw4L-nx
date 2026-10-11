@@ -82,9 +82,13 @@ Fork-only. Checked against retail files, except the load path.
    root motion, turning per `orientmode`. Path nodes are script objects; goals
    route with the bots' A\* (`bots::nav::path_nav`). Sight picks the nearest
    visible hostile (`enemy`); `shoot` fires the actor's weapon through the turret
-   bullet path. Damage fills the `damage*` fields. Map `script_vehicle`s are live,
-   spawners `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths.
-   Level `weapon_*` and actor drops are weapon items. Trainer and favela run with
-   no script faults. Not yet: AI muzzle flash/sound, traverse nodes, cover queries,
-   goal volumes, threat bias, `setviewmodel` hands. Then saves.
+   bullet path, which raises `EV_FIRE_WEAPON` (fire sound, muzzle flash on the
+   attached gun's `tag_flash`) for actors, turrets and vehicles alike. Tags of
+   attached models answer on the sim side (`gettagorigin`, `muzzle`). Damage
+   fills the `damage*` fields. Map `script_vehicle`s are live, spawners
+   `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths. Level
+   `weapon_*` and actor drops are weapon items. Trainer and favela run with no
+   script faults. Most levels reach no combat without input; roadkill's opening
+   firefight does. Not yet: traverse nodes, cover queries, goal volumes, threat
+   bias, `setviewmodel` hands. Then saves.
 7. Switch: SP zones' memory budget.

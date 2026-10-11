@@ -197,6 +197,12 @@ pub struct AuthorityDObjState {
         String,
         Option<std::sync::Arc<xmodel_runtime::RetainedModelCapability>>,
     )>,
+    /// Attached models and their parent tags, in composition order, when every
+    /// one has a capability: their tags answer like the base model's.
+    pub attached: Vec<(
+        std::sync::Arc<xmodel_runtime::RetainedModelCapability>,
+        String,
+    )>,
 }
 
 fn iw_angles_to_mat4(origin: glam::Vec3, angles: [f32; 3]) -> glam::Mat4 {
@@ -332,6 +338,7 @@ impl AuthorityDObjState {
             apos: None,
             t5_destructible: None,
             swap_capabilities: Vec::new(),
+            attached: Vec::new(),
         }
     }
 
@@ -374,23 +381,36 @@ impl AuthorityDObjState {
         self.pose_request = xmodel_runtime::DObjPoseRequest::bind_pose();
     }
 
-    pub fn set_attachments(&mut self, attachments: &[(&str, &str)]) {
+    /// `attachments` are (model, tag, capability); tags of attached models are
+    /// found only when every attachment has a capability, so bone indices
+    /// match the client's DObj of the same composition.
+    pub fn set_attachments(
+        &mut self,
+        attachments: &[(
+            &str,
+            &str,
+            Option<std::sync::Arc<xmodel_runtime::RetainedModelCapability>>,
+        )],
+    ) {
+        self.attached = attachments
+            .iter()
+            .map(|(_, tag, capability)| Some((capability.clone()?, (*tag).to_owned())))
+            .collect::<Option<_>>()
+            .unwrap_or_default();
         let mut models = vec![xmodel_runtime::DObjModelDescriptor {
             model: self.current_model.clone(),
             parent_model: None,
             attach_tag: None,
             ignore_collision: false,
         }];
-        models.extend(
-            attachments
-                .iter()
-                .map(|(model, tag)| xmodel_runtime::DObjModelDescriptor {
-                    model: (*model).to_owned(),
-                    parent_model: Some(0),
-                    attach_tag: Some((*tag).to_owned()),
-                    ignore_collision: true,
-                }),
-        );
+        models.extend(attachments.iter().map(|(model, tag, _)| {
+            xmodel_runtime::DObjModelDescriptor {
+                model: (*model).to_owned(),
+                parent_model: Some(0),
+                attach_tag: Some((*tag).to_owned()),
+                ignore_collision: true,
+            }
+        }));
         if self.semantic_state.composition.models == models {
             return;
         }
@@ -675,21 +695,54 @@ impl AuthorityDObjState {
         }
     }
 
+    /// The base model with its attachments, as the client composes it.
+    fn composed(&self) -> Option<xmodel_runtime::DObj> {
+        let capability = self.capability.as_ref()?;
+        let mut models = vec![(&capability.pose, None)];
+        models.extend(self.attached.iter().map(|(attached, tag)| {
+            (
+                &attached.pose,
+                Some(xmodel_runtime::Attach {
+                    parent_model: 0,
+                    tag: tag.clone(),
+                }),
+            )
+        }));
+        xmodel_runtime::DObj::build(&models).ok()
+    }
+
     pub fn tag_bone(&self, tag: &str) -> Option<usize> {
         let capability = self.capability.as_ref()?;
-        capability
+        if let Some(bone) = capability
             .pose
             .bone_names
             .iter()
             .position(|name| name == tag)
+        {
+            return Some(bone);
+        }
+        if self.attached.is_empty() {
+            return None;
+        }
+        let dobj = self.composed()?;
+        self.attached
+            .iter()
+            .zip(dobj.models.iter().skip(1))
+            .find_map(|((attached, _), slot)| {
+                let bone = attached
+                    .pose
+                    .bone_names
+                    .iter()
+                    .position(|name| name == tag)?;
+                Some(slot.base + bone)
+            })
     }
 
     pub fn tag_world_matrix(&self, tag: &str) -> Option<glam::Mat4> {
-        let capability = self.capability.as_ref()?;
         let bone = self.tag_bone(tag)?;
-        let posed = capability
-            .pose(&self.pose_request, self.world_from_model)
-            .ok()?;
+        let posed =
+            xmodel_runtime::pose_dobj(&self.composed()?, &self.pose_request, self.world_from_model)
+                .ok()?;
         posed.get(bone).copied()
     }
 
@@ -2718,3 +2771,66 @@ pub const COLLISION_COVERAGE: &[CollisionCoverageRow] = &[
         note: "the missile world trace is the same zero-extent brush∪mesh ray as hitscan; plantable capsule hull and TR_STATIONARY rest stay open",
     },
 ];
+
+#[cfg(test)]
+mod attached_tag_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A root `tag_origin` and one child bone `child` at `offset`.
+    fn model(
+        name: &str,
+        child: &str,
+        offset: [f32; 3],
+    ) -> Arc<xmodel_runtime::RetainedModelCapability> {
+        Arc::new(xmodel_runtime::RetainedModelCapability {
+            key: name.into(),
+            pose: xmodel_runtime::ModelPoseSrc {
+                name: name.into(),
+                num_bones: 2,
+                num_root_bones: 1,
+                scale: 1.0,
+                no_scale_part_bits: [0; 6],
+                bone_names: vec!["tag_origin".into(), child.into()],
+                parent_list: vec![1],
+                quats: vec![[0, 0, 0, 32767]],
+                trans: vec![offset],
+                base_mat: vec![(glam::Quat::IDENTITY, glam::Vec3::ZERO); 2],
+                root_rest: None,
+            },
+            bone_collision: Vec::new(),
+            contents: None,
+            coll_lod: 0,
+            coll_surfs: Vec::new(),
+            movement_brushes: Vec::new(),
+            bounds: None,
+            radius: None,
+        })
+    }
+
+    #[test]
+    fn attached_model_tags_answer_after_the_base_bones() {
+        let body = model("body", "tag_weapon_right", [10.0, 0.0, 50.0]);
+        let gun = model("gun", "tag_flash", [30.0, 0.0, 0.0]);
+        let mut dobj = AuthorityDObjState::at_pose("body", Some(body), [100.0, 0.0, 0.0], [0.0; 3]);
+        assert_eq!(dobj.tag_bone("tag_flash"), None);
+        dobj.set_attachments(&[("gun", "tag_weapon_right", Some(gun.clone()))]);
+        assert_eq!(dobj.tag_bone("tag_weapon_right"), Some(1));
+        assert_eq!(dobj.tag_bone("tag_flash"), Some(3));
+        let at = dobj
+            .tag_world_matrix("tag_flash")
+            .unwrap()
+            .w_axis
+            .truncate();
+        assert!(
+            (at - glam::Vec3::new(140.0, 0.0, 50.0)).length() < 1e-3,
+            "{at}"
+        );
+        // One attachment without a capability would shift the client's bones.
+        dobj.set_attachments(&[
+            ("hat", "tag_origin", None),
+            ("gun", "tag_weapon_right", Some(gun)),
+        ]);
+        assert_eq!(dobj.tag_bone("tag_flash"), None);
+    }
+}

@@ -469,6 +469,43 @@ fn shoot(world: &mut World, object: u64) {
     fire_bullet(world, object, from, turret.aim, turret.weapon, attacker);
 }
 
+/// `EV_FIRE_WEAPON` on the shooting entity: clients play the fire sound at the
+/// muzzle and the flash on its `tag_flash` bone, carried in `event_parm`.
+fn fire_event(world: &mut World, object: u64, from: [f32; 3], weapon: u32) {
+    let Some(presence) = world
+        .resource::<Runtime>()
+        .entities
+        .get(&object)
+        .and_then(|e| e.presence)
+    else {
+        return;
+    };
+    let frame = super::presence::settled(world);
+    let Some(number) = frame.gentity_number(presence) else {
+        return;
+    };
+    let bone = frame
+        .entity_collision_capabilities()
+        .iter()
+        .find(|row| row.owner.script_model() == Some(presence))
+        .and_then(|row| row.dobj.as_ref()?.tag_bone("tag_flash"))
+        .and_then(|bone| i32::try_from(bone).ok())
+        .unwrap_or(-1);
+    let tick = world.resource::<crate::step::StepRequest>().tick;
+    FrameWorld::from_world(world).push_entity_event(
+        tick,
+        crate::EventAudience::All,
+        entity_iw4::EntityEventKind::FIRE_WEAPON,
+        crate::EntityEventPayload {
+            number,
+            weapon,
+            event_parm: bone,
+            origin: from,
+            ..Default::default()
+        },
+    );
+}
+
 pub(crate) fn fire_bullet(
     world: &mut World,
     object: u64,
@@ -477,6 +514,7 @@ pub(crate) fn fire_bullet(
     weapon: u32,
     attacker: Option<ClientId>,
 ) {
+    fire_event(world, object, from, weapon);
     let range = weapon_range(world, weapon);
     let end = (Vec3::from_array(from) + Vec3::from_array(dir) * range).to_array();
     let ignore = ignore_self(world, object);

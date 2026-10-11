@@ -211,7 +211,10 @@ pub(crate) fn sync_presence(world: &mut World) {
         }};
     }
     phase!("settle_collision", settle_collision(world));
-    phase!("script_blasts", super::entity_damage::apply_script_blasts(world, tick));
+    phase!(
+        "script_blasts",
+        super::entity_damage::apply_script_blasts(world, tick)
+    );
     phase!("loop_sounds", publish_loop_sounds(world));
     phase!("objectives", super::objectives::publish(world));
     phase!("script_locks", super::controls::sync_script_locks(world));
@@ -489,6 +492,11 @@ fn present_model(frame: &mut FrameWorld, want: &Wanted) {
         .as_deref()
         .and_then(|model| frame.model_capability(model))
         .flatten();
+    let attached: Vec<_> = want
+        .attachments
+        .iter()
+        .map(|(model, _)| frame.model_capability(model).flatten())
+        .collect();
     let anim = want
         .anim_op
         .as_ref()
@@ -516,10 +524,11 @@ fn present_model(frame: &mut FrameWorld, want: &Wanted) {
     let Some(dobj) = row.dobj.as_mut() else {
         return;
     };
-    let attachments: Vec<(&str, &str)> = want
+    let attachments: Vec<_> = want
         .attachments
         .iter()
-        .map(|(model, tag)| (&**model, &**tag))
+        .zip(attached)
+        .map(|((model, tag), capability)| (&**model, &**tag, capability))
         .collect();
     dobj.set_attachments(&attachments);
     for (tag, hidden) in &want.part_ops {
