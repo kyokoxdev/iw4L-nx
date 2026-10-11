@@ -132,12 +132,9 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "createthreatbiasgroup" => Undefined;
         Function "disconnectpaths" => Undefined;
         Function "freeentitysentient" => Undefined;
-        Function "getallnodes" => EmptyArray;
         Function "getcommandfromkey" => EmptyString;
         Function "getcorpsearray" => EmptyArray;
         Function "getkeybinding" => Unbound;
-        Function "getnode" => Undefined;
-        Function "getnodearray" => EmptyArray;
         Function "getthreatbias" => Zero;
         Function "getweaponclipmodel" => EmptyString;
         Function "isenemyteam" => Zero;
@@ -274,9 +271,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setfixednodesafevolume" => Undefined;
         Method "setflashbanged" => Undefined;
         Method "setfriendlychain" => Undefined;
-        Method "setgoalentity" => Undefined;
-        Method "setgoalnode" => Undefined;
-        Method "setgoalpos" => Undefined;
         Method "setgoalvolume" => Undefined;
         Method "setgoalvolumeauto" => Undefined;
         Method "setlightcolor" => Undefined;

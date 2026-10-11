@@ -101,6 +101,12 @@ pub(crate) struct Runtime {
     pub(crate) use_selected: BTreeMap<u32, u64>,
     pub(crate) t5: host::natives::t5::T5State,
     pub(crate) restart: Option<Arc<host::restart::RestartPlan>>,
+    /// SP path node objects, in `PathData` order.
+    pub(crate) nodes: Vec<u64>,
+    /// SP actor goals (`setgoalpos`/`node`/`entity`).
+    pub(crate) actor_goals: BTreeMap<u64, host::actors::ActorGoal>,
+    /// Routes over the path nodes; installed by the bot brain.
+    pub(crate) actor_nav: Option<host::actors::NavHandle>,
     pub(crate) finished: bool,
     pub(crate) pending_restart: Option<bool>,
     pub(crate) restored_pers: BTreeMap<u32, host::restart::Detached>,

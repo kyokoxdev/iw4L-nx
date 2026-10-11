@@ -30,6 +30,8 @@ pub struct LevelData {
     pub videos: BTreeMap<String, i32>,
     /// Script animation trees and their clips (campaign levels).
     pub anim: super::script_anim::AnimLibrary,
+    /// SP AI path nodes (`getnode*`, actor routes).
+    pub path_nodes: Vec<asset_core::PathNode>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

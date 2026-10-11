@@ -125,6 +125,7 @@ impl Plugin for BotsPlugin {
                     .chain()
                     .in_set(ClientSet::Load),
             )
+            .add_systems(Update, install_actor_nav.after(ClientSet::Load))
             .add_systems(
                 FixedUpdate,
                 (evict_bots_claiming_local_client, think_bots)
@@ -132,6 +133,22 @@ impl Plugin for BotsPlugin {
                     .in_set(AuthoritySet::Ingress)
                     .run_if(authority_should_tick),
             );
+    }
+}
+
+/// SP actors route over the level's path nodes with the bots' A\*.
+fn install_actor_nav(world: Option<Res<AuthorityWorld>>) {
+    let Some(mut world) = world.as_ref().and_then(|world| world.try_lock()) else {
+        return;
+    };
+    if let Some(nodes) = world.path_nodes_awaiting_nav() {
+        let edges: usize = nodes.iter().map(|node| node.links.len()).sum();
+        diag::info!(
+            Sim,
+            "actors: route graph over {} path nodes, {edges} links",
+            nodes.len()
+        );
+        world.install_actor_nav(nav::path_nav(&nodes));
     }
 }
 

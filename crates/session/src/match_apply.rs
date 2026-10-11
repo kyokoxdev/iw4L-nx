@@ -1148,6 +1148,7 @@ fn preflight_match_install(
             })
             .collect(),
         anim: Default::default(),
+        path_nodes: sources.0.path_nodes().to_vec(),
     };
     // A campaign level runs its own `maps/<level>::main`; SP has no code callbacks.
     let (startup, catalog_builtins) = if asset_transport::campaign_zone_set() {

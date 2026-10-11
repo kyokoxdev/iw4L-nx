@@ -6,6 +6,7 @@ pub struct ScriptSources {
     tables: BTreeMap<String, ScriptTable>,
     schemas: BTreeMap<String, std::sync::Arc<structured_data_iw4::DefinitionSet>>,
     entities: Option<String>,
+    path_nodes: Vec<asset_world::PathNode>,
     configs: BTreeMap<String, String>,
 }
 
@@ -142,6 +143,15 @@ impl ScriptSources {
         self.entities.as_deref()
     }
 
+    /// SP AI path nodes of the level zone.
+    pub fn path_nodes(&self) -> &[asset_world::PathNode] {
+        &self.path_nodes
+    }
+
+    pub(crate) fn set_path_nodes(&mut self, nodes: Vec<asset_world::PathNode>) {
+        self.path_nodes = nodes;
+    }
+
     pub fn config(&self, name: &str) -> Option<&str> {
         self.configs.get(&normalize(name)).map(String::as_str)
     }
@@ -245,6 +255,9 @@ impl ScriptSources {
         self.configs.extend(other.configs);
         if other.entities.is_some() {
             self.entities = other.entities;
+        }
+        if !other.path_nodes.is_empty() {
+            self.path_nodes = other.path_nodes;
         }
     }
 }

@@ -5,7 +5,8 @@ Fork-only. Checked against retail files, except the load path.
 ## What already holds
 
 - `fastfile_iw4` walks every retail SP and Special Ops zone, `GameWorldSp`
-  (`PathData`, `VehicleTrack`, glass) included; nothing consumes path data yet.
+  (`PathData`, `VehicleTrack`, glass) included. Path nodes are decoded
+  (`asset_world::path_nodes`) for SP AI; vehicle tracks are not consumed yet.
 - `asset_transport::list_sp_maps`: non-MP IW4 zones with a
   `video/<stem>_load.bik` (SP has no `_load` zones and no `localized_common`).
   Resolve stems with `find_zone_file_version`, not `find_zone_file` (it aliases
@@ -75,6 +76,11 @@ Fork-only. Checked against retail files, except the load path.
    `dospawn`/`stalingradspawn` spend spawner `count`, run the aitype `main` and
    `animscripts/init::main`, notify the spawner `spawned`. Spawner and AI
    queries are real; each spawner's aitype `spawner()` runs before level main.
-   The campaign player is on `allies`. Not yet: placed AI, goals, movement,
-   sight, shooting, damage. Then saves.
+   The campaign player is on `allies`. Path nodes are script objects
+   (`getnode`, `getnodearray`, `getallnodes`: `type`, `radius`, `targetname`,
+   ...). `setgoalpos`/`setgoalnode`/`setgoalentity` route the actor with the
+   bots' A\* over the nodes' links (`bots::nav::path_nav`, installed by the bot
+   plugin), move it at a fixed run speed and notify `goal` inside
+   `goalradius`/`goalheight`, or `bad_path`. Not yet: placed AI, anim-driven
+   movement, cover, sight, shooting, damage. Then saves.
 7. Switch: SP zones' memory budget.

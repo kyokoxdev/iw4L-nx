@@ -231,7 +231,7 @@ pub(crate) struct ZoneWalkSink {
 
     pub fx_glass_def_materials: Vec<(String, String)>,
 
-    script_strings: ScriptStrings,
+    pub(crate) script_strings: ScriptStrings,
     pub bodies: BodyMeshBuild,
     pub fpv_meshes: FpvMeshBuild,
     pub world_weapons: WorldWeaponBuild,

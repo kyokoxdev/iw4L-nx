@@ -53,6 +53,7 @@ pub(crate) fn install(
         player_data_defaults: level.player_data_defaults.map(Arc::new),
         videos: Arc::new(level.videos),
         anim: Arc::new(level.anim),
+        path_nodes: Arc::new(level.path_nodes),
     };
     install_level(world, Arc::new(program), plan)
 }
@@ -131,11 +132,13 @@ pub(crate) fn install_level(
     }
     let entities = plan.entities.clone();
     let keys = plan.keys.clone();
+    let path_nodes = plan.path_nodes.clone();
     world.resource_mut::<Runtime>().restart = Some(Arc::new(plan));
     world
         .resource_mut::<Runtime>()
         .spawn_map_entities(&entities, &keys)
         .map_err(|m| Fault::at(&location, m))?;
+    host::actors::spawn_path_nodes(world, &path_nodes).map_err(|m| Fault::at(&location, m))?;
     host::presence::initialize_map_models(world);
     Ok(())
 }

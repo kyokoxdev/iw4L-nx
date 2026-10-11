@@ -162,6 +162,7 @@ impl ZoneLane for Iw4Lane {
         if let Some(entities) = map_ents_entity_string(&stream) {
             scripts.set_entities(entities.to_owned());
         }
+        scripts.set_path_nodes(asset_world::path_nodes(&stream, &sink.script_strings));
         let script_sound = std::mem::take(&mut sink.script_sound).finish();
         let exp_fog = sink.exp_fog.take();
         let createart_name = sink.createart_name.take();

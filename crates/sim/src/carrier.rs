@@ -192,6 +192,19 @@ impl SimWorld {
             .insert_resource(crate::script::GlassNames(names.into_iter().collect()));
     }
 
+    /// The level's SP path nodes while actors have no route graph yet.
+    pub fn path_nodes_awaiting_nav(&self) -> Option<std::sync::Arc<Vec<asset_core::PathNode>>> {
+        let runtime = self.ecs.resource::<crate::script::Runtime>();
+        let nodes = &runtime.restart.as_ref()?.path_nodes;
+        (runtime.actor_nav.is_none() && !nodes.is_empty()).then(|| nodes.clone())
+    }
+
+    /// Gives SP actors their route graph (the bot brain's, over path nodes).
+    pub fn install_actor_nav(&mut self, nav: std::sync::Arc<dyn crate::script::ActorNav>) {
+        self.ecs.resource_mut::<crate::script::Runtime>().actor_nav =
+            Some(crate::script::host::actors::NavHandle(nav));
+    }
+
     pub fn gsc_realm(&self) -> Option<crate::script::Realm> {
         self.ecs
             .resource::<crate::script::Runtime>()

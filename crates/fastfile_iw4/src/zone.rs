@@ -611,6 +611,13 @@ pub struct FxWorldGeometry {
     pub init_geo_data: Option<Ptr>,
 }
 
+/// SP `PathData` nodes (`pathnode_t`, x86 stride `sz::PATH_NODE`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PathDataGeometry {
+    pub nodes: Option<Ptr>,
+    pub node_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlassDataGeometry {
     pub data: Option<Ptr>,
@@ -1433,6 +1440,7 @@ pub struct ZoneStream<'a> {
     gfx_world: Option<GfxWorldGeometry>,
     fx_world: Option<FxWorldGeometry>,
     glass_data: Option<GlassDataGeometry>,
+    path_data: Option<PathDataGeometry>,
     clip_map: Option<ClipMapGeometry>,
     map_ents: Option<MapEntsGeometry>,
     xmodel: Option<XModelGeometry>,
@@ -1539,6 +1547,7 @@ impl<'a> ZoneStream<'a> {
             gfx_world: None,
             fx_world: None,
             glass_data: None,
+            path_data: None,
             clip_map: None,
             map_ents: None,
             xmodel: None,
@@ -2092,6 +2101,14 @@ impl<'a> ZoneStream<'a> {
 
     pub fn glass_data(&self) -> Option<GlassDataGeometry> {
         self.glass_data
+    }
+
+    pub fn record_path_data(&mut self, geometry: PathDataGeometry) {
+        self.path_data = Some(geometry);
+    }
+
+    pub fn path_data(&self) -> Option<PathDataGeometry> {
+        self.path_data
     }
 
     pub fn record_clip_map(&mut self, geometry: ClipMapGeometry) {
