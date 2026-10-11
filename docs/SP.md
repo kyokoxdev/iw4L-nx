@@ -72,15 +72,19 @@ Fork-only. Checked against retail files, except the load path.
    spawner. Trainer's props, vehicles and drones animate and notetracks fire;
    scenes on actors wait on 6.
 6. AI actors — in progress. Actors are script entities (`EntityKind::Actor`,
-   `host/actors.rs`), not bot clients; their brain is to be the bot pipeline.
-   `dospawn`/`stalingradspawn` spend spawner `count`, run the aitype `main` and
-   `animscripts/init::main`, notify the spawner `spawned`. Spawner and AI
-   queries are real; each spawner's aitype `spawner()` runs before level main.
-   The campaign player is on `allies`. Path nodes are script objects
-   (`getnode`, `getnodearray`, `getallnodes`: `type`, `radius`, `targetname`,
-   ...). `setgoalpos`/`setgoalnode`/`setgoalentity` route the actor with the
-   bots' A\* over the nodes' links (`bots::nav::path_nav`, installed by the bot
-   plugin), move it at a fixed run speed and notify `goal` inside
-   `goalradius`/`goalheight`, or `bad_path`. Not yet: placed AI, anim-driven
-   movement, cover, sight, shooting, damage. Then saves.
+   `host/actors.rs`), not bot clients. `dospawn`/`stalingradspawn` spend spawner
+   `count`, run the aitype `main` and `animscripts/init::main`; aitype `precache`
+   then `spawner` run before level main. Retail animscripts drive them: the engine
+   picks `stop`/`move`/`cover_*`/`combat` from goal route, claimed node and
+   `enemy`, holds `animcustom`, `animscripted` (via `scripted::init`), `pain` and
+   `death`, and switches with `killanimscript` + `end_script`. The motor walks the
+   route at the anim tree's blended root-motion speed (`animmode` none) or applies
+   root motion, turning per `orientmode`. Path nodes are script objects; goals
+   route with the bots' A\* (`bots::nav::path_nav`). Sight picks the nearest
+   visible hostile (`enemy`); `shoot` fires the actor's weapon through the turret
+   bullet path. Damage fills the `damage*` fields. Map `script_vehicle`s are live,
+   spawners `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths.
+   Level `weapon_*` and actor drops are weapon items. Trainer and favela run with
+   no script faults. Not yet: AI muzzle flash/sound, traverse nodes, cover queries,
+   goal volumes, threat bias, `setviewmodel` hands. Then saves.
 7. Switch: SP zones' memory budget.

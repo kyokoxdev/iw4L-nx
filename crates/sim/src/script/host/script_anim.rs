@@ -111,6 +111,8 @@ pub(crate) struct EntityAnim {
     clips: Vec<Option<Option<Arc<AnimClip>>>>,
     pub scripted: Option<Scripted>,
     pub revision: u32,
+    /// Root motion of the last step: translation in the entity's frame, yaw in degrees.
+    pub root_delta: ([f32; 3], f32),
 }
 
 impl std::fmt::Debug for EntityAnim {
@@ -155,6 +157,7 @@ impl EntityAnim {
             clips: vec![None; n],
             scripted: None,
             revision: 0,
+            root_delta: ([0.0; 3], 0.0),
         }
     }
 
@@ -265,6 +268,13 @@ impl EntityAnim {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// The `animscripted` clip played to its end; `None` with no scripted clip.
+    pub(crate) fn scripted_ended(&mut self, library: &AnimLibrary) -> Option<bool> {
+        let node = self.scripted.as_ref()?.node;
+        let looping = self.clip(library, node).is_some_and(|clip| clip.looping);
+        Some(!looping && self.time(node) >= 1.0)
+    }
+
     pub(crate) fn time(&self, node: u16) -> f32 {
         self.states[node as usize].time
     }
@@ -334,11 +344,75 @@ impl EntityAnim {
         if !notes.is_empty() || n > 0 {
             self.revision = self.revision.wrapping_add(1);
         }
+        self.root_delta = self.root_motion(library);
         notes.sort_by(|a, b| a.0.total_cmp(&b.0));
         notes
             .into_iter()
             .map(|(_, flag, note)| (flag, note))
             .collect()
+    }
+
+    /// The blended root motion of the step just taken. Siblings under a blend
+    /// node share their parent's weight in proportion; additive subtrees add none.
+    fn root_motion(&mut self, library: &AnimLibrary) -> ([f32; 3], f32) {
+        let n = self.states.len();
+        let mut share = vec![0.0f32; n];
+        share[0] = 1.0;
+        let mut trans = [0.0f32; 3];
+        let mut yaw = 0.0f32;
+        for node in 0..n as u16 {
+            let weight = share[node as usize];
+            if weight <= 0.0 {
+                continue;
+            }
+            if !self.tree.is_leaf(node) {
+                if self.tree.nodes[node as usize].flags & ANIMFLAG_ADDITIVE != 0 {
+                    continue;
+                }
+                let children = self.tree.children(node);
+                let total: f32 = children
+                    .clone()
+                    .map(|child| self.states[child as usize].weight)
+                    .sum();
+                if total > 0.0 {
+                    for child in children {
+                        share[child as usize] = weight * self.states[child as usize].weight / total;
+                    }
+                }
+                continue;
+            }
+            let Some(clip) = self.clip(library, node) else {
+                continue;
+            };
+            let state = &self.states[node as usize];
+            let (from, to) = (state.old_time, state.time);
+            let mut d = [0.0f32; 3];
+            let mut add = |a: f32, b: f32| {
+                let start = clip.abs_delta_trans(a);
+                let end = clip.abs_delta_trans(b);
+                let back = -yaw_of(clip.abs_delta_quat(a));
+                let local = rotate([0.0, back, 0.0], std::array::from_fn(|k| end[k] - start[k]));
+                for k in 0..3 {
+                    d[k] += local[k];
+                }
+                math_iw4::angle_subtract(
+                    yaw_of(clip.abs_delta_quat(b)),
+                    yaw_of(clip.abs_delta_quat(a)),
+                )
+            };
+            let turn = if state.cycle_count != state.old_cycle_count {
+                add(from, 1.0) + add(0.0, to)
+            } else if to > from {
+                add(from, to)
+            } else {
+                0.0
+            };
+            for k in 0..3 {
+                trans[k] += d[k] * weight;
+            }
+            yaw += turn * weight;
+        }
+        (trans, yaw)
     }
 
     /// The nearest notify flag on the node or above it.
@@ -605,7 +679,7 @@ fn yaw_of(q: [f32; 4]) -> f32 {
         .to_degrees()
 }
 
-fn rotate(angles: [f32; 3], v: [f32; 3]) -> [f32; 3] {
+pub(crate) fn rotate(angles: [f32; 3], v: [f32; 3]) -> [f32; 3] {
     let [pitch, yaw, roll] = angles.map(f32::to_radians);
     let rotation = glam::Quat::from_euler(glam::EulerRot::ZYX, yaw, pitch, roll);
     (rotation * glam::Vec3::from(v)).to_array()
@@ -675,6 +749,25 @@ pub(crate) fn advance(world: &mut World) {
                 .push((Value::Object(id), flag, vec![Value::string(&note)]));
         }
     }
+}
+
+/// `startscriptedanim(notify, origin, angles, anim, [animmode], [root])`.
+pub(crate) fn scripted_native(
+    world: &mut World,
+    receiver: &Value,
+    args: &[Value],
+) -> Result<Value, String> {
+    let notify: Arc<str> = super::args::string(args, 0)?.into();
+    let origin = vector(args, 1)?;
+    let angles = vector(args, 2)?;
+    let anim = anim_value(args, 3)?;
+    // args[4] is the actor's animmode; models have none.
+    let root = match args.get(5) {
+        Some(Value::Animation { name, .. }) => Some(name.clone()),
+        _ => None,
+    };
+    start_scripted(world, receiver, notify, origin, angles, anim, root)?;
+    Ok(Value::Undefined)
 }
 
 fn clip_arg(world: &World, args: &[Value], index: usize) -> Result<Arc<AnimClip>, String> {
@@ -773,19 +866,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         })
     });
     for name in ["animscripted", "startscriptedanim"] {
-        registry.register(Method, name, |world, receiver, args| {
-            let notify: Arc<str> = super::args::string(args, 0)?.into();
-            let origin = vector(args, 1)?;
-            let angles = vector(args, 2)?;
-            let anim = anim_value(args, 3)?;
-            // args[4] is the actor's animmode; models have none.
-            let root = match args.get(5) {
-                Some(Value::Animation { name, .. }) => Some(name.clone()),
-                _ => None,
-            };
-            start_scripted(world, receiver, notify, origin, angles, anim, root)?;
-            Ok(Value::Undefined)
-        });
+        registry.register(Method, name, scripted_native);
     }
     registry.register(Method, "stopanimscripted", |world, receiver, _| {
         let id = entity_id(world, receiver)?;

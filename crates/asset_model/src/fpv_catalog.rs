@@ -97,9 +97,19 @@ impl FpvHands {
                 .names_in(map_ns)
                 .filter(|n| crate::is_arms_model(n))
                 .collect();
-            // Campaign levels ship one generic pair of arms for every body.
-            let only = (kit.body.starts_with("body_") && arm_names.len() == 1)
-                .then(|| arm_names[0].to_owned());
+            // Campaign levels arm every body with the level's one pair of arms,
+            // or with the game's default pair when they ship several.
+            // ponytail: the pair the level script picks (`setviewmodel`) is not
+            // honoured; hands bind at load, before scripts run.
+            let default = game_default_hands_name(map_ns);
+            let only = kit
+                .body
+                .starts_with("body_")
+                .then(|| match arm_names.as_slice() {
+                    [only] => Some(only.to_string()),
+                    names => names.contains(&default).then(|| default.to_owned()),
+                });
+            let only = only.flatten();
             if let Some(name) = crate::arms_for_body(&kit.body, &arm_names).or(only) {
                 if catalog.contains(map_ns, &name) {
                     return Self::FromKit {

@@ -800,7 +800,6 @@ fn register_entities(registry: &mut NativeRegistry) {
         let ids = classname_prefix(world, ids, "info_vehicle_node");
         objects(world, ids)
     });
-    registry.register(Function, "isspawner", |_, _, _| Ok(Value::Int(0)));
     registry.register(Function, "getteamplayersalive", |world, _, args| {
         let team = team_key(args)?;
         Ok(Value::Int(super::super::players::alive_on_team(

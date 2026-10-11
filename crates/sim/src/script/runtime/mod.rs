@@ -174,23 +174,78 @@ pub(super) fn run_now(
     now: i64,
 ) -> Result<(), Fault> {
     let (program, function, location) = entry(world, name)?;
-    let mut thread = new_thread(world, &program, function, receiver, args)
+    run_function_now(world, &program, function, receiver, args, now)
         .map_err(|m| Fault::at(&location, m))?;
+    match world.resource::<Runtime>().fault.clone() {
+        Some(fault) => Err(fault),
+        None => Ok(()),
+    }
+}
+
+/// Runs `function` until its first wait; the thread's serial if it is still alive.
+fn run_function_now(
+    world: &mut World,
+    program: &Program,
+    function: usize,
+    receiver: Value,
+    args: Vec<Value>,
+    now: i64,
+) -> Result<Option<u64>, String> {
+    let mut thread = new_thread(world, program, function, receiver, args)?;
     thread.state = ThreadState::Runnable;
     let budget = std::mem::replace(
         &mut world.resource_mut::<Runtime>().budget,
         INSTRUCTION_BUDGET,
     );
-    execute(world, &program, &mut thread, now);
+    execute(world, program, &mut thread, now);
     world.resource_mut::<Runtime>().budget = budget;
+    let serial = thread.serial;
     if thread.state == ThreadState::Complete {
-        retire(&mut world.resource_mut::<Runtime>(), thread.serial);
-    } else {
-        world.spawn(thread);
+        retire(&mut world.resource_mut::<Runtime>(), serial);
+        return Ok(None);
     }
-    match world.resource::<Runtime>().fault.clone() {
-        Some(fault) => Err(fault),
-        None => Ok(()),
+    let entity = world.spawn(thread).id();
+    if let Some(mut index) = world.get_resource_mut::<ThreadIndex>() {
+        index.0.insert(serial, entity);
+    }
+    Ok(Some(serial))
+}
+
+/// Queues a thread of the named entry (`start` without the restart plan); its serial.
+pub(crate) fn start_thread(
+    world: &mut World,
+    name: &str,
+    receiver: Value,
+    args: Vec<Value>,
+) -> Result<u64, Fault> {
+    let (program, function, location) = entry(world, name)?;
+    spawn_thread(world, &program, function, receiver, args).map_err(|m| Fault::at(&location, m))
+}
+
+/// Queues a thread of a script function reference; its serial.
+pub(crate) fn start_function(
+    world: &mut World,
+    function: u32,
+    receiver: Value,
+    args: Vec<Value>,
+) -> Result<u64, String> {
+    let program = world
+        .resource::<Runtime>()
+        .program
+        .clone()
+        .ok_or("no loaded GSC program")?;
+    spawn_thread(world, &program, function as usize, receiver, args)
+}
+
+/// The thread has not ended. Not for the thread that is running now.
+pub(crate) fn running(world: &mut World, serial: u64) -> bool {
+    find_thread(world, serial).is_some()
+}
+
+/// Ends a thread that is not running now, queued or waiting.
+pub(crate) fn stop_thread(world: &mut World, serial: u64) {
+    if let Some(entity) = find_thread(world, serial) {
+        kill(world, entity, serial);
     }
 }
 
@@ -1061,7 +1116,11 @@ fn instruction(
             let depth = thread.frames.len() - 1;
             let serial = thread.serial;
             let mut runtime = world.resource_mut::<Runtime>();
-            if runtime.endon_top.get(&serial).is_some_and(|top| *top >= depth) {
+            if runtime
+                .endon_top
+                .get(&serial)
+                .is_some_and(|top| *top >= depth)
+            {
                 runtime.waiters.retain(|w| {
                     w.thread != serial
                         || !matches!(w.kind, WaiterKind::Endon { frame } if frame >= depth)
@@ -1549,11 +1608,9 @@ fn stack_effect(op: &Op) -> (usize, usize) {
         Op::Call(_, argc, method) | Op::Spawn(_, argc, method) => (argc + usize::from(method), 1),
         Op::Indirect(argc, method, _) => (argc + 1 + usize::from(method), 1),
         Op::Notify(argc) | Op::AwaitMatch(argc) => (argc + 2, 0),
-        Op::Jump(_)
-        | Op::EnsureLocalArray(_)
-        | Op::FrameEnd
-        | Op::Return
-        | Op::ChildThread => (0, 0),
+        Op::Jump(_) | Op::EnsureLocalArray(_) | Op::FrameEnd | Op::Return | Op::ChildThread => {
+            (0, 0)
+        }
     }
 }
 

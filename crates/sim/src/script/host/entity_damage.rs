@@ -247,6 +247,8 @@ pub(crate) fn damage_entity(world: &mut World, hit: &EntityHit) -> bool {
         super::vehicles::damage(world, object, hit, attacker, &weapon, &tag);
         return true;
     }
+    let actor =
+        world.resource::<Runtime>().entities[&object].kind == super::entities::EntityKind::Actor;
     let mut runtime = world.resource_mut::<Runtime>();
     let model = match runtime.object_field(object, "model") {
         Value::String(model) => model,
@@ -260,6 +262,9 @@ pub(crate) fn damage_entity(world: &mut World, hit: &EntityHit) -> bool {
     let after = before.saturating_sub(hit.amount);
     runtime.set_object_field(object, "health", Value::Int(after));
     drop(runtime);
+    if actor {
+        super::actors::damaged(world, object, hit, &attacker, &weapon, &tag);
+    }
     let receiver = Value::Object(object);
     raise(
         world,

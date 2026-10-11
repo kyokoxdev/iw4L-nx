@@ -105,6 +105,8 @@ pub(crate) struct Runtime {
     pub(crate) nodes: Vec<u64>,
     /// SP actor goals (`setgoalpos`/`node`/`entity`).
     pub(crate) actor_goals: BTreeMap<u64, host::actors::ActorGoal>,
+    /// SP actors' animscript state and motor modes.
+    pub(crate) actor_brains: BTreeMap<u64, host::actors::ActorBrain>,
     /// Routes over the path nodes; installed by the bot brain.
     pub(crate) actor_nav: Option<host::actors::NavHandle>,
     pub(crate) finished: bool,

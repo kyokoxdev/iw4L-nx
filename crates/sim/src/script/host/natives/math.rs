@@ -50,7 +50,7 @@ pub(crate) fn random(world: &mut World) -> u32 {
     x
 }
 
-fn random_unit(world: &mut World) -> f32 {
+pub(crate) fn random_unit(world: &mut World) -> f32 {
     (random(world) >> 8) as f32 / (1u32 << 24) as f32
 }
 

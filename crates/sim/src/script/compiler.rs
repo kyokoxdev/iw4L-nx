@@ -565,7 +565,7 @@ mod unresolved_tests {
     fn unresolved_lists_every_unknown_builtin_without_stopping() {
         let sources = BTreeMap::from([(
             "maps/test".to_owned(),
-            "main()\n{\n    x = abs(1);\n    self setgoalpos(1);\n    spawn_thing();\n    helper();\n}\n\nhelper()\n{\n}\n".to_owned(),
+            "main()\n{\n    x = abs(1);\n    self wave_flag(1);\n    spawn_thing();\n    helper();\n}\n\nhelper()\n{\n}\n".to_owned(),
         )]);
         let failures = unresolved(&sources, &["maps/test"], &Catalog::iw4_sp()).unwrap();
         let messages: Vec<&str> = failures.keys().map(String::as_str).collect();
@@ -573,7 +573,7 @@ mod unresolved_tests {
             messages,
             [
                 "unresolved function or unknown builtin spawn_thing",
-                "unresolved method or unknown builtin setgoalpos",
+                "unresolved method or unknown builtin wave_flag",
             ]
         );
         assert!(

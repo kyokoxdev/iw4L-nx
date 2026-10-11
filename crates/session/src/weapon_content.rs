@@ -32,10 +32,14 @@ pub(crate) fn compile(
     let campaign = asset_transport::campaign_zone_set();
     let rows = weapons.published_weapons().map(|weapon| {
         let id = weapon.wire_id();
-        let execution = weapons
-            .configuration_admission(id)
-            .map_err(|reason| format!("{reason:?}"))
-            .and_then(|()| compile_combat(weapons, weapon, rules, global_location, &mut refused));
+        let execution = match weapons.configuration_admission(id) {
+            Ok(()) => compile_combat(weapons, weapon, rules, global_location, &mut refused),
+            Err(reason) if id != 0 => {
+                refused.push(format!("{}({reason:?})", weapons.name_of(id)));
+                Err(format!("{reason:?}"))
+            }
+            Err(reason) => Err(format!("{reason:?}")),
+        };
         let setup = weapons.describe_configuration(id).and_then(|selection| {
             let family = selection.family.as_ref()?;
             Some(sim::WeaponSetup {

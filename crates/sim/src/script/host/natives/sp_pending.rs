@@ -13,6 +13,8 @@ enum Stub {
     EmptyArray,
     ZeroVector,
     EmptyString,
+    /// The surface name `getwheelsurface` answers.
+    Dirt,
     /// `getkeybinding` for an unbound command: `["count"] = 0`.
     Unbound,
     /// The receiver's origin.
@@ -44,6 +46,7 @@ fn pending(
         Stub::EmptyArray => return new_array(world, Vec::new()),
         Stub::ZeroVector => Value::Vector([0.0; 3]),
         Stub::EmptyString => Value::string(""),
+        Stub::Dirt => Value::string("dirt"),
         Stub::Unbound => {
             let array = new_array(world, Vec::new())?;
             if let Value::Array(id) = array {
@@ -93,7 +96,8 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getplayersetting" => One; // only key read: "gameskill"; 1 = Regular
         Method "getplayerviewheight" => Zero;
         Method "getplayerweaponmodel" => Undefined;
-        Method "getwheelsurface" => Undefined;
+        // ponytail: every wheel on dirt; trace the surface under the wheel tag for tread fx.
+        Method "getwheelsurface" => Dirt;
         Method "hidepart_allinstances" => Undefined;
         Function "isexplosivedamagemod" => Zero;
         Method "joltbody" => Undefined;
@@ -140,7 +144,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "isenemyteam" => Zero;
         Function "issaverecentlyloaded" => Zero;
         Function "issavesuccessful" => One;
-        Function "issentient" => Zero;
         Function "isturretactive" => Zero;
         Function "kill" => Undefined;
         Function "laserforceoff" => Undefined;
@@ -171,19 +174,12 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "allowedstances" => Undefined;
         Method "allowprone" => Undefined;
         Method "allowstand" => Undefined;
-        Method "animcustom" => Undefined;
-        Method "animmode" => Undefined;
         Method "atdangerousnode" => Zero;
         Method "canattackenemynode" => Zero;
-        Method "cansee" => Zero;
-        Method "canshoot" => Zero;
-        Method "canshootenemy" => Zero;
         Method "canuseturret" => Zero;
         Method "checkcoverexitposwithpath" => Undefined;
         Method "checkgrenadethrow" => Zero;
         Method "checkgrenadethrowpos" => Zero;
-        Method "clearenemy" => Undefined;
-        Method "clearentitytarget" => Undefined;
         Method "clearfixednodesafevolume" => Undefined;
         Method "comparenodedirtopathdir" => Zero;
         Method "connectpaths" => Undefined;
@@ -191,9 +187,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "disableinvulnerability" => Undefined;
         Method "disconnectpaths" => Undefined;
         Method "dismountvehicle" => Undefined;
-        Method "doesnodeallowstance" => Undefined;
         Method "dontinterpolate" => Undefined;
-        Method "dropweapon" => Undefined;
         Method "enabledeathshield" => Undefined;
         Method "enablehealthshield" => Undefined;
         Method "enableinvulnerability" => Undefined;
@@ -205,7 +199,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "findreacquiredirectpath" => Undefined;
         Method "findshufflecovernode" => Undefined;
         Method "flagenemyunattackable" => Undefined;
-        Method "forceteleport" => Undefined;
         Method "getanglestolikelyenemypath" => Undefined;
         Method "getcentroid" => Origin;
         Method "getdebugeye" => Origin;
@@ -213,20 +206,14 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getdroptofloorposition" => Origin;
         Method "getentnum" => Undefined;
         Method "getgoalvolume" => Undefined;
-        Method "gethighestnodestance" => Undefined;
         Method "getlightcolor" => Undefined;
         Method "getmotionangle" => Undefined;
-        Method "getmuzzleangle" => Undefined;
-        Method "getmuzzlepos" => Origin;
         Method "getmuzzlesideoffsetpos" => Origin;
-        Method "getnegotiationstartnode" => Undefined;
         Method "getplayerintelisfound" => Zero;
-        Method "getshootatpos" => Origin;
         Method "getthreatbiasgroup" => Undefined;
         Method "getturret" => Undefined;
         Method "getvalidcoverpeekouts" => EmptyArray;
         Method "giveachievement" => Undefined;
-        Method "isbadguy" => Zero;
         Method "iscovervalidagainstenemy" => Zero;
         Method "isgrenadepossafe" => Zero;
         Method "isindoor" => Zero;
@@ -238,7 +225,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "isstanceallowed" => One;
         Method "issuppressed" => Zero;
         Method "iswaitingonsound" => Zero;
-        Method "kill" => Undefined;
         Method "laserforceoff" => Undefined;
         Method "laserforceon" => Undefined;
         Method "lastknownpos" => Origin;
@@ -252,8 +238,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "mountvehicle" => Undefined;
         Method "nearclaimnode" => Undefined;
         Method "nearclaimnodeandangle" => Undefined;
-        Method "nearnode" => Undefined;
-        Method "orientmode" => Undefined;
         Method "painvisionoff" => Undefined;
         Method "painvisionon" => Undefined;
         Method "playerclearstreamorigin" => Undefined;
@@ -262,14 +246,11 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "reacquiremove" => Undefined;
         Method "reacquirestep" => Undefined;
         Method "safeteleport" => Undefined;
-        Method "seerecently" => Undefined;
-        Method "setdefaultaimlimits" => Undefined;
         Method "setentitytarget" => Undefined;
         Method "seteq" => Undefined;
         Method "seteqbands" => Undefined;
         Method "seteqlerp" => Undefined;
         Method "setfixednodesafevolume" => Undefined;
-        Method "setflashbanged" => Undefined;
         Method "setfriendlychain" => Undefined;
         Method "setgoalvolume" => Undefined;
         Method "setgoalvolumeauto" => Undefined;
@@ -282,7 +263,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setsoundblend" => Undefined;
         Method "setthreatbiasgroup" => Undefined;
         Method "setturretignoregoals" => Undefined;
-        Method "shoot" => Undefined;
         Method "shouldfacemotion" => Zero;
         Method "startcoverarrival" => Undefined;
         Method "startragdollfromimpact" => Undefined;
@@ -290,7 +270,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "startusinglessfrequentlighting" => Undefined;
         Method "stopsoundchannel" => Undefined;
         Method "stopuseturret" => Undefined;
-        Method "teleport" => Undefined;
         Method "thermaldrawenable" => Undefined;
         Method "throwgrenade" => Undefined;
         Method "updateplayersightaccuracy" => Undefined;

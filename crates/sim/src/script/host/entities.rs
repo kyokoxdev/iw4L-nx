@@ -168,7 +168,10 @@ pub(crate) enum EntityKind {
     Spawned,
     HudElem,
     Player,
-    Corpse { slot: u8, anim: Option<Arc<str>> },
+    Corpse {
+        slot: u8,
+        anim: Option<Arc<str>>,
+    },
     Item(i32),
     Missile(crate::ProjectileId),
     Vehicle,
@@ -338,7 +341,7 @@ impl Runtime {
         );
         if kind != EntityKind::HudElem {
             self.set_object_field(id, "classname", Value::string(classname));
-            let code = if classname.starts_with("script_vehicle") {
+            let code = if is_vehicle_class(classname) {
                 "script_vehicle"
             } else {
                 classname
@@ -412,7 +415,10 @@ impl Runtime {
                 presence,
                 matches!(
                     entity.kind,
-                    EntityKind::Spawned | EntityKind::Vehicle | EntityKind::Actor | EntityKind::Missile(_)
+                    EntityKind::Spawned
+                        | EntityKind::Vehicle
+                        | EntityKind::Actor
+                        | EntityKind::Missile(_)
                 ),
             ));
         }
@@ -551,6 +557,11 @@ impl Runtime {
         }
         Ok(())
     }
+}
+
+/// `script_vehicle_<type>`; the collision map placed next to vehicles is not one.
+pub(crate) fn is_vehicle_class(classname: &str) -> bool {
+    classname.starts_with("script_vehicle") && classname != "script_vehicle_collmap"
 }
 
 pub(crate) const MAX_SCRIPT_ENTITIES: usize = 2048 - 64;

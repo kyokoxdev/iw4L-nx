@@ -58,6 +58,9 @@ pub(crate) struct Heli {
     on_target: bool,
     gunner: Option<u32>,
     next_fire_ms: i32,
+    /// SP ground vehicle on an `info_vehicle_node` path: rolls through nodes,
+    /// takes their `speed`, keeps level.
+    ground: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +137,7 @@ impl Default for Heli {
             on_target: false,
             gunner: None,
             next_fire_ms: 0,
+            ground: false,
         }
     }
 }
@@ -252,7 +256,8 @@ fn spawn_vehicle(
     model: &str,
     flight: Option<Heli>,
 ) -> Result<Value, String> {
-    let slot = if flight.is_some() {
+    // Campaign levels hold more vehicles than the MP pool; they take no slot.
+    let slot = if flight.is_some() && !sp_level(world) {
         let runtime = world.resource::<Runtime>();
         Some(
             (0..VEHICLE_SLOTS)
@@ -275,11 +280,13 @@ fn spawn_vehicle(
     runtime.set_object_field(id, "origin", Value::Vector(origin));
     runtime.set_object_field(id, "angles", Value::Vector(angles));
     runtime.set_object_field(id, "model", Value::string(model));
+    // Tags answer in the spawning frame, as after `setmodel`.
+    runtime.new_models.push(id);
     let entity = runtime.entities.get_mut(&id).unwrap();
     entity.presence = Some(presence);
     entity.can_damage = true;
     if let Some(mut flight) = flight {
-        flight.slot = slot.unwrap();
+        flight.slot = slot.unwrap_or(u8::MAX);
         flight.heading = math_iw4::angle_vectors(angles).0;
         runtime.set_object_field(id, "veh_speed", Value::Float(0.0));
         runtime.vehicles.insert(id, flight);
@@ -336,6 +343,119 @@ fn next_node(runtime: &mut Runtime, object: u64) -> Result<Option<u64>, String> 
             "vehicle path target '{target}' does not identify one node"
         )),
     }
+}
+
+/// A level with AI path nodes is a campaign level; its vehicle paths are ground paths.
+fn sp_level(world: &World) -> bool {
+    !world.resource::<Runtime>().nodes.is_empty()
+}
+
+/// A vehicle node's `speed` key, in mph.
+fn node_speed(runtime: &mut Runtime, node: u64) -> Option<f32> {
+    match runtime.object_field(node, "speed") {
+        Value::Int(speed) => Some(speed as f32),
+        Value::Float(speed) => Some(speed),
+        Value::String(speed) => speed.parse().ok(),
+        _ => None,
+    }
+}
+
+// ponytail: a node's speed applies with the vehicle's current accel (or the
+// speed itself as accel); node `lookahead` and spline paths are not read.
+fn take_speed(vehicle: &mut Heli, mph: f32) {
+    vehicle.max_speed = mph.max(0.0) * MPH;
+    if vehicle.accel <= 0.0 {
+        vehicle.accel = vehicle.max_speed.max(MPH);
+    }
+    if vehicle.decel <= 0.0 {
+        vehicle.decel = vehicle.accel;
+    }
+}
+
+/// Map `script_vehicle`s that are not spawners are live vehicles from the start.
+pub(crate) fn init_map_vehicles(world: &mut World) {
+    let ids: Vec<u64> = {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let ids: Vec<u64> = runtime
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                e.kind == EntityKind::Map && super::entities::is_vehicle_class(&e.classname)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter()
+            .filter(|id| {
+                !matches!(runtime.object_field(*id, "spawnflags"),
+                    Value::Int(f) if f & super::actors::VEHICLE_SPAWNER != 0)
+            })
+            .collect()
+    };
+    for id in ids {
+        let origin = vec_field(&mut world.resource_mut::<Runtime>(), id, "origin");
+        let Ok(presence) = super::presence::spawn_presence(world, origin) else {
+            continue;
+        };
+        let mut runtime = world.resource_mut::<Runtime>();
+        let entity = runtime.entities.get_mut(&id).unwrap();
+        entity.kind = EntityKind::Vehicle;
+        entity.can_damage = true;
+        entity.presence = Some(presence);
+        runtime.new_models.push(id);
+        runtime.vehicles.insert(
+            id,
+            Heli {
+                slot: u8::MAX,
+                ..Heli::default()
+            },
+        );
+    }
+}
+
+/// SP `vehicle_dospawn()`: a live vehicle at the spawner, carrying its keys
+/// but `classname`/`targetname`.
+fn spawn_from_spawner(world: &mut World, spawner: u64) -> Result<Value, String> {
+    let (origin, angles, model, classname, fields) = {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let entity = &runtime.entities[&spawner];
+        if !super::entities::is_vehicle_class(&entity.classname)
+            || entity.kind == EntityKind::Vehicle
+        {
+            return Err("receiver is not a vehicle spawner".into());
+        }
+        let classname = entity.classname.clone();
+        let model = match runtime.object_field(spawner, "model") {
+            Value::String(model) => model.to_string(),
+            _ => String::new(),
+        };
+        (
+            vec_field(&mut runtime, spawner, "origin"),
+            vec_field(&mut runtime, spawner, "angles"),
+            model,
+            classname,
+            runtime.objects.get(&spawner).cloned().unwrap_or_default(),
+        )
+    };
+    let vehicle = spawn_vehicle(
+        world,
+        &classname,
+        origin,
+        angles,
+        &model,
+        Some(Heli::default()),
+    )?;
+    let Value::Object(id) = vehicle else {
+        return Ok(vehicle);
+    };
+    let mut runtime = world.resource_mut::<Runtime>();
+    let skip = ["classname", "targetname"].map(|name| runtime.symbol(name));
+    let body = runtime.objects.get_mut(&id).unwrap();
+    for (field, value) in fields {
+        if !skip.contains(&field) {
+            body.entry(field).or_insert(value);
+        }
+    }
+    Ok(vehicle)
 }
 
 fn vehicle_array(world: &mut World, prefix: Option<&str>) -> Result<Value, String> {
@@ -470,10 +590,12 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         heli(world, receiver)?;
         let object = super::natives::engine::entity_id(world, arg(args, 0)?)?;
         node(&mut world.resource_mut::<Runtime>(), object)?;
+        let ground = sp_level(world);
         let vehicle = heli(world, receiver)?;
         vehicle.path_node = Some(object);
         vehicle.path_running = false;
         vehicle.goal = None;
+        vehicle.ground |= ground;
         Ok(Value::Undefined)
     });
     registry.register(Method, "startpath", |world, receiver, args| {
@@ -483,14 +605,22 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             None => attached.ok_or("vehicle has no attached path")?,
         };
         let origin = node(&mut world.resource_mut::<Runtime>(), object)?;
+        let speed = node_speed(&mut world.resource_mut::<Runtime>(), object);
         let vehicle = heli(world, receiver)?;
         vehicle.path_node = Some(object);
         vehicle.path_running = true;
-        set_goal(vehicle, origin, true);
+        let ground = vehicle.ground;
+        if ground && let Some(speed) = speed {
+            take_speed(vehicle, speed);
+        }
+        set_goal(vehicle, origin, !ground);
         Ok(Value::Undefined)
     });
     registry.register(Method, "vehicle_dospawn", |world, receiver, args| {
         let object = super::natives::engine::entity_id(world, receiver)?;
+        if args.is_empty() {
+            return spawn_from_spawner(world, object);
+        }
         let definition = string(args, 0)?;
         let owner = world
             .resource::<Runtime>()
@@ -1093,7 +1223,11 @@ pub(crate) fn advance(world: &mut World) {
             [heli.yaw_speed, heli.yaw_accel, heli.yaw_decel],
             heli.yaw_overshoot,
         );
-        let [pitch_target, roll_target] = body_tilt(heli, velocity, angles[1], before, goal_left);
+        let [pitch_target, roll_target] = if heli.ground {
+            [math_iw4::vect_to_angles(heli.heading)[0], 0.0]
+        } else {
+            body_tilt(heli, velocity, angles[1], before, goal_left)
+        };
         let ratio = if heli.def_accel > 0.0 {
             (heli.accel / heli.def_accel).clamp(0.0, 1.0)
         } else {
@@ -1141,15 +1275,30 @@ pub(crate) fn advance(world: &mut World) {
                 Some(next) => Ok(Some((next, node(&mut runtime, next)?))),
                 None => Ok(None),
             });
+            let ground = runtime.vehicles[&id].ground;
+            let reached_speed = node_speed(&mut runtime, reached);
+            let last = match &successor {
+                Ok(Some((next, _))) => {
+                    ground && !matches!(next_node(&mut runtime, *next), Ok(Some(_)))
+                }
+                _ => true,
+            };
+            if ground && let Some(speed) = reached_speed {
+                take_speed(runtime.vehicles.get_mut(&id).unwrap(), speed);
+            }
             match successor {
                 Ok(Some((node, goal))) => {
                     let vehicle = runtime.vehicles.get_mut(&id).unwrap();
                     vehicle.path_node = Some(node);
-                    set_goal(vehicle, goal, true);
+                    set_goal(vehicle, goal, !ground || last);
                 }
                 Ok(None) => {
                     runtime.vehicles.get_mut(&id).unwrap().path_running = false;
-                    notes.push("end_of_path");
+                    notes.push(if ground {
+                        "reached_end_node"
+                    } else {
+                        "end_of_path"
+                    });
                 }
                 Err(error) => {
                     runtime.vehicles.get_mut(&id).unwrap().path_running = false;
@@ -1174,6 +1323,21 @@ pub(crate) fn advance(world: &mut World) {
             raise(world, Value::Object(id), note, Vec::new());
         }
     }
+}
+
+/// Names the T5 refusals also claim; registered after them.
+pub(crate) fn register_sp(registry: &mut NativeRegistry) {
+    registry.register(Method, "setvehicleteam", |world, receiver, args| {
+        heli(world, receiver)?;
+        let team = string(args, 0)?;
+        let object = super::natives::engine::entity_id(world, receiver)?;
+        world.resource_mut::<Runtime>().set_object_field(
+            object,
+            "script_team",
+            Value::string(&team),
+        );
+        Ok(Value::Undefined)
+    });
 }
 
 pub(crate) fn compass_rows(world: &mut World) -> Vec<crate::CompassVehicle> {
@@ -1230,7 +1394,7 @@ pub(crate) fn hud_targets(world: &World) -> Vec<crate::VehicleHudTarget> {
         .vehicles
         .iter()
         .filter_map(|(id, vehicle)| {
-            if !runtime.live(id) {
+            if !runtime.live(id) || vehicle.slot >= VEHICLE_SLOTS {
                 return None;
             }
             let entity = runtime.entities.get(id)?;

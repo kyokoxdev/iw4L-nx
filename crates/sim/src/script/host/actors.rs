@@ -11,6 +11,8 @@ use crate::script::{Namespace, NativeRegistry, Runtime, Value};
 
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
+/// The same for a `script_vehicle` (its flag 1 marks a drivable vehicle).
+pub(crate) const VEHICLE_SPAWNER: i32 = 2;
 
 /// Routes over the level's path nodes, built by the bot brain.
 pub trait ActorNav: Send + Sync {
@@ -44,9 +46,54 @@ pub(crate) struct ActorGoal {
     settled: bool,
 }
 
-// ponytail: one constant run speed; the motor becomes anim deltas
-// (`animmode`/`orientmode`) once animscripts drive movement.
+/// A state the engine holds the actor in until it ends, instead of choosing
+/// its animscript from its situation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hold {
+    /// `animcustom`: until the function returns.
+    Custom,
+    /// `animscripted`: until the clip has played out (seen on an earlier tick,
+    /// so a scene that restarts the clip on its `end` keeps the hold).
+    Scripted {
+        started: bool,
+        ended: bool,
+    },
+    Pain,
+    Death,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Orient {
+    /// Face the way the actor moves; hold still otherwise.
+    #[default]
+    Default,
+    Current,
+    Motion,
+    Angle(f32),
+    Point([f32; 3]),
+    Enemy,
+}
+
+/// Which animscript runs the actor, and how its animation moves it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ActorBrain {
+    /// `stop`, `move`, `cover_left`, ...; empty before the first.
+    script: Arc<str>,
+    thread: Option<u64>,
+    hold: Option<Hold>,
+    /// `animmode`: anything but `none`/`normal` moves the actor by its root motion.
+    anim_mode: Arc<str>,
+    orient: Orient,
+    /// Level time the enemy was last seen.
+    enemy_seen_ms: i64,
+}
+
+/// Movement without an animation tree (an aitype with no animscripts).
 const RUN_SPEED: f32 = 170.0;
+// ponytail: one turn rate for every orient mode; per-anim turn rates if turns look wrong.
+const TURN_RATE: f32 = 360.0;
+/// `nearnode`: how close counts as at the node.
+const NEAR_NODE: f32 = 32.0;
 /// A goal entity that strays this far from the routed spot gets a new route.
 const REROUTE: f32 = 64.0;
 const DEFAULT_GOAL_RADIUS: f32 = 16.0;
@@ -103,10 +150,12 @@ fn set_goal(
     receiver: &Value,
     target: GoalTarget,
     at: [f32; 3],
+    node: Option<u64>,
 ) -> Result<Value, String> {
     let id = actor(world, receiver)?;
     let mut runtime = world.resource_mut::<Runtime>();
     runtime.set_object_field(id, "goalpos", Value::Vector(at));
+    runtime.set_object_field(id, "node", node.map_or(Value::Undefined, Value::Object));
     runtime.actor_goals.insert(
         id,
         ActorGoal {
@@ -129,89 +178,775 @@ fn origin_of(world: &mut World, value: &Value) -> Result<(u64, [f32; 3]), String
     }
 }
 
-/// Moves each actor with a goal along its route; notifies `goal` on arrival
-/// (inside `goalradius`/`goalheight`) and `bad_path` when no route exists.
+fn health(runtime: &mut Runtime, id: u64) -> i32 {
+    match runtime.object_field(id, "health") {
+        Value::Int(health) => health,
+        Value::Float(health) => health as i32,
+        _ => 0,
+    }
+}
+
+fn live_actors(runtime: &Runtime) -> Vec<u64> {
+    runtime
+        .entities
+        .iter()
+        .filter(|(id, e)| e.kind == EntityKind::Actor && !runtime.pending_deletes.contains(id))
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+fn yaw_to(from: [f32; 3], to: [f32; 3]) -> f32 {
+    (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
+}
+
+/// Once per tick, before threads run: picks each actor's animscript, then moves it.
 pub(crate) fn advance(world: &mut World) {
-    let step = RUN_SPEED * crate::MATCH_TICK_MS as f32 / 1000.0;
-    let mut notes = Vec::new();
+    look(world);
+    run_scripts(world);
+    move_actors(world);
+}
+
+/// Each actor looks around every `SIGHT_PERIOD` ticks (staggered by id).
+const SIGHT_PERIOD: u64 = 4;
+/// An enemy out of sight stays the enemy this long.
+const ENEMY_MEMORY_MS: i64 = 5_000;
+const DEFAULT_SIGHT_DIST: f32 = 8192.0;
+// ponytail: one forward half-angle (90 degrees) unless `fovcosine` is set.
+const DEFAULT_FOV_COS: f32 = 0.0;
+/// Nearest hostiles traced per look.
+const SIGHT_TRACES: usize = 3;
+
+fn hostile(a: &Value, b: &Value) -> bool {
+    let (Value::String(a), Value::String(b)) = (a, b) else {
+        return false;
+    };
+    matches!((&**a, &**b), ("allies", "axis") | ("axis", "allies"))
+}
+
+fn truthy(value: &Value) -> bool {
+    matches!(value, Value::Int(n) if *n != 0) || matches!(value, Value::Float(n) if *n != 0.0)
+}
+
+/// Where an entity is looked at and shot at: actors and players at eye height.
+fn eye(world: &mut World, id: u64) -> Option<[f32; 3]> {
+    match super::players::entity_field(world, id, "origin") {
+        Value::Vector([x, y, z]) => Some([x, y, z + EYE_HEIGHT]),
+        _ => None,
+    }
+}
+
+fn clear_sight(world: &mut World, from: [f32; 3], to: [f32; 3]) -> bool {
+    let trace = super::presence::settled(world).trace_world(
+        from,
+        to,
+        [0.0; 3],
+        [0.0; 3],
+        crate::bullet_collision::MASK_SHOT,
+    );
+    trace.fraction >= 1.0 && trace.startsolid == 0
+}
+
+/// Hostile players and actors that can be fought: `(object, team)`.
+fn combatants(world: &mut World) -> Vec<(u64, Value)> {
     let mut runtime = world.resource_mut::<Runtime>();
-    let nav = runtime.actor_nav.clone();
-    let ids: Vec<u64> = runtime.actor_goals.keys().copied().collect();
-    for id in ids {
-        let Value::Vector(mut origin) = runtime.object_field(id, "origin") else {
-            runtime.actor_goals.remove(&id);
-            continue;
-        };
-        let target = runtime.actor_goals[&id].target.clone();
-        let goal_pos = match target {
-            GoalTarget::Pos(at) => Some(at),
-            GoalTarget::Entity(e) => match runtime.object_field(e, "origin") {
-                Value::Vector(at) if runtime.live(&e) => Some(at),
-                _ => None,
-            },
-        };
-        let Some(goal_pos) = goal_pos.filter(|_| runtime.live(&id)) else {
-            runtime.actor_goals.remove(&id);
-            continue;
-        };
-        let radius = number(runtime.object_field(id, "goalradius")).unwrap_or(DEFAULT_GOAL_RADIUS);
-        let height = number(runtime.object_field(id, "goalheight")).unwrap_or(DEFAULT_GOAL_HEIGHT);
-        let goal = runtime.actor_goals.get_mut(&id).unwrap();
-        let planar = ((origin[0] - goal_pos[0]).powi(2) + (origin[1] - goal_pos[1]).powi(2)).sqrt();
-        if planar <= radius.max(4.0) && (origin[2] - goal_pos[2]).abs() <= height {
-            goal.route.clear();
-            if !goal.settled {
-                goal.settled = true;
-                goal.routed_to = Some(goal_pos);
-                notes.push((id, "goal"));
-            }
-            continue;
+    let mut out: Vec<u64> = runtime.players.values().map(|slot| slot.object).collect();
+    out.extend(
+        live_actors(&runtime)
+            .into_iter()
+            .filter(|id| health(&mut runtime, *id) > 0),
+    );
+    let mut found = Vec::new();
+    for id in out {
+        if !truthy(&runtime.object_field(id, "ignoreme")) {
+            found.push((id, runtime.object_field(id, "team")));
         }
-        if goal
-            .routed_to
-            .is_none_or(|at| distance(at, goal_pos) > REROUTE)
-        {
-            let Some(nav) = &nav else {
-                continue;
+    }
+    found
+}
+
+/// Picks each actor's `enemy`: the nearest hostile it can see, kept while seen
+/// or remembered; notifies `enemy` when it changes.
+fn look(world: &mut World) {
+    let tick = u64::from(world.resource::<crate::step::StepRequest>().tick.0);
+    let now = super::players::now_ms(world);
+    let ids: Vec<u64> = {
+        let mut runtime = world.resource_mut::<Runtime>();
+        live_actors(&runtime)
+            .into_iter()
+            .filter(|id| (id + tick) % SIGHT_PERIOD == 0 && health(&mut runtime, *id) > 0)
+            .collect()
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let all = combatants(world);
+    for id in ids {
+        let (team, current, ignore_all, sight_sq, fov, angles) = {
+            let mut runtime = world.resource_mut::<Runtime>();
+            let sight_sq = number(runtime.object_field(id, "maxsightdistsqrd"))
+                .unwrap_or(DEFAULT_SIGHT_DIST * DEFAULT_SIGHT_DIST);
+            let fov = number(runtime.object_field(id, "fovcosine")).unwrap_or(DEFAULT_FOV_COS);
+            let angles = match runtime.object_field(id, "angles") {
+                Value::Vector(angles) => angles,
+                _ => [0.0; 3],
             };
-            goal.settled = false;
-            goal.routed_to = Some(goal_pos);
-            match nav.0.route(origin, goal_pos) {
-                Some(route) => goal.route = route,
-                None => {
-                    goal.route.clear();
-                    goal.settled = true;
-                    notes.push((id, "bad_path"));
+            let current = match runtime.object_field(id, "enemy") {
+                Value::Object(enemy) => Some(enemy),
+                _ => None,
+            };
+            (
+                runtime.object_field(id, "team"),
+                current,
+                truthy(&runtime.object_field(id, "ignoreall")),
+                sight_sq,
+                fov,
+                angles,
+            )
+        };
+        let Some(from) = eye(world, id) else {
+            continue;
+        };
+        let forward = [angles[1].to_radians().cos(), angles[1].to_radians().sin()];
+        let mut candidates: Vec<(f32, u64, [f32; 3])> = Vec::new();
+        if !ignore_all {
+            for (other, other_team) in &all {
+                if *other == id || !hostile(&team, other_team) {
+                    continue;
+                }
+                let Some(at) = eye(world, *other) else {
+                    continue;
+                };
+                let d = [at[0] - from[0], at[1] - from[1], at[2] - from[2]];
+                let dist_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                let planar = d[0].hypot(d[1]).max(f32::EPSILON);
+                let in_view = (d[0] * forward[0] + d[1] * forward[1]) / planar >= fov;
+                if dist_sq <= sight_sq && (in_view || current == Some(*other)) {
+                    candidates.push((dist_sq, *other, at));
                 }
             }
         }
-        let mut left = step;
-        let mut heading = None;
-        while left > 0.0
-            && let Some(&next) = goal.route.first()
-        {
-            let d = distance(origin, next);
-            if d > 0.0 {
-                heading = Some([next[0] - origin[0], next[1] - origin[1]]);
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let seen = candidates
+            .iter()
+            .take(SIGHT_TRACES)
+            .find(|(_, _, at)| clear_sight(world, from, *at))
+            .map(|(_, other, at)| (*other, *at));
+        let mut brain = brain(world, id);
+        let still_live = current.is_some_and(|enemy| all.iter().any(|(other, _)| *other == enemy));
+        let enemy = match seen {
+            Some((other, at)) => {
+                brain.enemy_seen_ms = now;
+                world.resource_mut::<Runtime>().set_object_field(
+                    id,
+                    "lastenemysightpos",
+                    Value::Vector(at),
+                );
+                // A remembered enemy is not dropped for a nearer one seen once.
+                match current {
+                    Some(enemy)
+                        if enemy != other
+                            && still_live
+                            && candidates.iter().any(|c| c.1 == enemy) =>
+                    {
+                        Some(enemy)
+                    }
+                    _ => Some(other),
+                }
             }
-            if d <= left {
-                origin = next;
-                goal.route.remove(0);
-                left -= d;
+            None if !ignore_all && still_live && now - brain.enemy_seen_ms < ENEMY_MEMORY_MS => {
+                current
+            }
+            None => None,
+        };
+        store(world, id, brain);
+        if enemy != current {
+            world.resource_mut::<Runtime>().set_object_field(
+                id,
+                "enemy",
+                enemy.map_or(Value::Undefined, Value::Object),
+            );
+            crate::script::runtime::raise(world, Value::Object(id), "enemy", Vec::new());
+        }
+    }
+}
+
+/// `shoot([accuracy scale], [point])`: one shot of the actor's weapon at the
+/// point or its enemy, missing by chance per `accuracy`.
+fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
+    let id = actor(world, receiver)?;
+    let (name, accuracy, enemy) = {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let name = match runtime.object_field(id, "weapon") {
+            Value::String(name) => name.to_string(),
+            _ => return Ok(Value::Undefined),
+        };
+        let accuracy = number(runtime.object_field(id, "accuracy")).unwrap_or(1.0);
+        let enemy = match runtime.object_field(id, "enemy") {
+            Value::Object(enemy) => Some(enemy),
+            _ => None,
+        };
+        (name, accuracy, enemy)
+    };
+    if name.is_empty() || name == "none" {
+        return Ok(Value::Undefined);
+    }
+    let weapon =
+        crate::script_player::weapon_named(&crate::frame::FrameWorld::from_world(world), &name)?;
+    let scale = match args.first() {
+        Some(value) => number(value.clone()).unwrap_or(1.0),
+        None => 1.0,
+    };
+    let from = super::turrets::muzzle(world, id);
+    let target = match args.get(1) {
+        Some(Value::Vector(at)) => Some(*at),
+        _ => enemy.and_then(|enemy| eye(world, enemy)),
+    };
+    let forward = match world.resource_mut::<Runtime>().object_field(id, "angles") {
+        Value::Vector(angles) => math_iw4::angle_vectors(angles).0,
+        _ => [1.0, 0.0, 0.0],
+    };
+    let point = match target {
+        Some(at) => {
+            let roll = super::natives::math::random_unit(world);
+            if roll < (accuracy * scale).clamp(0.0, 1.0) {
+                at
             } else {
-                let t = left / d;
-                origin = std::array::from_fn(|k| origin[k] + (next[k] - origin[k]) * t);
-                left = 0.0;
+                // ponytail: a miss passes 16-48 units off the target in a random
+                // direction; per-weapon AI spread graphs would replace this.
+                let angle = super::natives::math::random_unit(world) * std::f32::consts::TAU;
+                let off = 16.0 + super::natives::math::random_unit(world) * 32.0;
+                [
+                    at[0] + angle.cos() * off,
+                    at[1] + angle.sin() * off,
+                    at[2] + (roll - 0.5) * off,
+                ]
             }
         }
+        None => std::array::from_fn(|k| from[k] + forward[k] * 1000.0),
+    };
+    let dir = glam::Vec3::from_array(std::array::from_fn(|k| point[k] - from[k]))
+        .try_normalize()
+        .map_or(forward, |d| d.to_array());
+    super::turrets::fire_bullet(world, id, from, dir, weapon, None);
+    Ok(Value::Undefined)
+}
+
+/// The animscript for the actor's situation: `move` on a route, its cover
+/// script at a claimed cover node, `combat` with an enemy, else `stop`.
+fn desired_script(world: &mut World, id: u64) -> String {
+    let mut runtime = world.resource_mut::<Runtime>();
+    if runtime
+        .actor_goals
+        .get(&id)
+        .is_some_and(|goal| !goal.route.is_empty())
+    {
+        return "move".into();
+    }
+    let cover = match (
+        runtime.object_field(id, "node"),
+        runtime.object_field(id, "origin"),
+    ) {
+        (Value::Object(node), Value::Vector(origin)) => match (
+            runtime.object_field(node, "origin"),
+            runtime.object_field(node, "type"),
+        ) {
+            (Value::Vector(at), Value::String(kind)) if near(origin, at) => cover_script(&kind),
+            _ => None,
+        },
+        _ => None,
+    };
+    let enemy =
+        matches!(runtime.object_field(id, "enemy"), Value::Object(enemy) if runtime.live(&enemy));
+    drop(runtime);
+    if let Some(script) = cover
+        && has_entry(world, &format!("animscripts/{script}::main"))
+    {
+        return script.into();
+    }
+    if enemy {
+        return "combat".into();
+    }
+    "stop".into()
+}
+
+fn cover_script(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "Cover Stand" => "cover_stand",
+        "Cover Crouch" | "Cover Crouch Window" => "cover_crouch",
+        "Cover Prone" => "cover_prone",
+        "Cover Left" | "Cover Wide Left" => "cover_left",
+        "Cover Right" | "Cover Wide Right" => "cover_right",
+        _ => return None,
+    })
+}
+
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt() <= NEAR_NODE
+        && (a[2] - b[2]).abs() <= DEFAULT_GOAL_HEIGHT
+}
+
+enum Start<'a> {
+    Entry(&'a str),
+    Function(u32),
+}
+
+/// Ends the running animscript (`killanimscript`, its `end_script`) and starts `script`.
+fn switch(world: &mut World, id: u64, brain: &mut ActorBrain, script: &str, start: Start) {
+    let old = std::mem::replace(&mut brain.script, script.into());
+    if let Some(thread) = brain.thread.take() {
+        // A queued thread has not reached its `endon` yet.
+        crate::script::runtime::stop_thread(world, thread);
+    }
+    let receiver = Value::Object(id);
+    if &*old == "scripted"
+        && let Some(anim) = world
+            .resource_mut::<Runtime>()
+            .entities
+            .get_mut(&id)
+            .and_then(|entity| entity.anim.as_mut())
+    {
+        // The actor stays where the clip left it; its own motor takes over.
+        anim.scripted = None;
+    }
+    if !old.is_empty() {
+        crate::script::runtime::raise(world, receiver.clone(), "killanimscript", Vec::new());
+        let end = format!("animscripts/{old}::end_script");
+        if has_entry(world, &end) {
+            let now = super::players::now_ms(world);
+            let _ = crate::script::runtime::run_now(world, &end, receiver.clone(), Vec::new(), now);
+        }
+    }
+    {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let prev = if old.is_empty() { "none" } else { &old };
+        runtime.set_object_field(id, "prevscript", Value::string(prev));
+        runtime.set_object_field(id, "script", Value::string(script));
+    }
+    brain.thread = match start {
+        Start::Entry(entry) if has_entry(world, entry) => {
+            crate::script::runtime::start_thread(world, entry, receiver, Vec::new()).ok()
+        }
+        Start::Entry(_) => None,
+        Start::Function(function) => {
+            crate::script::runtime::start_function(world, function, receiver, Vec::new()).ok()
+        }
+    };
+}
+
+fn brain(world: &World, id: u64) -> ActorBrain {
+    world
+        .resource::<Runtime>()
+        .actor_brains
+        .get(&id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn store(world: &mut World, id: u64, brain: ActorBrain) {
+    world
+        .resource_mut::<Runtime>()
+        .actor_brains
+        .insert(id, brain);
+}
+
+fn switch_to(world: &mut World, id: u64, script: &str, hold: Option<Hold>) {
+    let mut brain = brain(world, id);
+    let entry = format!("animscripts/{script}::main");
+    switch(world, id, &mut brain, script, Start::Entry(&entry));
+    brain.hold = hold;
+    store(world, id, brain);
+}
+
+fn run_scripts(world: &mut World) {
+    let library = world.resource::<Runtime>().anim_library.clone();
+    let ids = live_actors(world.resource::<Runtime>());
+    world
+        .resource_mut::<Runtime>()
+        .actor_brains
+        .retain(|id, _| ids.contains(id));
+    for id in ids {
+        let mut brain = brain(world, id);
+        if health(&mut world.resource_mut::<Runtime>(), id) <= 0 {
+            if brain.hold != Some(Hold::Death) {
+                switch_to(world, id, "death", Some(Hold::Death));
+            }
+            continue;
+        }
+        let thread_done = brain
+            .thread
+            .is_none_or(|thread| !crate::script::runtime::running(world, thread));
+        brain.hold = match brain.hold {
+            Some(Hold::Scripted { started, ended }) => {
+                let state = world
+                    .resource_mut::<Runtime>()
+                    .entities
+                    .get_mut(&id)
+                    .and_then(|entity| entity.anim.as_mut())
+                    .and_then(|anim| anim.scripted_ended(&library));
+                match state {
+                    Some(true) if ended => None,
+                    Some(now_ended) => Some(Hold::Scripted {
+                        started: true,
+                        ended: now_ended,
+                    }),
+                    None if started || thread_done => None,
+                    None => Some(Hold::Scripted { started, ended }),
+                }
+            }
+            Some(Hold::Custom | Hold::Pain) if thread_done => None,
+            Some(Hold::Death) => None,
+            hold => hold,
+        };
+        if brain.hold.is_none() {
+            let desired = desired_script(world, id);
+            if *brain.script != *desired {
+                let entry = format!("animscripts/{desired}::main");
+                switch(world, id, &mut brain, &desired, Start::Entry(&entry));
+            }
+        }
+        store(world, id, brain);
+    }
+}
+
+fn approach_yaw(from: f32, to: f32, max: f32) -> f32 {
+    let delta = math_iw4::angle_subtract(to, from).clamp(-max, max);
+    math_iw4::angle_normalize_360(from + delta)
+}
+
+/// Moves each actor: along its goal route at its animation's speed while its
+/// animscript is `move` (`animmode` none), else by its root motion; turns it
+/// per `orientmode`. Notifies `goal` on arrival (inside `goalradius`/`goalheight`)
+/// and `bad_path` when no route exists.
+fn move_actors(world: &mut World) {
+    let dt = crate::MATCH_TICK_MS as f32 / 1000.0;
+    let mut notes = Vec::new();
+    let mut runtime = world.resource_mut::<Runtime>();
+    let nav = runtime.actor_nav.clone();
+    let ids = live_actors(&runtime);
+    let gone: Vec<u64> = runtime
+        .actor_goals
+        .keys()
+        .copied()
+        .filter(|id| !runtime.live(id))
+        .collect();
+    for id in gone {
+        runtime.actor_goals.remove(&id);
+    }
+    for id in ids {
+        let Value::Vector(mut origin) = runtime.object_field(id, "origin") else {
+            continue;
+        };
+        let mut angles = match runtime.object_field(id, "angles") {
+            Value::Vector(angles) => angles,
+            _ => [0.0; 3],
+        };
+        let brain = runtime.actor_brains.get(&id).cloned().unwrap_or_default();
+        let (delta, turn, has_tree, scripted) = match &runtime.entities[&id].anim {
+            Some(anim) => (
+                anim.root_delta.0,
+                anim.root_delta.1,
+                true,
+                anim.scripted.is_some(),
+            ),
+            None => ([0.0; 3], 0.0, false, false),
+        };
+        if scripted {
+            continue;
+        }
+        let code_moves = matches!(&*brain.anim_mode, "" | "none" | "normal");
+        let walking = code_moves && (brain.script.is_empty() || &*brain.script == "move");
+        let start = origin;
+        let mut heading = None;
+        let mut path_goal = None;
+        if let Some(target) = runtime.actor_goals.get(&id).map(|goal| goal.target.clone()) {
+            let goal_pos = match target {
+                GoalTarget::Pos(at) => Some(at),
+                GoalTarget::Entity(e) => match runtime.object_field(e, "origin") {
+                    Value::Vector(at) if runtime.live(&e) => Some(at),
+                    _ => None,
+                },
+            };
+            let Some(goal_pos) = goal_pos else {
+                runtime.actor_goals.remove(&id);
+                continue;
+            };
+            let radius =
+                number(runtime.object_field(id, "goalradius")).unwrap_or(DEFAULT_GOAL_RADIUS);
+            let height =
+                number(runtime.object_field(id, "goalheight")).unwrap_or(DEFAULT_GOAL_HEIGHT);
+            let goal = runtime.actor_goals.get_mut(&id).unwrap();
+            let planar =
+                ((origin[0] - goal_pos[0]).powi(2) + (origin[1] - goal_pos[1]).powi(2)).sqrt();
+            if planar <= radius.max(4.0) && (origin[2] - goal_pos[2]).abs() <= height {
+                goal.route.clear();
+                if !goal.settled {
+                    goal.settled = true;
+                    goal.routed_to = Some(goal_pos);
+                    notes.push((id, "goal"));
+                }
+            } else {
+                if goal
+                    .routed_to
+                    .is_none_or(|at| distance(at, goal_pos) > REROUTE)
+                    && let Some(nav) = &nav
+                {
+                    goal.settled = false;
+                    goal.routed_to = Some(goal_pos);
+                    match nav.0.route(origin, goal_pos) {
+                        Some(route) => goal.route = route,
+                        None => {
+                            goal.route.clear();
+                            goal.settled = true;
+                            notes.push((id, "bad_path"));
+                        }
+                    }
+                }
+                if !goal.route.is_empty() {
+                    path_goal = Some(goal_pos);
+                }
+                if let Some(&next) = goal.route.first() {
+                    heading = Some([next[0] - origin[0], next[1] - origin[1]]);
+                }
+                if walking {
+                    let mut left = if has_tree {
+                        delta[0].hypot(delta[1])
+                    } else {
+                        RUN_SPEED * dt
+                    };
+                    while left > 0.0
+                        && let Some(&next) = goal.route.first()
+                    {
+                        let d = distance(origin, next);
+                        if d > 0.0 {
+                            heading = Some([next[0] - origin[0], next[1] - origin[1]]);
+                        }
+                        if d <= left {
+                            origin = next;
+                            goal.route.remove(0);
+                            left -= d;
+                        } else {
+                            let t = left / d;
+                            origin = std::array::from_fn(|k| origin[k] + (next[k] - origin[k]) * t);
+                            left = 0.0;
+                        }
+                    }
+                }
+            }
+        }
+        if !code_moves {
+            let world_delta = super::script_anim::rotate([0.0, angles[1], 0.0], delta);
+            origin = std::array::from_fn(|k| origin[k] + world_delta[k]);
+        }
+        let face = |at: [f32; 3]| yaw_to(origin, at);
+        let motion = heading
+            .filter(|_| walking)
+            .map(|[x, y]| y.atan2(x).to_degrees());
+        let enemy = match runtime.object_field(id, "enemy") {
+            Value::Object(enemy) => match runtime.object_field(enemy, "origin") {
+                Value::Vector(at) => Some(face(at)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let want = match brain.orient {
+            Orient::Angle(yaw) => Some(yaw),
+            Orient::Point(at) => Some(face(at)),
+            Orient::Current => None,
+            Orient::Motion | Orient::Default => motion,
+            Orient::Enemy => enemy.or(motion),
+        };
+        let yaw = match want {
+            Some(want) => approach_yaw(angles[1], want, TURN_RATE * dt),
+            None if !code_moves => math_iw4::angle_normalize_360(angles[1] + turn),
+            None => angles[1],
+        };
+        let moved = origin != start || yaw != angles[1];
+        angles[1] = yaw;
         if let Some([x, y]) = heading {
+            let len = x.hypot(y).max(f32::EPSILON);
+            runtime.set_object_field(id, "lookaheaddir", Value::Vector([x / len, y / len, 0.0]));
+        }
+        runtime.set_object_field(
+            id,
+            "pathgoalpos",
+            path_goal.map_or(Value::Undefined, Value::Vector),
+        );
+        runtime.set_object_field(
+            id,
+            "velocity",
+            Value::Vector(std::array::from_fn(|k| (origin[k] - start[k]) / dt)),
+        );
+        if moved {
             runtime.set_object_field(id, "origin", Value::Vector(origin));
-            let yaw = y.atan2(x).to_degrees();
-            runtime.set_object_field(id, "angles", Value::Vector([0.0, yaw, 0.0]));
+            runtime.set_object_field(id, "angles", Value::Vector(angles));
         }
     }
     for (id, note) in notes {
         crate::script::runtime::raise(world, Value::Object(id), note, Vec::new());
+    }
+}
+
+/// Engine fields a fresh actor carries before its scripts run.
+fn init_fields(world: &mut World, id: u64) {
+    let mut runtime = world.resource_mut::<Runtime>();
+    let yaw = match runtime.object_field(id, "angles") {
+        Value::Vector(angles) => angles[1],
+        _ => 0.0,
+    };
+    let forward = [yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0];
+    let health = health(&mut runtime, id);
+    let fields = [
+        ("maxhealth", Value::Int(health)),
+        ("script", Value::string("init")),
+        ("prevscript", Value::string("none")),
+        ("movemode", Value::string("run")),
+        ("combatmode", Value::string("cover")),
+        ("lookaheaddir", Value::Vector(forward)),
+        ("lookaheaddist", Value::Float(0.0)),
+        ("lookforward", Value::Vector(forward)),
+        ("desiredangle", Value::Float(yaw)),
+        ("facemotion", Value::Int(1)),
+        ("stairsstate", Value::string("none")),
+        ("groundtype", Value::string("dirt")),
+        ("damageyaw", Value::Float(0.0)),
+        ("damagelocation", Value::string("none")),
+        ("damagedir", Value::Vector([0.0; 3])),
+        ("damagemod", Value::string("MOD_UNKNOWN")),
+        ("damageweapon", Value::string("none")),
+        ("damagetaken", Value::Int(0)),
+        ("relativedir", Value::Int(0)),
+        ("suppressionmeter", Value::Float(0.0)),
+        ("alertlevel", Value::string("noncombat")),
+        ("alertlevelint", Value::Int(0)),
+        ("velocity", Value::Vector([0.0; 3])),
+        ("lookaheadhitsstairs", Value::Int(0)),
+        ("teammovewaittime", Value::Int(0)),
+        // ponytail: never set; trace muzzle-to-wall if AI aim through walls shows.
+        ("gunblockedbywall", Value::Int(0)),
+    ];
+    for (name, value) in fields {
+        if runtime.object_field(id, name) == Value::Undefined {
+            runtime.set_object_field(id, name, value);
+        }
+    }
+    default_aim_limits(&mut runtime, id);
+}
+
+// ponytail: one aim cone for every actor (45 degrees each way); per-aitype
+// limits if an aim looks clipped.
+fn default_aim_limits(runtime: &mut Runtime, id: u64) {
+    for (name, limit) in [
+        ("rightaimlimit", 45.0),
+        ("leftaimlimit", -45.0),
+        ("upaimlimit", 45.0),
+        ("downaimlimit", -45.0),
+    ] {
+        runtime.set_object_field(id, name, Value::Float(limit));
+    }
+}
+
+const EYE_HEIGHT: f32 = 64.0;
+
+/// The highest stance a node's type lets an actor take at it.
+fn highest_stance(world: &mut World, node: &Value) -> Result<&'static str, String> {
+    let Value::Object(node) = node else {
+        return Err("receiver is not a node".into());
+    };
+    let kind = world.resource_mut::<Runtime>().object_field(*node, "type");
+    let Value::String(kind) = kind else {
+        return Err("receiver is not a node".into());
+    };
+    Ok(match &*kind {
+        "Cover Prone" | "Conceal Prone" => "prone",
+        "Cover Crouch" | "Cover Crouch Window" | "Conceal Crouch" => "crouch",
+        _ => "stand",
+    })
+}
+
+/// IW4 hit location of a humanoid bone, by the bone's name.
+fn hit_location(tag: &str) -> &'static str {
+    let tag = tag.to_ascii_lowercase();
+    let side = |right: &'static str, left: &'static str| {
+        if tag.ends_with("_ri") { right } else { left }
+    };
+    match tag.as_str() {
+        "j_helmet" => "helmet",
+        "j_head" | "j_head_end" | "tag_eye" => "head",
+        "j_neck" => "neck",
+        t if t.starts_with("j_spine4")
+            || t.starts_with("j_spineupper")
+            || t.starts_with("j_clavicle") =>
+        {
+            "torso_upper"
+        }
+        t if t.starts_with("j_spine") || t == "j_mainroot" || t == "pelvis" => "torso_lower",
+        t if t.starts_with("j_shoulder") || t.starts_with("j_bicep") => {
+            side("right_arm_upper", "left_arm_upper")
+        }
+        t if t.starts_with("j_elbow") || t.starts_with("j_forearm") => {
+            side("right_arm_lower", "left_arm_lower")
+        }
+        t if t.starts_with("j_wrist")
+            || t.starts_with("j_thumb")
+            || t.starts_with("j_index")
+            || t.starts_with("j_mid")
+            || t.starts_with("j_ring")
+            || t.starts_with("j_pinky") =>
+        {
+            side("right_hand", "left_hand")
+        }
+        t if t.starts_with("j_hip") => side("right_leg_upper", "left_leg_upper"),
+        t if t.starts_with("j_knee") => side("right_leg_lower", "left_leg_lower"),
+        t if t.starts_with("j_ankle") || t.starts_with("j_ball") => side("right_foot", "left_foot"),
+        "" => "none",
+        _ => "torso_upper",
+    }
+}
+
+/// Records the hit on the actor's damage fields and, when it survives, puts
+/// it in `pain` unless a scene or another hold owns it.
+pub(crate) fn damaged(
+    world: &mut World,
+    id: u64,
+    hit: &super::entity_damage::EntityHit,
+    attacker: &Value,
+    weapon: &str,
+    tag: &str,
+) {
+    let alive = {
+        let mut runtime = world.resource_mut::<Runtime>();
+        let yaw = match runtime.object_field(id, "angles") {
+            Value::Vector(angles) => angles[1],
+            _ => 0.0,
+        };
+        let from = hit.dir[1].atan2(hit.dir[0]).to_degrees() + 180.0;
+        let fields = [
+            ("damagetaken", Value::Int(hit.amount)),
+            ("damagedir", Value::Vector(hit.dir)),
+            ("damagelocation", Value::string(hit_location(tag))),
+            (
+                "damageyaw",
+                Value::Float(math_iw4::angle_subtract(from, yaw)),
+            ),
+            ("damagemod", Value::string(hit.means)),
+            ("damageweapon", Value::string(weapon)),
+        ];
+        for (name, value) in fields {
+            runtime.set_object_field(id, name, value);
+        }
+        if *attacker != Value::Undefined {
+            runtime.set_object_field(id, "lastattacker", attacker.clone());
+        }
+        health(&mut runtime, id) > 0
+    };
+    let pain_allowed = !matches!(
+        world
+            .resource_mut::<Runtime>()
+            .object_field(id, "allowpain"),
+        Value::Int(0)
+    );
+    if alive && pain_allowed && brain(world, id).hold.is_none() {
+        switch_to(world, id, "pain", Some(Hold::Pain));
     }
 }
 
@@ -241,9 +976,22 @@ fn aitype(classname: &str) -> String {
     format!("aitype/{}", aitype.to_ascii_lowercase())
 }
 
-/// Runs each spawner's `aitype/<type>::spawner` (its team) before level main.
+/// Before level main: each aitype the spawners use runs its `precache` once
+/// (it may register spawn behaviour, `_rambo`), then each spawner its `spawner`.
 pub(crate) fn init_spawners(world: &mut World) {
     let now = super::players::now_ms(world);
+    let mut types: Vec<String> = spawners(world)
+        .into_iter()
+        .map(|id| aitype(&world.resource::<Runtime>().entities[&id].classname))
+        .collect();
+    types.sort();
+    types.dedup();
+    for aitype in types {
+        let entry = format!("{aitype}::precache");
+        if has_entry(world, &entry) {
+            let _ = crate::script::runtime::run_now(world, &entry, Value::level(), Vec::new(), now);
+        }
+    }
     for spawner in spawners(world) {
         let classname = world.resource::<Runtime>().entities[&spawner]
             .classname
@@ -299,6 +1047,9 @@ fn spawn_from(world: &mut World, spawner: u64, actor: bool) -> Result<u64, Strin
     let now = super::players::now_ms(world);
     crate::script::runtime::run_now(world, &main, Value::Object(id), Vec::new(), now)
         .map_err(|fault| format!("{main}: {fault:?}"))?;
+    if actor {
+        init_fields(world, id);
+    }
     Ok(id)
 }
 
@@ -430,15 +1181,291 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     registry.register(Method, "setgoalpos", |world, receiver, args| {
         let at = super::args::vector(args, 0)?;
-        set_goal(world, receiver, GoalTarget::Pos(at), at)
+        set_goal(world, receiver, GoalTarget::Pos(at), at, None)
     });
     registry.register(Method, "setgoalnode", |world, receiver, args| {
-        let (_, at) = origin_of(world, super::args::arg(args, 0)?)?;
-        set_goal(world, receiver, GoalTarget::Pos(at), at)
+        let (node, at) = origin_of(world, super::args::arg(args, 0)?)?;
+        set_goal(world, receiver, GoalTarget::Pos(at), at, Some(node))
     });
     registry.register(Method, "setgoalentity", |world, receiver, args| {
         let (target, at) = origin_of(world, super::args::arg(args, 0)?)?;
-        set_goal(world, receiver, GoalTarget::Entity(target), at)
+        set_goal(world, receiver, GoalTarget::Entity(target), at, None)
+    });
+    registry.register(Method, "animcustom", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let Some(Value::Function(function)) = args.first() else {
+            return Err("animcustom expects a function".into());
+        };
+        let mut brain = brain(world, id);
+        switch(world, id, &mut brain, "custom", Start::Function(*function));
+        brain.hold = Some(Hold::Custom);
+        store(world, id, brain);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "animscripted", |world, receiver, args| {
+        let Ok(id) = actor(world, receiver) else {
+            return super::script_anim::scripted_native(world, receiver, args);
+        };
+        const INIT: &str = "animscripts/scripted::init";
+        if !has_entry(world, INIT) {
+            return super::script_anim::scripted_native(world, receiver, args);
+        }
+        let now = super::players::now_ms(world);
+        crate::script::runtime::run_now(world, INIT, receiver.clone(), args.to_vec(), now)
+            .map_err(|fault| format!("{INIT}: {fault:?}"))?;
+        if let Some(anim) = world
+            .resource_mut::<Runtime>()
+            .entities
+            .get_mut(&id)
+            .and_then(|entity| entity.anim.as_mut())
+        {
+            anim.scripted = None;
+        }
+        switch_to(
+            world,
+            id,
+            "scripted",
+            Some(Hold::Scripted {
+                started: false,
+                ended: false,
+            }),
+        );
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "animmode", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let mode = super::args::string(args, 0)?.to_ascii_lowercase();
+        let mut brain = brain(world, id);
+        brain.anim_mode = mode.into();
+        store(world, id, brain);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "orientmode", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let mode = super::args::string(args, 0)?.to_ascii_lowercase();
+        let orient = match mode.as_str() {
+            "face angle" => Orient::Angle(
+                number(super::args::arg(args, 1)?.clone()).ok_or("face angle expects a yaw")?,
+            ),
+            "face point" => Orient::Point(super::args::vector(args, 1)?),
+            "face direction" => {
+                let [x, y, _] = super::args::vector(args, 1)?;
+                Orient::Angle(y.atan2(x).to_degrees())
+            }
+            "face current" => Orient::Current,
+            "face motion" => Orient::Motion,
+            "face enemy" | "face enemy or motion" => Orient::Enemy,
+            _ => Orient::Default,
+        };
+        let mut brain = brain(world, id);
+        brain.orient = orient;
+        store(world, id, brain);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "teleport", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let origin = super::args::vector(args, 0)?;
+        let mut runtime = world.resource_mut::<Runtime>();
+        runtime.set_object_field(id, "origin", Value::Vector(origin));
+        if let Some(angles) = args.get(1).filter(|v| **v != Value::Undefined) {
+            runtime.set_object_field(id, "angles", angles.clone());
+        }
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "nearnode", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let (_, at) = origin_of(world, super::args::arg(args, 0)?)?;
+        let origin = match world.resource_mut::<Runtime>().object_field(id, "origin") {
+            Value::Vector(origin) => origin,
+            _ => return Ok(Value::Int(0)),
+        };
+        Ok(Value::Int(near(origin, at).into()))
+    });
+    registry.register(Method, "getmuzzleangle", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        Ok(world.resource_mut::<Runtime>().object_field(id, "angles"))
+    });
+    registry.register(Method, "kill", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        let mut runtime = world.resource_mut::<Runtime>();
+        if health(&mut runtime, id) <= 0 {
+            return Ok(Value::Undefined);
+        }
+        runtime.set_object_field(id, "health", Value::Int(0));
+        drop(runtime);
+        crate::script::runtime::raise(world, receiver.clone(), "death", vec![Value::Undefined]);
+        Ok(Value::Undefined)
+    });
+    // ponytail: negotiation (traverse) nodes are walked like any link; return
+    // their start node once routes cross them with traverse animscripts.
+    registry.register(Method, "getnegotiationstartnode", |_, _, _| {
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "gethighestnodestance", |world, receiver, _| {
+        Ok(Value::string(highest_stance(world, receiver)?))
+    });
+    registry.register(Method, "doesnodeallowstance", |world, receiver, args| {
+        let order = |stance: &str| {
+            ["prone", "crouch", "stand"]
+                .iter()
+                .position(|s| *s == stance)
+        };
+        let wanted = super::args::string(args, 0)?;
+        let allowed = order(&wanted) <= order(highest_stance(world, receiver)?);
+        Ok(Value::Int(allowed.into()))
+    });
+    // ponytail: standing eye height for every pose; read `a.pose` if crouched AI aim high.
+    registry.register(Method, "getshootatpos", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        Ok(
+            match world.resource_mut::<Runtime>().object_field(id, "origin") {
+                Value::Vector([x, y, z]) => Value::Vector([x, y, z + EYE_HEIGHT]),
+                other => other,
+            },
+        )
+    });
+    for name in ["setflashbanged", "clearentitytarget", "traversemode"] {
+        registry.register(Method, name, |world, receiver, _| {
+            actor(world, receiver)?;
+            Ok(Value::Undefined)
+        });
+    }
+    registry.register(Method, "shoot", shoot);
+    registry.register(Method, "setdefaultaimlimits", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        default_aim_limits(&mut world.resource_mut::<Runtime>(), id);
+        Ok(Value::Undefined)
+    });
+    // `seerecently(ent, seconds)`: the enemy was seen that recently; anyone else is
+    // asked of sight now.
+    registry.register(Method, "seerecently", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let target = entity_id(world, super::args::arg(args, 0)?)?;
+        let window = number(super::args::arg(args, 1)?.clone()).unwrap_or(0.0);
+        let enemy = world.resource_mut::<Runtime>().object_field(id, "enemy");
+        if enemy == Value::Object(target) {
+            let now = super::players::now_ms(world);
+            let seen = brain(world, id).enemy_seen_ms;
+            return Ok(Value::Int((now - seen <= (window * 1000.0) as i64).into()));
+        }
+        let (Some(from), Some(to)) = (eye(world, id), eye(world, target)) else {
+            return Ok(Value::Int(0));
+        };
+        Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    // `dropweapon(weapon, position, [velocity scale])`: the gun falls from its tag.
+    registry.register(Method, "dropweapon", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let name = super::args::string(args, 0)?;
+        let position = super::args::string(args, 1)?;
+        let tag = match position.as_str() {
+            "left" => "tag_weapon_left",
+            "chest" => "tag_weapon_chest",
+            "back" => "tag_stowed_back",
+            _ => "tag_weapon_right",
+        };
+        let (origin, angles) = match super::presence::tag_world(world, id, tag) {
+            Some((origin, axis)) => (origin, math_iw4::axis_to_angles(axis)),
+            None => {
+                let mut runtime = world.resource_mut::<Runtime>();
+                let origin = match runtime.object_field(id, "origin") {
+                    Value::Vector([x, y, z]) => [x, y, z + 40.0],
+                    _ => return Ok(Value::Undefined),
+                };
+                let angles = match runtime.object_field(id, "angles") {
+                    Value::Vector(angles) => angles,
+                    _ => [0.0; 3],
+                };
+                (origin, angles)
+            }
+        };
+        match super::weapons::place_weapon(world, &name, origin, angles)? {
+            Some(number) => {
+                super::natives::player::new_item_entity(world, number, &format!("weapon_{name}"))
+            }
+            None => Ok(Value::Undefined),
+        }
+    });
+    registry.register(Method, "cansee", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let target = entity_id(world, super::args::arg(args, 0)?)?;
+        let (Some(from), Some(to)) = (eye(world, id), eye(world, target)) else {
+            return Ok(Value::Int(0));
+        };
+        Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    registry.register(Method, "canshootenemy", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let Value::Object(enemy) = world.resource_mut::<Runtime>().object_field(id, "enemy") else {
+            return Ok(Value::Int(0));
+        };
+        let from = super::turrets::muzzle(world, id);
+        let Some(to) = eye(world, enemy) else {
+            return Ok(Value::Int(0));
+        };
+        Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    registry.register(Method, "canshoot", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let to = super::args::vector(args, 0)?;
+        let from = super::turrets::muzzle(world, id);
+        Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    registry.register(Method, "getmuzzlepos", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        Ok(Value::Vector(super::turrets::muzzle(world, id)))
+    });
+    registry.register(Method, "clearenemy", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        world
+            .resource_mut::<Runtime>()
+            .set_object_field(id, "enemy", Value::Undefined);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "isbadguy", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        let team = world.resource_mut::<Runtime>().object_field(id, "team");
+        Ok(Value::Int((team == Value::string("axis")).into()))
+    });
+    registry.register(Function, "issentient", |world, _, args| {
+        let sentient = match super::args::arg(args, 0)? {
+            Value::Object(id) => {
+                let runtime = world.resource::<Runtime>();
+                runtime.player_client(*id).is_some()
+                    || runtime
+                        .entities
+                        .get(id)
+                        .is_some_and(|e| e.kind == EntityKind::Actor)
+            }
+            _ => false,
+        };
+        Ok(Value::Int(sentient.into()))
+    });
+    registry.register(Function, "isspawner", |world, _, args| {
+        let Value::Object(id) = super::args::arg(args, 0)? else {
+            return Ok(Value::Int(0));
+        };
+        let id = *id;
+        let mut runtime = world.resource_mut::<Runtime>();
+        let Some(entity) = runtime
+            .entities
+            .get(&id)
+            .filter(|e| e.kind == EntityKind::Map)
+        else {
+            return Ok(Value::Int(0));
+        };
+        let flag = if entity.classname.starts_with("actor_") {
+            SPAWNER
+        } else if super::entities::is_vehicle_class(&entity.classname) {
+            VEHICLE_SPAWNER
+        } else {
+            return Ok(Value::Int(0));
+        };
+        let flags = match runtime.object_field(id, "spawnflags") {
+            Value::Int(flags) => flags,
+            _ => 0,
+        };
+        Ok(Value::Int((flags & flag != 0).into()))
     });
     registry.register(Function, "isai", |world, _, args| {
         let actor = world

@@ -1290,6 +1290,8 @@ fn start_deferred(world: &mut World) {
         return;
     }
     world.resource_mut::<Runtime>().loading = true;
+    super::vehicles::init_map_vehicles(world);
+    super::weapons::place_map_weapons(world);
     super::actors::init_spawners(world);
     for entry in entries {
         if let Err(fault) = crate::script::runtime::start(world, &entry, Value::level(), Vec::new())
