@@ -69,6 +69,8 @@ impl Default for NativeRegistry {
         super::script_anim::register(&mut registry);
         super::actors::register(&mut registry);
         super::vehicles::campaign::register_sp(&mut registry);
+        super::weapons::campaign::register_sp(&mut registry);
+        super::mission::register(&mut registry);
         registry
     }
 }

@@ -35,6 +35,42 @@ pub(crate) fn place_weapon(
     ))
 }
 
+fn combat_facts(
+    world: &mut World,
+    args: &[Value],
+) -> Result<weapon_iw4::WeaponCombatFacts, String> {
+    let name = super::super::args::string(args, 0)?;
+    if name == "none" || name.is_empty() {
+        return Ok(Default::default());
+    }
+    let frame = FrameWorld::from_world(world);
+    let index = frame
+        .weapon_index_by_script_name(&name)
+        .ok_or_else(|| format!("unknown weapon '{name}'"))?;
+    Ok(frame.weapon_combat_row(index).unwrap_or_default())
+}
+
+/// Fire-mode queries animscripts pick bursts by.
+pub(crate) fn register_sp(registry: &mut crate::script::NativeRegistry) {
+    use crate::script::Namespace::Function;
+    registry.register(Function, "weaponisauto", |world, _, args| {
+        Ok(Value::Int(
+            (combat_facts(world, args)?.fire_type == 0).into(),
+        ))
+    });
+    registry.register(Function, "weaponburstcount", |world, _, args| {
+        let fire_type = combat_facts(world, args)?.fire_type;
+        Ok(Value::Int(if (2..=4).contains(&fire_type) {
+            fire_type
+        } else {
+            0
+        }))
+    });
+    registry.register(Function, "weaponisboltaction", |world, _, args| {
+        Ok(Value::Int(combat_facts(world, args)?.bolt_action.into()))
+    });
+}
+
 /// A level's `weapon_<name>` entities become the weapon items they stand for.
 pub(crate) fn place_map_weapons(world: &mut World) {
     let weapons: Vec<(u64, String)> = world

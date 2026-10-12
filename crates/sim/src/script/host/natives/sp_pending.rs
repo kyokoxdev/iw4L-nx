@@ -120,16 +120,12 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "vehphys_crash" => Undefined;
         Method "vehphys_setspeed" => Undefined;
         Method "vibrate" => Undefined;
-        Function "weaponburstcount" => Zero;
         Function "weaponhasthermalscope" => Zero;
-        Function "weaponisauto" => Zero;
-        Function "weaponisboltaction" => Zero;
         Function "badplace_arc" => Undefined;
         Function "badplace_brush" => Undefined;
         Function "badplace_cylinder" => Undefined;
         Function "badplace_delete" => Undefined;
         Function "bulletspread" => Undefined;
-        Function "changelevel" => Undefined;
         Function "commitsave" => Undefined;
         Function "commitwouldbevalid" => One;
         Function "connectpaths" => Undefined;
@@ -147,8 +143,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "laserforceoff" => Undefined;
         Function "laserforceon" => Undefined;
         Function "makeentitysentient" => Undefined;
-        Function "missionfailed" => Undefined;
-        Function "missionsuccess" => Undefined;
         Function "notifyoncommand" => Undefined;
         Function "objective_additionalposition" => Undefined;
         Function "objective_string" => Undefined;
@@ -170,7 +164,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "allowprone" => Undefined;
         Method "allowstand" => Undefined;
         Method "atdangerousnode" => Zero;
-        Method "canattackenemynode" => Zero;
         Method "canuseturret" => Zero;
         Method "checkcoverexitposwithpath" => Undefined;
         Method "checkgrenadethrow" => Zero;
@@ -215,13 +208,10 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "iswaitingonsound" => Zero;
         Method "laserforceoff" => Undefined;
         Method "laserforceon" => Undefined;
-        Method "lastknownpos" => Origin;
-        Method "lastknowntime" => Zero;
         Method "magicgrenademanual" => Undefined;
         Method "makeentitysentient" => Undefined;
         Method "makefakeai" => Undefined;
         Method "maymovefrompointtopoint" => Zero;
-        Method "maymovetopoint" => Zero;
         Method "melee" => Undefined;
         Method "mountvehicle" => Undefined;
         Method "nearclaimnode" => Undefined;

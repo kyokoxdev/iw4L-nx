@@ -91,6 +91,8 @@ pub(crate) struct ActorBrain {
     orient: Orient,
     /// Level time the enemy was last seen.
     enemy_seen_ms: i64,
+    /// The hostile seen last: who, its origin then, level time.
+    last_seen: Option<(u64, [f32; 3], i64)>,
     /// Negotiation (start, end) nodes while the actor crosses a traverse.
     traverse: Option<(u64, u64)>,
 }
@@ -390,6 +392,7 @@ fn look(world: &mut World) {
         let enemy = match seen {
             Some((other, at)) => {
                 brain.enemy_seen_ms = now;
+                brain.last_seen = Some((other, [at[0], at[1], at[2] - EYE_HEIGHT], now));
                 world.resource_mut::<RoundScript>().set_object_field(
                     id,
                     "lastenemysightpos",
@@ -935,6 +938,9 @@ fn default_aim_limits(runtime: &mut RoundScript, id: u64) {
 }
 
 const EYE_HEIGHT: f32 = 64.0;
+const ACTOR_RADIUS: f32 = 15.0;
+const ACTOR_HEIGHT: f32 = 72.0;
+const STEP_HEIGHT: f32 = 18.0;
 
 /// The highest stance a node's type lets an actor take at it.
 fn highest_stance(world: &mut World, node: &Value) -> Result<&'static str, String> {
@@ -1568,6 +1574,75 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             return Ok(Value::Int(0));
         };
         Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    // ponytail: memory holds the last hostile seen only; anyone else answers with
+    // where it is now. Keep per-target memory if AI pre-aims at unseen players.
+    registry.register(Method, "lastknownpos", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let target = entity_id(world, super::args::arg(args, 0)?)?;
+        match brain(world, id).last_seen {
+            Some((seen, at, _)) if seen == target => Ok(Value::Vector(at)),
+            _ => Ok(super::players::entity_field(world, target, "origin")),
+        }
+    });
+    registry.register(Method, "lastknowntime", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let target = entity_id(world, super::args::arg(args, 0)?)?;
+        Ok(Value::Int(match brain(world, id).last_seen {
+            Some((seen, _, ms)) if seen == target => i32::try_from(ms).unwrap_or(i32::MAX),
+            _ => 0,
+        }))
+    });
+    // The enemy's claimed node (else the enemy) is in the line of fire.
+    registry.register(Method, "canattackenemynode", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let Value::Object(enemy) = world
+            .resource_mut::<RoundScript>()
+            .object_field(id, "enemy")
+        else {
+            return Ok(Value::Int(0));
+        };
+        let node = world
+            .resource_mut::<RoundScript>()
+            .object_field(enemy, "node");
+        let to = match &node {
+            Value::Object(node) => match world
+                .resource_mut::<RoundScript>()
+                .object_field(*node, "origin")
+            {
+                Value::Vector([x, y, z]) => Some([x, y, z + EYE_HEIGHT]),
+                _ => None,
+            },
+            _ => eye(world, enemy),
+        };
+        let Some(to) = to else {
+            return Ok(Value::Int(0));
+        };
+        let from = super::turrets::muzzle(world, id);
+        Ok(Value::Int(clear_sight(world, from, to).into()))
+    });
+    // ponytail: a straight body-sized sweep at step height, no ground check;
+    // walk the nav mesh if AI steps off ledges.
+    registry.register(Method, "maymovetopoint", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let to = super::args::vector(args, 0)?;
+        let Value::Vector(from) = world
+            .resource_mut::<RoundScript>()
+            .object_field(id, "origin")
+        else {
+            return Ok(Value::Int(0));
+        };
+        let lift = |[x, y, z]: [f32; 3]| [x, y, z + STEP_HEIGHT];
+        let trace = super::presence::settled(world).trace_world(
+            lift(from),
+            lift(to),
+            [-ACTOR_RADIUS, -ACTOR_RADIUS, 0.0],
+            [ACTOR_RADIUS, ACTOR_RADIUS, ACTOR_HEIGHT - STEP_HEIGHT],
+            crate::bullet_collision::MASK_PLAYER_SOLID,
+        );
+        Ok(Value::Int(
+            (trace.fraction >= 1.0 && trace.startsolid == 0).into(),
+        ))
     });
     // `dropweapon(weapon, position, [velocity scale])`: the gun falls from its tag.
     registry.register(Method, "dropweapon", |world, receiver, args| {
