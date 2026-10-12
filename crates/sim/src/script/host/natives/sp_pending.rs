@@ -195,9 +195,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "eqoff" => Undefined;
         Method "eqon" => Undefined;
         Method "exitprone" => Undefined;
-        Method "findbestcovernode" => Undefined;
         Method "findreacquiredirectpath" => Undefined;
-        Method "findshufflecovernode" => Undefined;
         Method "flagenemyunattackable" => Undefined;
         Method "getanglestolikelyenemypath" => Undefined;
         Method "getcentroid" => Origin;
@@ -205,7 +203,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getdoorpathnode" => Undefined;
         Method "getdroptofloorposition" => Origin;
         Method "getentnum" => Undefined;
-        Method "getgoalvolume" => Undefined;
         Method "getlightcolor" => Undefined;
         Method "getmuzzlesideoffsetpos" => Origin;
         Method "getplayerintelisfound" => Zero;
@@ -216,7 +213,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "iscovervalidagainstenemy" => Zero;
         Method "isgrenadepossafe" => Zero;
         Method "isindoor" => Zero;
-        Method "isingoal" => Zero;
         Method "isinscriptedstate" => Zero;
         Method "isknownenemyinradius" => Zero;
         Method "isknownenemyinvolume" => Zero;
@@ -251,8 +247,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "seteqlerp" => Undefined;
         Method "setfixednodesafevolume" => Undefined;
         Method "setfriendlychain" => Undefined;
-        Method "setgoalvolume" => Undefined;
-        Method "setgoalvolumeauto" => Undefined;
         Method "setlightcolor" => Undefined;
         Method "setlookatentity" => Undefined;
         Method "setlookattext" => Undefined;
@@ -275,7 +269,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "updateprone" => Undefined;
         Method "uploadscore" => Undefined;
         Method "uploadtime" => Undefined;
-        Method "usecovernode" => Undefined;
         Method "useturret" => Undefined;
         Function "bullettracer" => Undefined;
         Function "clearallcorpses" => Undefined;
@@ -308,7 +301,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "allowfire" => Undefined;
         Method "allowmelee" => Undefined;
         Method "castshadows" => Undefined;
-        Method "cleargoalvolume" => Undefined;
         Method "disablebreaching" => Undefined;
         Method "disableturretdismount" => Undefined;
         Method "dontcastshadows" => Undefined;

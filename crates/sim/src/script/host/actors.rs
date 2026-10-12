@@ -1242,6 +1242,7 @@ fn spawn_script_model(world: &mut World, origin: [f32; 3]) -> Result<u64, String
 
 pub(crate) fn register(registry: &mut NativeRegistry) {
     use Namespace::{Function, Method};
+    campaign::register(registry);
     // SP aitype `spawner()`: the team `getspawnerteamarray` filters on.
     registry.register(Method, "setspawnerteam", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
