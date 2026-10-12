@@ -53,8 +53,15 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    (`MatchBootstrap::campaign`), kits come from `body_*` + the level's one
    `*_viewhands`. The level zone's WeaponDefs join the registry where the
    common zone lacks the name. Every campaign level loads (load-only sweep).
-   Left: campaign still runs the MP match flow as `dm` (FFA label, dm spawn
-   lookup); level GSC needs a gametype-less campaign mode.
+   Campaign mode: no gametype (`gametype=campaign`; no `g_gametype`,
+   `onlinegame`, `sv_maxclients`), no MP rank tables or player data (the
+   install's rank steps are skipped; weapon content gets one rank at 0 XP).
+   Level flow (`host/mission.rs`): `missionsuccess`/`changelevel` load the
+   named level (empty = menu) through `CampaignLevelCalled` → session
+   `request_zone`; `missionfailed` and the player's death reload the level
+   after 4 s. No death screen, retry prompt or weapon carry-over yet.
+   The bootstrap kind is still `FreeForAll` internally (campaign is
+   `MatchBootstrap::campaign`).
 3. Frontend — done. The Campaign tile opens `iw4l_campaign`: `list_sp_maps`
    without `so_*`, in story order (`console::campaign_menu`), 20 rows; a row
    requests the level like `map <level>`. Names are stems (`AF CAVES`).
@@ -103,7 +110,11 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    Arms bind at load: the level's hands (`setViewmodel` literal from its own
    script, else its `_loadout` branch for `level.script`) are prepared for every
    weapon (`match_walk/campaign.rs`). Runtime switches are ignored; per-hands FPV prep is the gap. `setthreatbiasagainstall`
-   and `iscovervalidagainstenemy` are in. Not yet: `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
+   and `iscovervalidagainstenemy` are in. `weaponisauto`/`weaponburstcount`/
+   `weaponisboltaction` read the weapon's fire type; `lastknownpos`/`lastknowntime`
+   answer for the last hostile seen (others: where they are now);
+   `canattackenemynode` traces muzzle → the enemy's node (else eye);
+   `maymovetopoint` sweeps a body-sized box at step height. Not yet: `issuppressed`, `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
    `clearfixednodesafevolume` (no consumer in the retail dump), `nearclaimnode`/`nearclaimnodeandangle`, `startcoverarrival`
    (arrival motion). Then saves.
 7. Switch: SP zones' memory budget.

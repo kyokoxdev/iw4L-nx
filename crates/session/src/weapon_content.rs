@@ -103,9 +103,12 @@ pub(crate) fn compile(
                 .unwrap_or(sim::EquipmentRuntimeFacts::default()),
         }
     });
-    let ranks = weapons
-        .rank_progression()
-        .map_err(|_| sim::SimWeaponContentRefusal::InvalidProgression)?;
+    let ranks = if campaign {
+        gamemode_iw4::progression::RankProgression::capture(&CampaignRanks)
+    } else {
+        weapons.rank_progression()
+    }
+    .map_err(|_| sim::SimWeaponContentRefusal::InvalidProgression)?;
     let content =
         sim::SimWeaponContent::compile(rows, aliases, pen_table, pen_table_loaded, ranks)?;
     if !refused.is_empty() {
@@ -120,6 +123,18 @@ pub(crate) fn compile(
         revision: weapons.revision(),
         content,
     })
+}
+
+/// Campaign has no experience: one rank, reached at zero.
+struct CampaignRanks;
+
+impl gamemode_iw4::progression::ProgressionTable for CampaignRanks {
+    fn rows(&self) -> usize {
+        1
+    }
+    fn cell(&self, _: usize, _: usize) -> &str {
+        "0"
+    }
 }
 
 fn compile_combat(

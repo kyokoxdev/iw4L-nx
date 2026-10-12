@@ -482,6 +482,25 @@ fn run_exit_level(
     }
 }
 
+/// A campaign level's next level or restart; an empty name returns to the menu.
+fn run_campaign_level(
+    mut called: MessageReader<frame::CampaignLevelCalled>,
+    mut transition: ResMut<SessionSwapRequest>,
+) {
+    let Some(frame::CampaignLevelCalled(level)) = called.read().last() else {
+        return;
+    };
+    let requested = if level.is_empty() {
+        transition.request_menu()
+    } else {
+        transition.request_zone(level.clone())
+    };
+    match requested {
+        Ok(id) => diag::info!(Sim, "session: campaign → '{level}' (swap #{id})"),
+        Err(err) => diag::info!(Sim, "session: campaign level '{level}' refused — {err}"),
+    }
+}
+
 fn retire_handed_over(mut retiring: ResMut<Retiring>, scope: Res<State<frame::MatchScope>>) {
     let (batch, teardown) = retiring.take_batch();
     if batch.is_empty() {
@@ -780,6 +799,7 @@ pub fn register_lifecycle(app: &mut App) {
             (
                 follow_master_match,
                 run_exit_level,
+                run_campaign_level,
                 run_peer_lobby_return,
                 run_udp_peer_lobby_return,
                 request_teardown,

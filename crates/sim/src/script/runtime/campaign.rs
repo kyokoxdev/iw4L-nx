@@ -50,6 +50,7 @@ pub(crate) fn stop_thread(world: &mut World, serial: u64) {
 pub(super) fn advance(world: &mut World, now: i64) {
     super::super::host::script_anim::advance(world);
     super::super::host::actors::advance(world);
+    super::super::host::mission::advance(world);
     let mut runtime = world.resource_mut::<RoundScript>();
     let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut runtime.campaign.timed_notifies)
         .into_iter()
@@ -84,4 +85,6 @@ pub(crate) struct CampaignState {
     pub(crate) actor_nav: Option<super::super::host::actors::NavHandle>,
     /// Threat groups, ignore pairs and biases (`createthreatbiasgroup` and friends).
     pub(crate) threat: super::super::host::actors::ThreatBias,
+    /// `missionfailed`/`missionsuccess`/`changelevel` or the player's death.
+    pub(crate) level_change: Option<super::super::host::mission::LevelChange>,
 }

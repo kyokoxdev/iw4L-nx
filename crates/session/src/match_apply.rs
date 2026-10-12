@@ -288,51 +288,56 @@ pub fn apply_prepared_match(
         let spawn_count = prepared_map.spawns.len();
 
         let mut local_player_data = player_data.clone();
-        let definitions = script_level
-            .schemas
-            .get("mp/playerdata.def")
-            .ok_or_else(|| {
-                InstallRefusal::new("Local progression: player data schema is missing")
-            })?;
-        let ranks = weapons
-            .registry()
-            .rank_progression()
-            .map_err(|error| InstallRefusal::new(format!("Local progression: {error}")))?;
-        local_player_data
-            .install(
-                definitions,
-                ranks,
-                account
-                    .as_ref()
-                    .and_then(|account| account.snapshot.as_ref()),
-            )
-            .map_err(|error| InstallRefusal::new(format!("Local progression: {error:?}")))?;
-        local_player_data.install_unlock_data(
-            account_defaults.clone(),
-            script_level
-                .tables
-                .get("mp/allchallengestable.csv")
-                .cloned(),
-        );
-        for name in ["mp/ranktable.csv", "mp/rankicontable.csv"] {
-            if let Some(table) = script_level.tables.get(name) {
-                local_player_data.install_rank_table(name, table.clone());
-            }
-        }
-        diag::info!(
-            Sim,
-            "local progression prepared before admission: rank={}",
+        // Campaign has no multiplayer player data or ranks.
+        if !asset_transport::campaign_zone_set() {
+            let definitions = script_level
+                .schemas
+                .get("mp/playerdata.def")
+                .ok_or_else(|| {
+                    InstallRefusal::new("Local progression: player data schema is missing")
+                })?;
+            let ranks = weapons
+                .registry()
+                .rank_progression()
+                .map_err(|error| InstallRefusal::new(format!("Local progression: {error}")))?;
             local_player_data
-                .progression
-                .as_ref()
-                .expect("installed progression")
-                .rank
-        );
+                .install(
+                    definitions,
+                    ranks,
+                    account
+                        .as_ref()
+                        .and_then(|account| account.snapshot.as_ref()),
+                )
+                .map_err(|error| InstallRefusal::new(format!("Local progression: {error:?}")))?;
+            local_player_data.install_unlock_data(
+                account_defaults.clone(),
+                script_level
+                    .tables
+                    .get("mp/allchallengestable.csv")
+                    .cloned(),
+            );
+            for name in ["mp/ranktable.csv", "mp/rankicontable.csv"] {
+                if let Some(table) = script_level.tables.get(name) {
+                    local_player_data.install_rank_table(name, table.clone());
+                }
+            }
+            diag::info!(
+                Sim,
+                "local progression prepared before admission: rank={}",
+                local_player_data
+                    .progression
+                    .as_ref()
+                    .expect("installed progression")
+                    .rank
+            );
+        }
         let rank_tables = [
             weapons.registry().shared_rank_table(),
             weapons.registry().shared_rank_icons(),
         ]
-        .map(|table| table.expect("validated rank presentation").clone());
+        .into_iter()
+        .filter_map(|table| table.ok().cloned())
+        .collect::<Vec<_>>();
         install.push(move |world: &mut World| {
             world
                 .resource_mut::<crate::scope_control::InstallAnnouncement>()
@@ -713,7 +718,11 @@ pub fn apply_prepared_match(
                 probe.world_report = world_report;
             }
             diag::script_boundary("installed", &script_facts);
-            diag::info!(Sim, "match: {} ({}) — world installed ({} dm spawn points); class select waits for admission", kind.display_name(), kind.token(), spawn_count);
+            if asset_transport::campaign_zone_set() {
+                diag::info!(Sim, "match: campaign — world installed ({} start points)", spawn_count);
+            } else {
+                diag::info!(Sim, "match: {} ({}) — world installed ({} dm spawn points); class select waits for admission", kind.display_name(), kind.token(), spawn_count);
+            }
             perf::match_installed(&installed_zone, 1);
             frame::scope::insert(world, InstalledMatch {
                 request_id,
@@ -1072,17 +1081,20 @@ fn preflight_match_install(
         }
     }
     let sources = Sources(std::mem::take(&mut prepared.scripts));
-    let gametype = kind
-        .script_tokens()
-        .iter()
-        .copied()
-        .find(|token| {
-            sources
-                .0
-                .read(&format!("maps/mp/gametypes/{token}"))
-                .is_ok()
-        })
-        .unwrap_or(kind.token());
+    let gametype = if asset_transport::campaign_zone_set() {
+        "campaign"
+    } else {
+        kind.script_tokens()
+            .iter()
+            .copied()
+            .find(|token| {
+                sources
+                    .0
+                    .read(&format!("maps/mp/gametypes/{token}"))
+                    .is_ok()
+            })
+            .unwrap_or(kind.token())
+    };
     let account_defaults =
         sources
             .0
@@ -1141,29 +1153,32 @@ fn preflight_match_install(
         let startup = sim::script::Iw4Startup::new(&sources, gametype, zone);
         (startup, sim::script::Catalog::iw4())
     };
-    let shared_ranks = weapons.registry().shared_rank_table().map_err(|error| {
-        InstallRefusal::new(format!("Invalid shared rank progression: {error}"))
-    })?;
-    script_level.tables.insert(
-        "mp/ranktable.csv".into(),
-        sim::script::StringTable {
-            columns: shared_ranks.columns,
-            rows: shared_ranks.rows,
-            cells: shared_ranks.cells.clone(),
-        },
-    );
-    let shared_icons = weapons
-        .registry()
-        .shared_rank_icons()
-        .map_err(|error| InstallRefusal::new(format!("Invalid shared rank icons: {error}")))?;
-    script_level.tables.insert(
-        "mp/rankicontable.csv".into(),
-        sim::script::StringTable {
-            columns: shared_icons.columns,
-            rows: shared_icons.rows,
-            cells: shared_icons.cells.clone(),
-        },
-    );
+    // Campaign zones carry no multiplayer rank progression.
+    if !asset_transport::campaign_zone_set() {
+        let shared_ranks = weapons.registry().shared_rank_table().map_err(|error| {
+            InstallRefusal::new(format!("Invalid shared rank progression: {error}"))
+        })?;
+        script_level.tables.insert(
+            "mp/ranktable.csv".into(),
+            sim::script::StringTable {
+                columns: shared_ranks.columns,
+                rows: shared_ranks.rows,
+                cells: shared_ranks.cells.clone(),
+            },
+        );
+        let shared_icons = weapons
+            .registry()
+            .shared_rank_icons()
+            .map_err(|error| InstallRefusal::new(format!("Invalid shared rank icons: {error}")))?;
+        script_level.tables.insert(
+            "mp/rankicontable.csv".into(),
+            sim::script::StringTable {
+                columns: shared_icons.columns,
+                rows: shared_icons.rows,
+                cells: shared_icons.cells.clone(),
+            },
+        );
+    }
     let roots: Vec<&str> = startup.roots.iter().map(String::as_str).collect();
     let scripts = sim::script::Program::load(&sources, &roots, &catalog_builtins)
         .map_err(|e| script_refusal(zone, gametype, "compile", &e))?;
@@ -1188,15 +1203,18 @@ fn preflight_match_install(
             Vec::new()
         }
     };
-    if !script_dvars
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("onlinegame"))
-    {
-        script_dvars.push(("onlinegame".into(), "1".into()));
-    }
     script_dvars.push(("mapname".into(), zone.to_owned()));
-    script_dvars.push(("g_gametype".into(), gametype.to_owned()));
-    script_dvars.push(("sv_maxclients".into(), "18".into()));
+    // Campaign has no gametype and no online session.
+    if !asset_transport::campaign_zone_set() {
+        if !script_dvars
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("onlinegame"))
+        {
+            script_dvars.push(("onlinegame".into(), "1".into()));
+        }
+        script_dvars.push(("g_gametype".into(), gametype.to_owned()));
+        script_dvars.push(("sv_maxclients".into(), "18".into()));
+    }
     for (name, value) in rules.map_or(&[][..], |rules| &rules.0) {
         match script_dvars
             .iter_mut()

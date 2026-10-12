@@ -9,6 +9,7 @@ pub mod guidance;
 pub mod hud;
 pub(crate) mod iw4_gametype;
 pub mod mechanics;
+pub(crate) mod mission;
 pub mod natives;
 pub mod objectives;
 pub mod physics;

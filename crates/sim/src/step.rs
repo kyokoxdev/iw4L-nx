@@ -762,6 +762,7 @@ fn publish_snapshot_system(ecs: &mut World) {
     };
     drop(world);
     let script_seats = crate::script::script_seats(ecs);
+    let campaign_level = crate::script::host::mission::take_due(ecs);
     let mut runtime = ecs.resource_mut::<crate::script::RoundScript>();
     let script_exit_level = std::mem::take(&mut runtime.exit_level);
     effects.kicks = std::mem::take(&mut runtime.kicks)
@@ -782,6 +783,7 @@ fn publish_snapshot_system(ecs: &mut World) {
         pending_final_kill,
         script_seats,
         script_exit_level,
+        campaign_level,
     });
 }
 
