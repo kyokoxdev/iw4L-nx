@@ -90,7 +90,7 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    the map's `node_*` entity at their origin (`script_linkto`, ...). A route crossing a
    `Begin` node (`target` = an `End` node's `targetname`) runs `animscripts/traverse/<animscript>::main`
    (`getnegotiationstartnode`/`endnode`), then the actor stands at the end node; no such script = plain walk. `usecovernode` claims a `Cover *` node (`claimedby`, lapses when the claimer's `node` moves) and goes to it; `findbestcovernode`/`findshufflecovernode` pick free covers in the goal area, passing over covers facing the enemy. `setgoalvolume` clamps the goal into an `info_volume` box; `isingoal` tests the goal area. Sight picks the nearest
-   visible hostile (`enemy`); `shoot` fires the actor's weapon through the turret
+   visible hostile (`enemy`) by distance minus threat bias; `createthreatbiasgroup`/`setthreatbiasgroup`/`setignoremegroup`/`setthreatbias` feed it (`ignoreme`/`ignoreall`/`favoriteenemy` too); `shoot` fires the actor's weapon through the turret
    bullet path, which raises `EV_FIRE_WEAPON` (fire sound, muzzle flash on the
    attached gun's `tag_flash`) for actors, turrets and vehicles alike. Tags of
    attached models answer on the sim side (`gettagorigin`, `muzzle`). Damage
@@ -99,6 +99,6 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `weapon_*` and actor drops are weapon items, level `misc_turret`s turrets of
    their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
-   firefight does. Not yet: threat
-   bias, `setviewmodel` hands, `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
+   firefight does. Not yet:
+   `setthreatbiasagainstall` (leapfrog; not in the catalog), `setviewmodel` hands, `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
 7. Switch: SP zones' memory budget.

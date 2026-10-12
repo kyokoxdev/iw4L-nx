@@ -5,9 +5,11 @@
 //! sends the actor to them; a goal volume (`info_volume`) bounds where the
 //! actor's goal may be. Fork-only; hooks in `actors.rs`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy_ecs::prelude::World;
 
-use super::super::args::{arg, vector};
+use super::super::args::{arg, string, vector};
 use super::super::natives::engine::entity_id;
 use super::super::triggers::entity_bounds;
 use super::{
@@ -62,6 +64,39 @@ pub(super) fn finish_traverse(world: &mut World, id: u64, brain: &mut ActorBrain
         runtime.set_object_field(id, "origin", Value::Vector(at));
     }
     brain.traverse = None;
+}
+
+/// Threat groups and their pairs. An actor scores a hostile at its distance minus
+/// `bias(actor group, its group)`, so a positive bias draws it; a pair in `ignore`
+/// is never picked.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ThreatBias {
+    groups: BTreeSet<String>,
+    /// `(viewer, target)`: viewers in the first group never pick the second.
+    ignore: BTreeSet<(String, String)>,
+    /// `(target, viewer)` -> bias.
+    bias: BTreeMap<(String, String), f32>,
+}
+
+impl ThreatBias {
+    pub(super) fn ignores(&self, viewer: &str, target: &str) -> bool {
+        self.ignore.contains(&(viewer.to_string(), target.to_string()))
+    }
+
+    pub(super) fn bias(&self, viewer: &str, target: &str) -> f32 {
+        self.bias
+            .get(&(target.to_string(), viewer.to_string()))
+            .copied()
+            .unwrap_or(0.0)
+    }
+}
+
+/// An entity's threat group, `""` when it has none.
+pub(super) fn group_of(runtime: &mut RoundScript, id: u64) -> String {
+    match runtime.object_field(id, "threatbiasgroup") {
+        Value::String(group) => group.to_string(),
+        _ => String::new(),
+    }
 }
 
 /// `getnegotiationstartnode` / `getnegotiationendnode`: the traverse being crossed, else undefined.
@@ -227,7 +262,46 @@ fn find_cover(world: &mut World, id: u64, area: &Area, skip: Option<u64>) -> Opt
 }
 
 pub(super) fn register(registry: &mut NativeRegistry) {
-    use Namespace::Method;
+    use Namespace::{Function, Method};
+    registry.register(Function, "createthreatbiasgroup", |world, _, args| {
+        let name = string(args, 0)?;
+        world.resource_mut::<RoundScript>().campaign.threat.groups.insert(name);
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "threatbiasgroupexists", |world, _, args| {
+        let name = string(args, 0)?;
+        let runtime = world.resource::<RoundScript>();
+        Ok(Value::Int(runtime.campaign.threat.groups.contains(&name).into()))
+    });
+    registry.register(Function, "setignoremegroup", |world, _, args| {
+        let pair = (string(args, 0)?, string(args, 1)?);
+        world.resource_mut::<RoundScript>().campaign.threat.ignore.insert(pair);
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "setthreatbias", |world, _, args| {
+        let key = (string(args, 0)?, string(args, 1)?);
+        let bias = number(arg(args, 2)?.clone()).ok_or("setthreatbias expects a number")?;
+        world.resource_mut::<RoundScript>().campaign.threat.bias.insert(key, bias);
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "getthreatbias", |world, _, args| {
+        let (target, viewer) = (string(args, 0)?, string(args, 1)?);
+        let runtime = world.resource::<RoundScript>();
+        Ok(Value::Float(runtime.campaign.threat.bias(&viewer, &target)))
+    });
+    registry.register(Method, "setthreatbiasgroup", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let group = string(args, 0)?;
+        world
+            .resource_mut::<RoundScript>()
+            .set_object_field(id, "threatbiasgroup", Value::string(&group));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "getthreatbiasgroup", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        let group = group_of(&mut world.resource_mut::<RoundScript>(), id);
+        Ok(Value::string(&group))
+    });
     registry.register(Method, "findbestcovernode", |world, receiver, _| {
         let id = actor(world, receiver)?;
         let area = goal_area(world, id);
@@ -328,5 +402,19 @@ mod tests {
         assert_eq!(best_cover([0.0; 3], enemy, &[facing, away]), Some(2));
         assert_eq!(best_cover([0.0; 3], enemy, &[facing]), Some(1));
         assert_eq!(best_cover([0.0; 3], None, &[facing, away]), Some(1));
+    }
+
+    /// A positive bias draws the viewer toward that group; ignores are one-way pairs.
+    #[test]
+    fn threat_bias_draws_and_ignores_by_group() {
+        let mut threat = ThreatBias::default();
+        threat
+            .bias
+            .insert(("just_player".into(), "bridge_attackers".into()), 3000.0);
+        threat.ignore.insert(("axis".into(), "allies".into()));
+        assert_eq!(threat.bias("bridge_attackers", "just_player"), 3000.0);
+        assert_eq!(threat.bias("bridge_attackers", "allies"), 0.0);
+        assert!(threat.ignores("axis", "allies"));
+        assert!(!threat.ignores("allies", "axis"));
     }
 }

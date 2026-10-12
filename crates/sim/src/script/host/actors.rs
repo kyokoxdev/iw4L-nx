@@ -10,6 +10,7 @@ use super::natives::engine::entity_id;
 use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 mod campaign;
+pub(crate) use campaign::ThreatBias;
 
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
@@ -318,7 +319,7 @@ fn look(world: &mut World) {
     }
     let all = combatants(world);
     for id in ids {
-        let (team, current, ignore_all, sight_sq, fov, angles) = {
+        let (team, current, ignore_all, sight_sq, fov, angles, group, threat, favorite) = {
             let mut runtime = world.resource_mut::<RoundScript>();
             let sight_sq = number(runtime.object_field(id, "maxsightdistsqrd"))
                 .unwrap_or(DEFAULT_SIGHT_DIST * DEFAULT_SIGHT_DIST);
@@ -331,6 +332,10 @@ fn look(world: &mut World) {
                 Value::Object(enemy) => Some(enemy),
                 _ => None,
             };
+            let favorite = match runtime.object_field(id, "favoriteenemy") {
+                Value::Object(enemy) => Some(enemy),
+                _ => None,
+            };
             (
                 runtime.object_field(id, "team"),
                 current,
@@ -338,6 +343,9 @@ fn look(world: &mut World) {
                 sight_sq,
                 fov,
                 angles,
+                campaign::group_of(&mut runtime, id),
+                runtime.campaign.threat.clone(),
+                favorite,
             )
         };
         let Some(from) = eye(world, id) else {
@@ -350,6 +358,10 @@ fn look(world: &mut World) {
                 if *other == id || !hostile(&team, other_team) {
                     continue;
                 }
+                let target = campaign::group_of(&mut world.resource_mut::<RoundScript>(), *other);
+                if threat.ignores(&group, &target) {
+                    continue;
+                }
                 let Some(at) = eye(world, *other) else {
                     continue;
                 };
@@ -358,11 +370,16 @@ fn look(world: &mut World) {
                 let planar = d[0].hypot(d[1]).max(f32::EPSILON);
                 let in_view = (d[0] * forward[0] + d[1] * forward[1]) / planar >= fov;
                 if dist_sq <= sight_sq && (in_view || current == Some(*other)) {
-                    candidates.push((dist_sq, *other, at));
+                    let score = dist_sq.sqrt() - threat.bias(&group, &target);
+                    candidates.push((score, *other, at));
                 }
             }
         }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+        candidates.sort_by(|a, b| {
+            (Some(a.1) != favorite)
+                .cmp(&(Some(b.1) != favorite))
+                .then(a.0.total_cmp(&b.0))
+        });
         let seen = candidates
             .iter()
             .take(SIGHT_TRACES)

@@ -133,13 +133,11 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "commitsave" => Undefined;
         Function "commitwouldbevalid" => One;
         Function "connectpaths" => Undefined;
-        Function "createthreatbiasgroup" => Undefined;
         Function "disconnectpaths" => Undefined;
         Function "freeentitysentient" => Undefined;
         Function "getcommandfromkey" => EmptyString;
         Function "getcorpsearray" => EmptyArray;
         Function "getkeybinding" => Unbound;
-        Function "getthreatbias" => Zero;
         Function "getweaponclipmodel" => EmptyString;
         Function "isenemyteam" => Zero;
         Function "issaverecentlyloaded" => Zero;
@@ -160,13 +158,10 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "setblur" => Undefined;
         Function "setdebugangles" => Undefined;
         Function "setdebugorigin" => Undefined;
-        Function "setignoremegroup" => Undefined;
         Function "setsunlight" => Undefined;
-        Function "setthreatbias" => Undefined;
         Function "settimescale" => Undefined;
         Function "target_set" => Undefined;
         Function "target_setjavelinonly" => Undefined;
-        Function "threatbiasgroupexists" => Zero;
         Function "updategamerprofile" => Undefined;
         Function "updategamerprofileall" => Undefined;
         Method "addaieventlistener" => Undefined;
@@ -206,7 +201,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getlightcolor" => Undefined;
         Method "getmuzzlesideoffsetpos" => Origin;
         Method "getplayerintelisfound" => Zero;
-        Method "getthreatbiasgroup" => Undefined;
         Method "getturret" => Undefined;
         Method "getvalidcoverpeekouts" => EmptyArray;
         Method "giveachievement" => Undefined;
@@ -254,7 +248,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setproneanimnodes" => Undefined;
         Method "setruntopos" => Undefined;
         Method "setsoundblend" => Undefined;
-        Method "setthreatbiasgroup" => Undefined;
         Method "setturretignoregoals" => Undefined;
         Method "shouldfacemotion" => Zero;
         Method "startcoverarrival" => Undefined;

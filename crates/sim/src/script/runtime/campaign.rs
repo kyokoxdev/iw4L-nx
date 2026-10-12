@@ -82,4 +82,6 @@ pub(crate) struct CampaignState {
     pub(crate) actor_brains: BTreeMap<u64, super::super::host::actors::ActorBrain>,
     /// Routes over the path nodes; installed by the bot brain.
     pub(crate) actor_nav: Option<super::super::host::actors::NavHandle>,
+    /// Threat groups, ignore pairs and biases (`createthreatbiasgroup` and friends).
+    pub(crate) threat: super::super::host::actors::ThreatBias,
 }
