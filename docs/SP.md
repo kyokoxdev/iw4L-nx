@@ -102,6 +102,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    firefight does. `setviewmodel` stores the name; `getviewmodel` returns it.
    Arms bind at load: the level's hands (`setViewmodel` literal from its own
    script, else its `_loadout` branch for `level.script`) are prepared for every
-   weapon (`match_walk/campaign.rs`). Runtime switches are ignored; per-hands FPV prep is the gap. Not yet:
-   `setthreatbiasagainstall` (leapfrog; not in the catalog), `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
+   weapon (`match_walk/campaign.rs`). Runtime switches are ignored; per-hands FPV prep is the gap. `setthreatbiasagainstall`
+   and `iscovervalidagainstenemy` are in. Not yet: `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
+   `clearfixednodesafevolume` (no consumer in the retail dump), `nearclaimnode`/`nearclaimnodeandangle`, `startcoverarrival`
+   (arrival motion). Then saves.
 7. Switch: SP zones' memory budget.

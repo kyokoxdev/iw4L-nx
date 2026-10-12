@@ -89,6 +89,14 @@ impl ThreatBias {
             .copied()
             .unwrap_or(0.0)
     }
+
+    /// `setthreatbiasagainstall`: `target`'s bias for every group that exists now.
+    // ponytail: groups created later get no bias; set it again after creating them.
+    fn set_against_all(&mut self, target: &str, bias: f32) {
+        for viewer in &self.groups {
+            self.bias.insert((target.to_string(), viewer.clone()), bias);
+        }
+    }
 }
 
 /// An entity's threat group, `""` when it has none.
@@ -239,26 +247,29 @@ fn find_cover(world: &mut World, id: u64, area: &Area, skip: Option<u64>) -> Opt
         if Some(node) == skip || !free_for(&mut runtime, id, node) {
             continue;
         }
-        let Value::String(kind) = runtime.object_field(node, "type") else {
-            continue;
-        };
-        let (Some(origin), Some(angles)) = (
-            vector_field(&mut runtime, node, "origin"),
-            vector_field(&mut runtime, node, "angles"),
-        ) else {
-            continue;
-        };
-        if cover_script(&kind).is_none() || !inside(area, origin) {
-            continue;
+        if let Some(cover) = cover_at(&mut runtime, node).filter(|c| inside(area, c.origin)) {
+            covers.push(cover);
         }
-        let yaw = angles[1].to_radians();
-        covers.push(Cover {
-            id: node,
-            origin,
-            forward: [yaw.cos(), yaw.sin(), 0.0],
-        });
     }
     best_cover(from, enemy, &covers)
+}
+
+/// The cover at a path node, if the node is a cover kind with an origin and angles.
+fn cover_at(runtime: &mut RoundScript, node: u64) -> Option<Cover> {
+    let Value::String(kind) = runtime.object_field(node, "type") else {
+        return None;
+    };
+    let origin = vector_field(runtime, node, "origin")?;
+    let angles = vector_field(runtime, node, "angles")?;
+    if cover_script(&kind).is_none() {
+        return None;
+    }
+    let yaw = angles[1].to_radians();
+    Some(Cover {
+        id: node,
+        origin,
+        forward: [yaw.cos(), yaw.sin(), 0.0],
+    })
 }
 
 pub(super) fn register(registry: &mut NativeRegistry) {
@@ -282,6 +293,16 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         let key = (string(args, 0)?, string(args, 1)?);
         let bias = number(arg(args, 2)?.clone()).ok_or("setthreatbias expects a number")?;
         world.resource_mut::<RoundScript>().campaign.threat.bias.insert(key, bias);
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "setthreatbiasagainstall", |world, _, args| {
+        let target = string(args, 0)?;
+        let bias = number(arg(args, 1)?.clone()).ok_or("setthreatbiasagainstall expects a number")?;
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .threat
+            .set_against_all(&target, bias);
         Ok(Value::Undefined)
     });
     registry.register(Function, "getthreatbias", |world, _, args| {
@@ -336,6 +357,18 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         drop(runtime);
         set_goal(world, receiver, GoalTarget::Pos(at), at, Some(node))?;
         Ok(Value::Int(1))
+    });
+    // Valid when the cover does not face the actor's enemy (the order `best_cover` prefers).
+    registry.register(Method, "iscovervalidagainstenemy", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let (node, _) = origin_of(world, arg(args, 0)?)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let enemy = match runtime.object_field(id, "enemy") {
+            Value::Object(enemy) => vector_field(&mut runtime, enemy, "origin"),
+            _ => None,
+        };
+        let valid = cover_at(&mut runtime, node).is_some_and(|cover| !faces(&cover, enemy));
+        Ok(Value::Int(valid.into()))
     });
     registry.register(Method, "isingoal", |world, receiver, args| {
         let id = actor(world, receiver)?;
@@ -402,6 +435,18 @@ mod tests {
         assert_eq!(best_cover([0.0; 3], enemy, &[facing, away]), Some(2));
         assert_eq!(best_cover([0.0; 3], enemy, &[facing]), Some(1));
         assert_eq!(best_cover([0.0; 3], None, &[facing, away]), Some(1));
+    }
+
+    /// `set_against_all` sets the target's bias for each existing group, and only those.
+    #[test]
+    fn threat_bias_set_against_all_covers_existing_groups() {
+        let mut threat = ThreatBias::default();
+        threat.groups.insert("axis".into());
+        threat.groups.insert("allies".into());
+        threat.set_against_all("leapfrog", -200.0);
+        assert_eq!(threat.bias("axis", "leapfrog"), -200.0);
+        assert_eq!(threat.bias("allies", "leapfrog"), -200.0);
+        assert_eq!(threat.bias("axis", "allies"), 0.0);
     }
 
     /// A positive bias draws the viewer toward that group; ignores are one-way pairs.

@@ -204,7 +204,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getturret" => Undefined;
         Method "getvalidcoverpeekouts" => EmptyArray;
         Method "giveachievement" => Undefined;
-        Method "iscovervalidagainstenemy" => Zero;
         Method "isgrenadepossafe" => Zero;
         Method "isindoor" => Zero;
         Method "isinscriptedstate" => Zero;

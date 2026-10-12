@@ -68,6 +68,7 @@ pub(super) const IW4_SP: &[Builtin] = &[
     Builtin::new(Function, "setsaveddvar", Script, false),
     Builtin::new(Function, "setsunlight", Script, false),
     Builtin::new(Function, "setthreatbias", Script, false),
+    Builtin::new(Function, "setthreatbiasagainstall", Script, false),
     Builtin::new(Function, "settimescale", Script, false),
     Builtin::new(Function, "target_set", Script, false),
     Builtin::new(Function, "target_setjavelinonly", Script, false),
