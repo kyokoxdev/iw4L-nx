@@ -1,3 +1,4 @@
+pub(crate) mod campaign;
 mod lifecycle;
 mod state;
 
@@ -209,44 +210,6 @@ fn run_function_now(
         index.0.insert(serial, entity);
     }
     Ok(Some(serial))
-}
-
-/// Queues a thread of the named entry (`start` without the restart plan); its serial.
-pub(crate) fn start_thread(
-    world: &mut World,
-    name: &str,
-    receiver: Value,
-    args: Vec<Value>,
-) -> Result<u64, Fault> {
-    let (program, function, location) = entry(world, name)?;
-    spawn_thread(world, &program, function, receiver, args).map_err(|m| Fault::at(&location, m))
-}
-
-/// Queues a thread of a script function reference; its serial.
-pub(crate) fn start_function(
-    world: &mut World,
-    function: u32,
-    receiver: Value,
-    args: Vec<Value>,
-) -> Result<u64, String> {
-    let program = world
-        .resource::<RoundScript>()
-        .program
-        .clone()
-        .ok_or("no loaded GSC program")?;
-    spawn_thread(world, &program, function as usize, receiver, args)
-}
-
-/// The thread has not ended. Not for the thread that is running now.
-pub(crate) fn running(world: &mut World, serial: u64) -> bool {
-    find_thread(world, serial).is_some()
-}
-
-/// Ends a thread that is not running now, queued or waiting.
-pub(crate) fn stop_thread(world: &mut World, serial: u64) {
-    if let Some(entity) = find_thread(world, serial) {
-        kill(world, entity, serial);
-    }
 }
 
 fn spawn_thread(
@@ -1396,17 +1359,7 @@ pub(crate) fn advance_scheduler(world: &mut World) {
     world.resource_mut::<RoundScript>().last_tick = Some(tick);
     let now = i64::from(tick.0) * i64::from(crate::MATCH_TICK_MS);
     super::host::mechanics::deliver_finished(world);
-    super::host::script_anim::advance(world);
-    super::host::actors::advance(world);
-    let mut runtime = world.resource_mut::<RoundScript>();
-    let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut runtime.timed_notifies)
-        .into_iter()
-        .partition(|(at, _, _)| *at <= now);
-    runtime.timed_notifies = later;
-    runtime.pending_notifies.extend(
-        due.into_iter()
-            .map(|(_, receiver, name)| (receiver, name, Vec::new())),
-    );
+    campaign::advance(world, now);
     deliver_external(world, now);
     let doomed = threads_waiting_on_deleted(world);
     let dead: Vec<_> = if doomed.is_empty() {

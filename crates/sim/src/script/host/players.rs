@@ -1264,7 +1264,7 @@ pub(crate) fn sync_players(world: &mut World) {
                 if let Some(slot) = world.resource_mut::<RoundScript>().players.get_mut(&client) {
                     slot.begun = true;
                 }
-                start_deferred(world);
+                super::actors::start_deferred(world);
             }
             Some(_) => {}
             None => {
@@ -1296,16 +1296,7 @@ pub(crate) fn sync_players(world: &mut World) {
                         .set_object_field(object, "pers", pers),
                     Err(_) => return,
                 }
-                let campaign = !world.resource::<RoundScript>().deferred_entries.is_empty();
-                // The SP player is always on allies (squads, friendly fire key on it).
-                if campaign {
-                    world.resource_mut::<RoundScript>().set_object_field(
-                        object,
-                        "team",
-                        Value::string("allies"),
-                    );
-                }
-                if !campaign
+                if !super::actors::join_campaign(world, object)
                     && run_now(world, CONNECT, Value::Object(object), Vec::new(), now).is_err()
                 {
                     return;
@@ -1315,25 +1306,6 @@ pub(crate) fn sync_players(world: &mut World) {
         deliver_answers(world, client);
     }
     settle_deaths(world);
-}
-
-/// Starts held campaign entries; precache stays open until their first wait.
-fn start_deferred(world: &mut World) {
-    let entries = std::mem::take(&mut world.resource_mut::<RoundScript>().deferred_entries);
-    if entries.is_empty() {
-        return;
-    }
-    world.resource_mut::<RoundScript>().loading = true;
-    super::vehicles::init_map_vehicles(world);
-    super::weapons::place_map_weapons(world);
-    super::actors::init_spawners(world);
-    for entry in entries {
-        if let Err(fault) = crate::script::runtime::start(world, &entry, Value::level(), Vec::new())
-        {
-            world.resource_mut::<RoundScript>().fault = Some(fault);
-            return;
-        }
-    }
 }
 
 pub(crate) fn team_name(team: i32) -> &'static str {

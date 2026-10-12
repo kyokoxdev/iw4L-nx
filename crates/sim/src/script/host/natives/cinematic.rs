@@ -16,7 +16,12 @@ fn play(world: &mut World, args: &[Value], looped: bool) -> Result<Value, String
     let name = string(args, 0)?;
     let start_ms = now_ms(world);
     let mut runtime = world.resource_mut::<RoundScript>();
-    runtime.engine.cinematic = Some(cinematic(&runtime.videos, &name, looped, start_ms)?);
+    runtime.engine.cinematic = Some(cinematic(
+        &runtime.campaign.videos,
+        &name,
+        looped,
+        start_ms,
+    )?);
     Ok(Value::Undefined)
 }
 

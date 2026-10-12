@@ -207,7 +207,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getentnum" => Undefined;
         Method "getgoalvolume" => Undefined;
         Method "getlightcolor" => Undefined;
-        Method "getmotionangle" => Undefined;
         Method "getmuzzlesideoffsetpos" => Origin;
         Method "getplayerintelisfound" => Zero;
         Method "getthreatbiasgroup" => Undefined;

@@ -240,7 +240,7 @@ pub(crate) enum HudAudience {
     Client(u32),
 }
 
-fn vector(text: &str) -> [f32; 3] {
+pub(crate) fn vector(text: &str) -> [f32; 3] {
     let mut parts = text
         .split_ascii_whitespace()
         .map(|p| super::natives::iw4::atof(p) as f32);

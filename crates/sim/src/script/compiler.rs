@@ -7,9 +7,11 @@ use std::collections::BTreeSet;
 
 mod assignments;
 mod calls;
+mod campaign;
 mod expressions;
 mod lexer;
 mod statements;
+pub(super) use campaign::unresolved;
 use lexer::{Token, lex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -177,9 +179,10 @@ impl Parser {
                 Op::Vector => {
                     let mut v = [0.0; 3];
                     for component in v.iter_mut().rev() {
-                        *component = super::runtime::scalar(&pop(&mut values)?).ok_or_else(
-                            || Fault::at(&location, "vector component must be a number"),
-                        )?;
+                        *component =
+                            super::runtime::scalar(&pop(&mut values)?).ok_or_else(|| {
+                                Fault::at(&location, "vector component must be a number")
+                            })?;
                     }
                     values.push(Value::Vector(v));
                 }
@@ -369,26 +372,6 @@ fn parse(
     })
 }
 
-/// Every link failure in the program, by message, with the modules it came
-/// from. Parsing still stops at the first fault; linking does not.
-pub(super) fn unresolved(
-    resolver: &impl SourceResolver,
-    roots: &[&str],
-    catalog: &Catalog,
-) -> Result<BTreeMap<String, BTreeSet<String>>, Fault> {
-    let parsed = parse(resolver, roots, catalog)?;
-    let mut failures: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for pending in &parsed.tables.pending {
-        if let Err(message) = link(pending, &parsed.names, &parsed.imports, catalog) {
-            failures
-                .entry(message)
-                .or_default()
-                .insert(pending.module.clone());
-        }
-    }
-    Ok(failures)
-}
-
 pub(super) fn compile(
     resolver: &impl SourceResolver,
     roots: &[&str],
@@ -554,32 +537,5 @@ fn link(
             }
             _ => format!("unresolved function or unknown builtin {name}"),
         }),
-    }
-}
-
-#[cfg(test)]
-mod unresolved_tests {
-    use super::*;
-
-    #[test]
-    fn unresolved_lists_every_unknown_builtin_without_stopping() {
-        let sources = BTreeMap::from([(
-            "maps/test".to_owned(),
-            "main()\n{\n    x = abs(1);\n    self wave_flag(1);\n    spawn_thing();\n    helper();\n}\n\nhelper()\n{\n}\n".to_owned(),
-        )]);
-        let failures = unresolved(&sources, &["maps/test"], &Catalog::iw4_sp()).unwrap();
-        let messages: Vec<&str> = failures.keys().map(String::as_str).collect();
-        assert_eq!(
-            messages,
-            [
-                "unresolved function or unknown builtin spawn_thing",
-                "unresolved method or unknown builtin wave_flag",
-            ]
-        );
-        assert!(
-            failures
-                .values()
-                .all(|modules| modules.contains("maps/test"))
-        );
     }
 }

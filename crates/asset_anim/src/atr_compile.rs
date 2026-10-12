@@ -157,6 +157,14 @@ fn parse_internal(
             loop {
                 let token = parser.parse(true);
                 if parser.hit_eof && token.is_empty() {
+                    // The file's last animation, with no newline after it.
+                    if let Some(work) = current.take() {
+                        if !work.ignore {
+                            children.push(work.into_leaf());
+                        } else {
+                            *ignored += 1;
+                        }
+                    }
                     finish_parent(&mut children, include_parent, loop_sync);
                     return Ok((children, true));
                 }

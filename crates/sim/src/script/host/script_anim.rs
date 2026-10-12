@@ -517,7 +517,11 @@ fn crossed_notes(
 }
 
 fn library(world: &World) -> Arc<AnimLibrary> {
-    world.resource::<RoundScript>().anim_library.clone()
+    world
+        .resource::<RoundScript>()
+        .campaign
+        .anim_library
+        .clone()
 }
 
 fn entity_id(world: &World, receiver: &Value) -> Result<u64, String> {
@@ -741,7 +745,11 @@ pub(crate) fn advance(world: &mut World) {
             runtime.set_object_field(id, "angles", Value::Vector(angles));
         }
         for (flag, note) in notes {
-            if runtime.anim_notes_seen.insert((flag.clone(), note.clone())) {
+            if runtime
+                .campaign
+                .anim_notes_seen
+                .insert((flag.clone(), note.clone()))
+            {
                 diag::info!(Sim, "gsc: script anim notify {flag} {note}");
             }
             runtime

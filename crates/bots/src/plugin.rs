@@ -127,7 +127,10 @@ impl Plugin for BotsPlugin {
                     .chain()
                     .in_set(ClientSet::Load),
             )
-            .add_systems(Update, install_actor_nav.after(ClientSet::Load))
+            .add_systems(
+                Update,
+                nav::campaign::install_actor_nav.after(ClientSet::Load),
+            )
             .add_systems(
                 FixedUpdate,
                 (
@@ -138,22 +141,6 @@ impl Plugin for BotsPlugin {
                     .in_set(AuthoritySet::Ingress)
                     .run_if(authority_should_tick),
             );
-    }
-}
-
-/// SP actors route over the level's path nodes with the bots' A\*.
-fn install_actor_nav(world: Option<Res<AuthorityWorld>>) {
-    let Some(mut world) = world.as_ref().and_then(|world| world.try_lock()) else {
-        return;
-    };
-    if let Some(nodes) = world.path_nodes_awaiting_nav() {
-        let edges: usize = nodes.iter().map(|node| node.links.len()).sum();
-        diag::info!(
-            Sim,
-            "actors: route graph over {} path nodes, {edges} links",
-            nodes.len()
-        );
-        world.install_actor_nav(nav::path_nav(&nodes));
     }
 }
 
@@ -213,7 +200,13 @@ fn drain_bot_add_queue(
     }
     let mut taken = vec![local.0];
     if let Some(world) = world.as_ref() {
-        taken.extend(world.lock().clients_scoreboard().into_iter().map(|(id, _)| id));
+        taken.extend(
+            world
+                .lock()
+                .clients_scoreboard()
+                .into_iter()
+                .map(|(id, _)| id),
+        );
     }
     if let Some(hub) = hub.as_ref() {
         taken.extend(hub.connections.clients().map(sim::ClientId));
@@ -551,7 +544,8 @@ fn think_bots(mut p: ThinkBots) {
                 continue;
             };
             drop(observe);
-            let _drive = bevy::log::info_span!(target: "iw4l", "bots", name = "drive_nav").entered();
+            let _drive =
+                bevy::log::info_span!(target: "iw4l", "bots", name = "drive_nav").entered();
             let started = std::time::Instant::now();
             let mut cmd = brain.drive_nav(
                 &obs,

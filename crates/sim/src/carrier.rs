@@ -201,7 +201,7 @@ impl SimWorld {
     pub fn defer_gsc_until_player(&mut self, entries: Vec<String>) {
         let mut runtime = self.ecs.resource_mut::<crate::script::RoundScript>();
         runtime.started = true;
-        runtime.deferred_entries = entries;
+        runtime.campaign.deferred_entries = entries;
     }
 
     pub fn start_gsc(
@@ -226,13 +226,15 @@ impl SimWorld {
     pub fn path_nodes_awaiting_nav(&self) -> Option<std::sync::Arc<Vec<asset_core::PathNode>>> {
         let runtime = self.ecs.resource::<crate::script::RoundScript>();
         let nodes = &runtime.restart.as_ref()?.path_nodes;
-        (runtime.actor_nav.is_none() && !nodes.is_empty()).then(|| nodes.clone())
+        (runtime.campaign.actor_nav.is_none() && !nodes.is_empty()).then(|| nodes.clone())
     }
 
     /// Gives SP actors their route graph (the bot brain's, over path nodes).
     pub fn install_actor_nav(&mut self, nav: std::sync::Arc<dyn crate::script::ActorNav>) {
-        self.ecs.resource_mut::<crate::script::RoundScript>().actor_nav =
-            Some(crate::script::host::actors::NavHandle(nav));
+        self.ecs
+            .resource_mut::<crate::script::RoundScript>()
+            .campaign
+            .actor_nav = Some(crate::script::host::actors::NavHandle(nav));
     }
 
     pub fn gsc_realm(&self) -> Option<crate::script::Realm> {

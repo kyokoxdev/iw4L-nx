@@ -19,9 +19,6 @@ pub(crate) struct RoundScript {
     pub(crate) dying: Vec<u64>,
     pub(crate) last_tick: Option<crate::Tick>,
     pub(crate) started: bool,
-    /// Campaign level entries held until the local player begins: SP level
-    /// scripts expect the player entity before `main` runs.
-    pub(crate) deferred_entries: Vec<String>,
     pub(crate) objects: BTreeMap<u64, BTreeMap<u32, Value>>,
     pub(crate) next_object: u64,
     pub(crate) arrays: BTreeMap<u64, BTreeMap<ArrayKey, Value>>,
@@ -49,14 +46,8 @@ pub(crate) struct RoundScript {
     pub(crate) hud_slots: BTreeMap<u64, usize>,
     pub(crate) next_entity_number: i32,
     pub(crate) tables: Arc<BTreeMap<String, StringTable>>,
-    pub(crate) videos: Arc<BTreeMap<String, i32>>,
-    pub(crate) anim_library: Arc<host::script_anim::AnimLibrary>,
-    /// Notetrack notifies seen so far, `(flag, note)`; each logs once.
-    pub(crate) anim_notes_seen: std::collections::BTreeSet<(Arc<str>, Arc<str>)>,
     pub(crate) rng: u32,
     pub(crate) pending_notifies: Vec<(Value, Arc<str>, Vec<Value>)>,
-    /// Notifies due at a level time (ms), e.g. SP `playsound` done notifies.
-    pub(crate) timed_notifies: Vec<(i64, Value, Arc<str>)>,
     pub(crate) signals: Vec<Arc<str>>,
     pub(crate) engine: host::entities::EngineState,
     pub(crate) players: BTreeMap<u32, host::players::PlayerSlot>,
@@ -95,14 +86,8 @@ pub(crate) struct RoundScript {
     pub(crate) use_selected: BTreeMap<u32, u64>,
     pub(crate) t5: host::natives::t5::T5State,
     pub(crate) restart: Option<Arc<host::restart::RestartPlan>>,
-    /// SP path node objects, in `PathData` order.
-    pub(crate) nodes: Vec<u64>,
-    /// SP actor goals (`setgoalpos`/`node`/`entity`).
-    pub(crate) actor_goals: BTreeMap<u64, host::actors::ActorGoal>,
-    /// SP actors' animscript state and motor modes.
-    pub(crate) actor_brains: BTreeMap<u64, host::actors::ActorBrain>,
-    /// Routes over the path nodes; installed by the bot brain.
-    pub(crate) actor_nav: Option<host::actors::NavHandle>,
+    /// Campaign-only state (fork).
+    pub(crate) campaign: super::campaign::CampaignState,
     pub(crate) finished: bool,
     pub(crate) pending_restart: Option<bool>,
     pub(crate) restored_pers: BTreeMap<u32, host::restart::Detached>,
@@ -179,20 +164,12 @@ impl RoundScript {
             restart: Default::default(),
             finished: Default::default(),
             pending_restart: Default::default(),
-            deferred_entries: Default::default(),
             endon_top: Default::default(),
             parents: Default::default(),
             orphans: Default::default(),
             child_spawn: Default::default(),
-            videos: Default::default(),
-            anim_library: Default::default(),
-            anim_notes_seen: Default::default(),
-            timed_notifies: Default::default(),
             new_models: Default::default(),
-            nodes: Default::default(),
-            actor_goals: Default::default(),
-            actor_brains: Default::default(),
-            actor_nav: Default::default(),
+            campaign: Default::default(),
             restored_pers: Default::default(),
         }
     }

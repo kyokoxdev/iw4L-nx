@@ -149,29 +149,33 @@ fn extract_capture_pending(
 #[cfg(target_os = "horizon")]
 fn render_and_present(
     world: &mut World,
-    state: &mut bevy::ecs::system::SystemState<
+    state: &mut bevy::ecs::system::SystemState<(
         Query<(
             &bevy::render::view::ViewTarget,
             &bevy::render::camera::ExtractedCamera,
         )>,
-    >,
+        Query<(
+            bevy::render::sync_world::MainEntity,
+            &mut bevy::render::view::ExtractedWindow,
+        )>,
+        Res<bevy::render::renderer::RenderQueue>,
+    )>,
 ) {
     use bevy::camera::NormalizedRenderTarget;
-    use bevy::render::view::ExtractedWindows;
     world.run_schedule(bevy::render::renderer::RenderGraph);
-    world.resource_scope(|world, mut windows: Mut<ExtractedWindows>| {
-        let views = state.get(world).unwrap();
-        for window in windows.values_mut() {
-            let view_needs_present = views.iter().any(|(view_target, camera)| {
-                matches!(
-                    camera.target,
-                    Some(NormalizedRenderTarget::Window(w)) if w.entity() == window.entity
-                ) && view_target.needs_present()
-            });
-            if view_needs_present || window.needs_initial_present {
-                window.present();
-                window.needs_initial_present = false;
-            }
+    let Ok((views, mut windows, queue)) = state.get_mut(world) else {
+        return;
+    };
+    for (window_entity, mut window) in &mut windows {
+        let view_needs_present = views.iter().any(|(view_target, camera)| {
+            matches!(
+                camera.target,
+                Some(NormalizedRenderTarget::Window(w)) if w.entity() == window_entity
+            ) && view_target.needs_present()
+        });
+        if view_needs_present || window.needs_initial_present {
+            window.present(&queue);
+            window.needs_initial_present = false;
         }
-    });
+    }
 }

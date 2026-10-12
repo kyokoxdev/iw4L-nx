@@ -117,8 +117,8 @@ pub(crate) fn install_level(
     runtime.next_object = 3;
     runtime.next_entity_number = playerstate_iw4::GENTITY_SPAWN_BASE;
     runtime.tables = plan.tables.clone();
-    runtime.videos = plan.videos.clone();
-    runtime.anim_library = plan.anim.clone();
+    runtime.campaign.videos = plan.videos.clone();
+    runtime.campaign.anim_library = plan.anim.clone();
     runtime.rng = u32::from_le_bytes(program.fingerprint()[..4].try_into().unwrap()) | 1;
     runtime.loading = true;
     world.insert_resource(natives);
@@ -145,7 +145,8 @@ pub(crate) fn install_level(
         .resource_mut::<RoundScript>()
         .spawn_map_entities(&entities, &keys)
         .map_err(|m| Fault::at(&location, m))?;
-    host::actors::spawn_path_nodes(world, &path_nodes).map_err(|m| Fault::at(&location, m))?;
+    host::actors::spawn_path_nodes(world, &path_nodes, &entities)
+        .map_err(|m| Fault::at(&location, m))?;
     host::presence::initialize_map_models(world);
     Ok(())
 }

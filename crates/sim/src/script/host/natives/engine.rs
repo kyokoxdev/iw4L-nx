@@ -800,6 +800,7 @@ fn register_entities(registry: &mut NativeRegistry) {
         let ids = classname_prefix(world, ids, "info_vehicle_node");
         objects(world, ids)
     });
+    registry.register(Function, "isspawner", |_, _, _| Ok(Value::Int(0)));
     registry.register(Function, "getteamplayersalive", |world, _, args| {
         let team = team_key(args)?;
         Ok(Value::Int(super::super::players::alive_on_team(
@@ -887,14 +888,25 @@ fn register_entities(registry: &mut NativeRegistry) {
         } else {
             None
         };
-        spawn_entity(world, &classname, origin, flags, cylinder).map(Value::Object)
-    });
-    // SP aitype `spawner()`: the team `getspawnerteamarray` filters on.
-    registry.register(Method, "setspawnerteam", |world, receiver, args| {
-        let id = entity_id(world, receiver)?;
-        let team = string(args, 0)?;
-        runtime(world).set_object_field(id, "team", Value::string(&team));
-        Ok(Value::Undefined)
+        let presence = if matches!(classname.as_str(), "script_model" | "script_origin") {
+            Some(super::super::presence::spawn_presence(world, origin)?)
+        } else {
+            None
+        };
+        let number =
+            presence.and_then(|id| crate::frame::FrameWorld::from_world(world).gentity_number(id));
+        let mut runtime = runtime(world);
+        let id = runtime.create_entity(EntityKind::Spawned, &classname)?;
+        runtime.set_object_field(id, "origin", Value::Vector(origin));
+        runtime.set_object_field(id, "angles", Value::Vector(ZERO));
+        runtime.set_object_field(id, "spawnflags", Value::Int(flags));
+        let entity = runtime.entities.get_mut(&id).unwrap();
+        entity.cylinder = cylinder;
+        entity.presence = presence;
+        if let Some(number) = number {
+            entity.number = number;
+        }
+        Ok(Value::Object(id))
     });
     registry.register(Function, "sortbydistance", |world, _, args| {
         let values = array_values(world, arg(args, 0)?)?;
@@ -1540,22 +1552,8 @@ fn register_sound_and_fx(registry: &mut NativeRegistry) {
             let alias = string(args, 0)?;
             let origin = origin_of(world, receiver)?;
             play_sound_at(world, origin, &alias)?;
-            // SP: (alias, notify, stop_on_death); the notify fires when the sound ends.
-            // ponytail: fixed length; use the alias's sound length once sim carries it.
-            const SOUND_NOTIFY_MS: i64 = 2000;
-            if args.len() > 3 {
-                return Err("expected a sound alias and at most a notify and a flag".into());
-            }
-            if args.len() > 1 {
-                let name = string(args, 1)?;
-                let now = i64::from(crate::level_time_ms(
-                    world.resource::<crate::step::StepRequest>().tick,
-                ));
-                world.resource_mut::<RoundScript>().timed_notifies.push((
-                    now + SOUND_NOTIFY_MS,
-                    receiver.clone(),
-                    name.into(),
-                ));
+            if args.len() != 1 {
+                return Err("expected one sound alias argument".into());
             }
             Ok(Value::Undefined)
         });
@@ -2219,32 +2217,3 @@ fn register_refused(registry: &mut NativeRegistry) {
 
 pub const EXIT_LEVEL: &str = "engine:exitlevel";
 pub const MAP_RESTART: &str = "engine:map_restart";
-
-/// A `spawn`ed entity; script models and origins get a presence.
-pub(crate) fn spawn_entity(
-    world: &mut World,
-    classname: &str,
-    origin: [f32; 3],
-    flags: i32,
-    cylinder: Option<(f32, f32)>,
-) -> Result<u64, String> {
-    let presence = if matches!(classname, "script_model" | "script_origin") {
-        Some(super::super::presence::spawn_presence(world, origin)?)
-    } else {
-        None
-    };
-    let number =
-        presence.and_then(|id| crate::frame::FrameWorld::from_world(world).gentity_number(id));
-    let mut runtime = runtime(world);
-    let id = runtime.create_entity(EntityKind::Spawned, classname)?;
-    runtime.set_object_field(id, "origin", Value::Vector(origin));
-    runtime.set_object_field(id, "angles", Value::Vector(ZERO));
-    runtime.set_object_field(id, "spawnflags", Value::Int(flags));
-    let entity = runtime.entities.get_mut(&id).unwrap();
-    entity.cylinder = cylinder;
-    entity.presence = presence;
-    if let Some(number) = number {
-        entity.number = number;
-    }
-    Ok(id)
-}

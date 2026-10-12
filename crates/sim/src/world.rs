@@ -836,7 +836,7 @@ impl SimState {
             .weapons()
             .weapon_script_names
             .iter()
-            .position(|n| n == name)
+            .position(|n| n.eq_ignore_ascii_case(name))
             .and_then(|i| u32::try_from(i).ok())
             .filter(|&i| i != 0)
     }
@@ -2095,7 +2095,8 @@ impl SimState {
             hitbox_cmds,
         );
         drop(span);
-        let span = tracing::info_span!(target: "iw4l", "sim", name = "tick_player_anim_trees").entered();
+        let span =
+            tracing::info_span!(target: "iw4l", "sim", name = "tick_player_anim_trees").entered();
         self.player_bodies.tick_trees(
             PlayerAnimInputs {
                 definitions: [

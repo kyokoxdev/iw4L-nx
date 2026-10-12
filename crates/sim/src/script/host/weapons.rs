@@ -11,6 +11,8 @@ use bevy_ecs::prelude::World;
 pub(crate) use weapon_iw4::WEAPTYPE_PROJECTILE;
 use weapon_iw4::{WEAPTYPE_GRENADE, WeaponState};
 
+pub(super) mod campaign;
+
 const GRENADE_LINGER_MS: i64 = 30_000; // threads on the grenade keep running after it explodes
 
 pub(crate) fn is_changing_weapon(state: i32) -> bool {
@@ -137,7 +139,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
                 .player_client_of(value)
                 .map(ClientId)
                 .ok_or("MagicBullet owner is not a player")?,
-            None => return Err("MagicBullet needs an owning player".into()),
+            None => campaign::owner(world).ok_or("MagicBullet needs an owning player")?,
         };
         launch(world, owner, weapon, start, end)
     });
@@ -355,54 +357,6 @@ fn adopt_fired(world: &mut World) {
             runtime.set_object_field(object, "weaponmodel", Value::string(&model));
         }
         raise(world, player, notify, vec![Value::Object(object), name]);
-    }
-}
-
-/// Puts an ownerless weapon item in the world; its item number.
-pub(crate) fn place_weapon(
-    world: &mut World,
-    name: &str,
-    origin: [f32; 3],
-    angles: [f32; 3],
-) -> Result<Option<i32>, String> {
-    let tick = world.resource::<crate::step::StepRequest>().tick;
-    let mut frame = FrameWorld::from_world(world);
-    let weapon = crate::script_player::weapon_named(&frame, name)?;
-    Ok(crate::item::place_weapon(
-        &mut frame, tick, weapon, origin, angles,
-    ))
-}
-
-/// A level's `weapon_<name>` entities become the weapon items they stand for.
-pub(crate) fn place_map_weapons(world: &mut World) {
-    let weapons: Vec<(u64, String)> = world
-        .resource::<RoundScript>()
-        .entities
-        .iter()
-        .filter(|(_, e)| e.kind == EntityKind::Map)
-        .filter_map(|(id, e)| Some((*id, e.classname.strip_prefix("weapon_")?.to_owned())))
-        .collect();
-    for (id, name) in weapons {
-        let (origin, angles) = {
-            let mut runtime = world.resource_mut::<RoundScript>();
-            let vector = |value| match value {
-                Value::Vector(v) => v,
-                _ => [0.0; 3],
-            };
-            (
-                vector(runtime.object_field(id, "origin")),
-                vector(runtime.object_field(id, "angles")),
-            )
-        };
-        match place_weapon(world, &name, origin, angles) {
-            Ok(Some(number)) => {
-                if let Some(entity) = world.resource_mut::<RoundScript>().entities.get_mut(&id) {
-                    entity.kind = EntityKind::Item(number);
-                }
-            }
-            Ok(None) => {}
-            Err(message) => diag::warn!(Sim, "gsc: level weapon {name}: {message}"),
-        }
     }
 }
 

@@ -2,6 +2,12 @@
 
 Fork-only. Checked against retail files, except the load path.
 
+Upstream merges: campaign code in a file upstream also edits lives in a child
+module `<file>/campaign.rs` (it keeps private access), declared by one line in
+the parent, so a merge meets one-line hooks rather than SP blocks. Upstream's
+`isspawner` and `playsound` stay as they are; `actors::register` runs last and
+replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
+
 ## What already holds
 
 - `fastfile_iw4` walks every retail SP and Special Ops zone, `GameWorldSp`
@@ -80,14 +86,16 @@ Fork-only. Checked against retail files, except the load path.
    `death`, and switches with `killanimscript` + `end_script`. The motor walks the
    route at the anim tree's blended root-motion speed (`animmode` none) or applies
    root motion, turning per `orientmode`. Path nodes are script objects; goals
-   route with the bots' A\* (`bots::nav::path_nav`). Sight picks the nearest
+   route with the bots' A\* (`bots::nav::campaign`); node objects take the keys of
+   the map's `node_*` entity at their origin (`script_linkto`, ...). Sight picks the nearest
    visible hostile (`enemy`); `shoot` fires the actor's weapon through the turret
    bullet path, which raises `EV_FIRE_WEAPON` (fire sound, muzzle flash on the
    attached gun's `tag_flash`) for actors, turrets and vehicles alike. Tags of
    attached models answer on the sim side (`gettagorigin`, `muzzle`). Damage
    fills the `damage*` fields. Map `script_vehicle`s are live, spawners
    `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths. Level
-   `weapon_*` and actor drops are weapon items. Trainer and favela run with no
+   `weapon_*` and actor drops are weapon items, level `misc_turret`s turrets of
+   their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
    firefight does. Not yet: traverse nodes, cover queries, goal volumes, threat
    bias, `setviewmodel` hands. Then saves.
