@@ -519,6 +519,33 @@ fn suppress(world: &mut World) {
     }
 }
 
+/// At the claimed node (`node`) and, with `facing`, turned its way.
+// ponytail: "turned its way" is within 45 degrees of the node's yaw; tune if
+// cover reactions pick the wrong set.
+fn near_claim_node(world: &mut World, receiver: &Value, facing: bool) -> Result<Value, String> {
+    let id = actor(world, receiver)?;
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let Value::Object(node) = runtime.object_field(id, "node") else {
+        return Ok(Value::Int(0));
+    };
+    let (
+        Value::Vector(origin),
+        Value::Vector(at),
+        Value::Vector(angles),
+        Value::Vector(node_angles),
+    ) = (
+        runtime.object_field(id, "origin"),
+        runtime.object_field(node, "origin"),
+        runtime.object_field(id, "angles"),
+        runtime.object_field(node, "angles"),
+    )
+    else {
+        return Ok(Value::Int(0));
+    };
+    let aligned = !facing || math_iw4::angle_subtract(angles[1], node_angles[1]).abs() < 45.0;
+    Ok(Value::Int((near(origin, at) && aligned).into()))
+}
+
 /// `shoot([accuracy scale], [point])`: one shot of the actor's weapon at the
 /// point or its enemy, missing by chance per `accuracy`.
 fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
@@ -1573,6 +1600,12 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             _ => return Ok(Value::Int(0)),
         };
         Ok(Value::Int(near(origin, at).into()))
+    });
+    registry.register(Method, "nearclaimnode", |world, receiver, _| {
+        near_claim_node(world, receiver, false)
+    });
+    registry.register(Method, "nearclaimnodeandangle", |world, receiver, _| {
+        near_claim_node(world, receiver, true)
     });
     registry.register(Method, "getmuzzleangle", |world, receiver, _| {
         let id = entity_id(world, receiver)?;

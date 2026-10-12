@@ -213,8 +213,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "maymovefrompointtopoint" => Zero;
         Method "melee" => Undefined;
         Method "mountvehicle" => Undefined;
-        Method "nearclaimnode" => Undefined;
-        Method "nearclaimnodeandangle" => Undefined;
         Method "painvisionoff" => Undefined;
         Method "painvisionon" => Undefined;
         Method "playerclearstreamorigin" => Undefined;

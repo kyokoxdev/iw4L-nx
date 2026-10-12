@@ -117,7 +117,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `maymovetopoint` sweeps a body-sized box at step height. Hostile bullets that
    hit something within 64 units of an actor's eye fill `suppressionmeter`
    (drains over ~3 s); `issuppressed` reads it, `ignoresuppression` blocks it.
+   `nearclaimnode[andangle]`: at the claimed node (and within 45° of its yaw).
    Not yet: `ismovesuppressed`, `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
-   `clearfixednodesafevolume` (no consumer in the retail dump), `nearclaimnode`/`nearclaimnodeandangle`, `startcoverarrival`
+   `clearfixednodesafevolume` (no consumer in the retail dump), `startcoverarrival`
    (arrival motion). Then saves.
 7. Switch: SP zones' memory budget.
