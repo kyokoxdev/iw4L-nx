@@ -95,7 +95,9 @@ pub(super) struct CommonProducts {
     pub(super) fx_models: asset_game::FxModelCatalog,
     pub(super) impact_fx: Option<asset_game::OwnedFxImpactTable>,
     pub(super) t5_xanims: XAnimBuild,
+    pub(super) iw5_player_anim_sources: asset_anim::PlayerAnimSources,
     pub(super) t5_player_anim_sources: asset_anim::PlayerAnimSources,
+    pub(super) t6_player_anim_sources: asset_anim::PlayerAnimSources,
     pub(super) t5_fx: FxCatalog,
     pub(super) t5_impact_fx: Option<asset_game::OwnedFxImpactTable>,
     pub(super) iw5_materials: MaterialCatalog,
@@ -643,6 +645,7 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
         fpv: iw5_fpv,
         world_guns: iw5_world_guns,
         xanims: iw5_xanims,
+        player_anim_sources: iw5_player_anim_sources,
         materials: iw5_materials,
         stats_tables: iw5_census_stats,
         scene_models: iw5_scene_models,
@@ -693,7 +696,8 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
         weapons.len(),
         weapons.namespace_count(asset_core::AssetNamespace::T5)
     ));
-    let (t6_weapons, preparation, t6_tables, t6_report, t6_ui_images) = t6_weapon_walk.await;
+    let (t6_weapons, preparation, t6_tables, t6_report, t6_ui_images, t6_player_anim_sources) =
+        t6_weapon_walk.await;
     common_report.extend(t6_report);
     weapons.absorb(t6_weapons);
     if let Some(compiler) = preparation {
@@ -905,6 +909,8 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
             impact_fx: common_impact,
             t5_xanims,
             t5_player_anim_sources,
+            iw5_player_anim_sources,
+            t6_player_anim_sources,
             t5_fx,
             t5_impact_fx,
             iw5_materials,

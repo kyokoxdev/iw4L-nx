@@ -91,6 +91,8 @@ pub(super) async fn walk_prepared_match(
         impact_fx: common_impact,
         t5_xanims,
         t5_player_anim_sources,
+        iw5_player_anim_sources,
+        t6_player_anim_sources,
         t5_fx,
         t5_impact_fx,
         iw5_materials,
@@ -187,8 +189,13 @@ pub(super) async fn walk_prepared_match(
         gaps,
     } = loaded;
     world.source_namespace = map_namespace;
-    if map_family == asset_core::FamilyId::T5 {
-        player_anim_sources = t5_player_anim_sources;
+    if player_anim_sources.family() != Some(map_family) {
+        player_anim_sources = match map_family {
+            asset_core::FamilyId::Iw5 => iw5_player_anim_sources,
+            asset_core::FamilyId::T5 => t5_player_anim_sources,
+            asset_core::FamilyId::T6 => t6_player_anim_sources,
+            _ => asset_anim::PlayerAnimSources::default(),
+        };
         player_anim_sources.compile();
         report.push(player_anim_sources.compile_report_line());
         report.push(player_anim_sources.parse_report_line());
@@ -285,6 +292,7 @@ pub(super) async fn walk_prepared_match(
     };
     let mut scripts = iw4_scripts;
     scripts.overlay(map_scripts);
+    scripts.insert_source("iw4l_maps/barrels", crate::map_scripts::BARRELS.to_owned());
     scripts.insert_source(
         "iw4l_t6/equipment",
         crate::map_scripts::T6_EQUIPMENT.to_owned(),

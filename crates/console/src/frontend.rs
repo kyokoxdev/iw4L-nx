@@ -8,7 +8,6 @@ use crate::{CommandSpec, ConsoleCommand, ConsoleRegistry};
 
 const PAGE_SIZE: usize = 10;
 const PACK_SLOTS: usize = 16;
-const LOBBY_REOPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Default)]
 pub(crate) struct FrontendState {
@@ -24,7 +23,6 @@ pub(crate) struct FrontendState {
     password_joining: bool,
     lobby_password: String,
     rules_seeded: bool,
-    reopen_lobby_until: Option<std::time::Instant>,
 }
 
 #[derive(SystemParam)]
@@ -145,10 +143,9 @@ pub(crate) fn route(
             && !state.public
             && services.menus.is_some()
         {
-            state.reopen_lobby_until = Some(std::time::Instant::now() + LOBBY_REOPEN_WAIT);
+            menus.write(UiMenuRequest::RestoreLobby);
             dvars.set("ui_frontend_status", "");
         } else {
-            state.reopen_lobby_until = None;
             *party = UiPartyState::default();
             state.public = false;
         }
@@ -168,32 +165,8 @@ pub(crate) fn route(
         dvars.set("ui_frontend_status", reason);
     } else if returned_in_menu && party.in_lobby && party.is_host {
         if !left_session && services.menus.is_some() {
-            state.reopen_lobby_until = Some(std::time::Instant::now() + LOBBY_REOPEN_WAIT);
+            menus.write(UiMenuRequest::RestoreLobby);
         } else {
-            *party = UiPartyState::default();
-        }
-    }
-    // The return resets the menu stack: the lobby opened before the main menu would be dropped.
-    if let Some(deadline) = state.reopen_lobby_until {
-        let open = services
-            .menus
-            .as_ref()
-            .map(|script_menus| script_menus.open_names());
-        let is_open = |name: &str| {
-            open.iter()
-                .flatten()
-                .any(|menu| menu.eq_ignore_ascii_case(name))
-        };
-        if !party.in_lobby {
-            state.reopen_lobby_until = None;
-        } else if is_open("iw4l_main") {
-            if !is_open("game_lobby") {
-                menus.write(UiMenuRequest::Open("game_lobby".into()));
-                diag::info!(Ui, "frontend: private lobby reopened");
-            }
-            state.reopen_lobby_until = None;
-        } else if std::time::Instant::now() >= deadline {
-            state.reopen_lobby_until = None;
             *party = UiPartyState::default();
         }
     }
@@ -239,7 +212,6 @@ pub(crate) fn route(
                 }
                 "ui_create_lobby" => {
                     selected_game(&dvars, &maps)?;
-                    state.reopen_lobby_until = None;
                     state.lobby_password.clear();
                     party.active = true;
                     party.in_lobby = true;
@@ -283,7 +255,6 @@ pub(crate) fn route(
                     if !party.in_lobby || !party.is_host {
                         return Err("Only the lobby host can start a match".into());
                     }
-                    state.reopen_lobby_until = None;
                     let (map, mode) = selected_game(&dvars, &maps)?;
                     commands.insert_resource(host_rules(&dvars));
                     if state.public {
@@ -589,6 +560,7 @@ pub(crate) fn route(
         }
     }
     let mut lobby_names = vec![settings.player_name.clone()];
+    let mut local_lobby_row = Some(0);
     if state.public
         && let Some(bridge) = services.bridge.as_ref()
     {
@@ -597,6 +569,7 @@ pub(crate) fn route(
                 map,
                 mode,
                 members,
+                identity,
                 member_names,
                 max_players,
                 ..
@@ -605,10 +578,12 @@ pub(crate) fn route(
                 map,
                 mode,
                 members,
+                identity,
                 member_names,
                 max_players,
                 ..
             } => {
+                local_lobby_row = members.iter().position(|id| *id == identity.member_id);
                 lobby_names = members
                     .iter()
                     .map(|id| {
@@ -644,6 +619,14 @@ pub(crate) fn route(
         dvars.set(
             &format!("ui_lobby_member_{row}"),
             name.map(String::as_str).unwrap_or(""),
+        );
+        dvars.set(
+            &format!("ui_lobby_member_{row}_local"),
+            if local_lobby_row == Some(row) {
+                "1"
+            } else {
+                "0"
+            },
         );
         dvars.set(
             &format!("ui_lobby_member_{row}_visible"),

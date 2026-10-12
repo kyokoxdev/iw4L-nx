@@ -1276,10 +1276,10 @@ pub fn register_fpv_present_systems(app: &mut App) {
         .scoped::<SessionViewmodel>(frame::MatchScope::Live)
         .scoped::<PreparedFpv>(frame::MatchScope::Live)
         .scoped::<crate::anim::model_materials::PreparedModelMaterials>(frame::MatchScope::Live)
-        .scoped::<SessionViewKick>(frame::MatchScope::Live)
+        .scoped::<SessionViewKick>(frame::Timeline::Running)
         .scoped::<GunOffset>(frame::MatchScope::Live)
         .scoped::<ViewweaponAim>(frame::MatchScope::Live)
-        .scoped::<PendingViewHurt>(frame::MatchScope::Live)
+        .scoped::<PendingViewHurt>(frame::Timeline::Running)
         .scoped::<FpvStatusGap>(frame::MatchScope::Live)
         .init_app::<RenderPresentationGaps>()
         .add_systems(

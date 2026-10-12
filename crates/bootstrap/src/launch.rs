@@ -87,7 +87,7 @@ fn install_class_catalog(
     mut commands: Commands,
     shell: Option<ResMut<ShellCommonTask>>,
     mut strings: ResMut<asset_game::LocalizeCatalog>,
-    menus: Res<asset_game::MenuCatalog>,
+    mut menus: ResMut<asset_game::MenuCatalog>,
     account: Option<Res<net::LocalAccount>>,
     mut player_data: ResMut<sim::LocalPlayerData>,
 ) {
@@ -148,6 +148,7 @@ fn install_class_catalog(
         ("mp/rankicontable.csv", common.weapons.shared_rank_icons()),
     ] {
         if let Ok(table) = table {
+            menus.insert_string_table(table.clone());
             player_data.install_rank_table(
                 name,
                 sim::script::StringTable {
@@ -191,6 +192,7 @@ fn install_class_catalog(
     strings.absorb(common.strings);
     commands.insert_resource(class_catalog);
     commands.remove_resource::<ShellCommonTask>();
+    commands.remove_resource::<frame::FrontendContentLoading>();
 }
 
 struct FrontendLoad {
@@ -610,6 +612,9 @@ fn run_menu(
         artifacts,
     };
     let mut app = App::new();
+    if std::env::var_os("IW4L_PRESENT_MODE").is_some() {
+        app.insert_resource(ui::PresentModeOverride(launch_present_mode(false)));
+    }
     let namespace_trees = NamespaceTrees::discover(&games);
     let have = content_flags(&namespace_trees);
     let master_intent = if have.0 & net::CONTENT_IW4 == 0 {
@@ -644,6 +649,7 @@ fn run_menu(
         }),
     })
     .insert_resource(frame::FrontendPending)
+    .insert_resource(frame::FrontendContentLoading)
     .add_systems(
         Update,
         install_frontend.run_if(resource_exists::<PendingFrontend>),

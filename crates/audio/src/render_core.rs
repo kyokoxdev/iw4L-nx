@@ -145,6 +145,8 @@ struct Cursor {
 
 struct RenderState {
     cursors: [Cursor; PHYSICAL_VOICES],
+    buses: crate::mix_bus::MixBuses,
+    limiter: crate::mix_bus::MasterLimiter,
 }
 
 pub(crate) struct RenderShared {
@@ -189,6 +191,8 @@ impl RenderShared {
                     position: 0.0,
                     gains: [crate::media::GainEnvelope::default(); 3],
                 }; PHYSICAL_VOICES],
+                buses: Default::default(),
+                limiter: Default::default(),
             }),
             frame: AtomicU64::new(0),
             match_epoch: AtomicU64::new(0),
@@ -244,7 +248,7 @@ impl RenderShared {
                     epoch,
                     cancelled,
                     hold_one_shots,
-                    output,
+                    state.buses.bus(assignment.media.bus),
                 );
                 match device {
                     Some(true) => {
@@ -280,6 +284,7 @@ impl RenderShared {
                 slot.phase.store(RETIRED, Ordering::Release);
             }
         }
+        state.buses.mix_into(output);
         // Control holds this lock only to attach or detach; skip a quantum then.
         if let Ok(stream) = self.stream.try_lock()
             && let Some(ring) = stream.as_ref()
@@ -287,14 +292,14 @@ impl RenderShared {
             ring.mix(output);
         }
         let master = f32::from_bits(self.master.load(Ordering::Relaxed));
-        let mut peak = f32::from_bits(self.peak.load(Ordering::Relaxed));
         for sample in output.iter_mut().flatten() {
             let value = *sample * master;
-            *sample = if value.is_finite() {
-                value.clamp(-1.0, 1.0)
-            } else {
-                0.0
-            };
+            *sample = if value.is_finite() { value } else { 0.0 };
+        }
+        state.limiter.apply(output);
+        let mut peak = f32::from_bits(self.peak.load(Ordering::Relaxed));
+        for sample in output.iter_mut().flatten() {
+            *sample = sample.clamp(-1.0, 1.0);
             peak = peak.max(sample.abs());
         }
         self.peak.store(peak.to_bits(), Ordering::Relaxed);

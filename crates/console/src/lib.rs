@@ -2,6 +2,7 @@ mod barracks_menu;
 mod campaign_menu;
 pub mod binds;
 mod cinematic;
+mod chat;
 mod class_dispatch;
 mod class_menu;
 mod command;

@@ -20,11 +20,11 @@ wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgp
 naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
 # bevy_asset: horizon takes the Windows file reader (async-io/rustix have no
 # Horizon backend).
-bevy_asset = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
+bevy_asset = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "b95178f00a6c29540511f59f48ea9228c3d9ea2b" }
 # memmap2 (via fontique): horizon has no mmap, use the stub backend.
-memmap2 = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
+memmap2 = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "b95178f00a6c29540511f59f48ea9228c3d9ea2b" }
 # cpal (via rodio/bevy_audio): horizon host over the SDL2 audio callback.
-cpal = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
+cpal = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "b95178f00a6c29540511f59f48ea9228c3d9ea2b" }
 
 [workspace]
 resolver = "3"
@@ -87,6 +87,7 @@ members = [
     "crates/render_material",
     "crates/render_scene",
     "crates/replay",
+    "crates/theater",
     "crates/session",
     "crates/sim",
     "crates/structured_data_iw4",
@@ -191,6 +192,7 @@ render_material = { path = "crates/render_material" }
 render_scene = { path = "crates/render_scene" }
 session = { path = "crates/session" }
 replay = { path = "crates/replay" }
+theater = { path = "crates/theater" }
 sim = { path = "crates/sim" }
 trace_iw4 = { path = "crates/trace_iw4" }
 ui = { path = "crates/ui" }

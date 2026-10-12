@@ -395,10 +395,6 @@ pub fn seal_render_frame(
             1u32,
         ),
     };
-    let xmodel_packed_segments = xmodel
-        .as_ref()
-        .map(|plan| plan.packed_segments)
-        .unwrap_or_default();
     let xmodel_revision = xmodel.as_ref().map(|plan| plan.revision).unwrap_or(0);
     let xmodel_topology_revision = xmodel
         .as_ref()
@@ -622,7 +618,6 @@ pub fn seal_render_frame(
         fx_revision,
         xmodel_revision,
         xmodel_topology_revision,
-        xmodel_packed_segments,
         particle_cloud_vertices,
         particle_cloud_indices,
         particle_cloud_surface_ranges,

@@ -2,7 +2,7 @@
 // there, so helpers reached only from it are unused.
 #![cfg_attr(target_os = "horizon", allow(dead_code, unused_imports))]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -2721,17 +2721,18 @@ fn apply_peer_event(
                         now_ms: now_ms(),
                     },
                 );
-                // A peer that reported its map and drew no effect is a peer
-                // that will wait out the match in the loading screen. Name the
-                // gate that owes it an offer.
-                if applied.effects.is_empty() {
+                // MapLoaded can arrive before AuthorityReady. The core retains
+                // that report and offers its bootstrap when the host is ready.
+                // Repeated reports from an admitted peer also need no effect.
+                if !applied.accepted {
                     diag::warn!(
                         Net,
-                        "peer map loaded admits nothing: epoch={epoch} host_phase={:?} host_match={:?} host_world={:?} peer={:?} — no bootstrap offer will follow",
+                        "peer map loaded rejected: epoch={epoch} host_phase={:?} host_match={:?} host_world={:?} peer={:?} transition={}",
                         host_match.phase(),
                         host_match.match_key(),
                         host_match.host_world(),
                         host_match.peer(member_id).map(|peer| peer.phase),
+                        applied.transition,
                     );
                 }
                 execute_host_match_effects(
@@ -3086,6 +3087,9 @@ async fn gameplay_egress(
     is_host: bool,
 ) -> std::result::Result<(), TransportFault> {
     let mut fragmenter = relay_fragmenter();
+    // Quinn reserves bookkeeping space even for an empty datagram buffer.
+    let empty_buffer_space = connection.datagram_send_buffer_space();
+    let mut pending: VecDeque<(MemberId, Vec<u8>)> = VecDeque::new();
     let mut tick = tokio::time::interval(QUEUE_POLL);
     let mut sampled = tokio::time::Instant::now();
     loop {
@@ -3101,29 +3105,65 @@ async fn gameplay_egress(
                         stats.path.cwnd,
                         stats.path.lost_packets,
                         stats.path.congestion_events,
-                        (DATAGRAM_SEND_BUFFER - connection.datagram_send_buffer_space()) as u64,
+                        empty_buffer_space.saturating_sub(connection.datagram_send_buffer_space()) as u64,
                     );
                 }
                 for (member, packet) in mailbox.take_outbound() {
-                    let fragments = match fragmenter.split(&packet) {
+                    // Gameplay packets carry the newest input/snapshot plus
+                    // unacknowledged reliable rows. Replace unsent older state
+                    // for this peer rather than building a latency backlog.
+                    if let Some((_, previous)) = pending.iter_mut().find(|(id, _)| *id == member) {
+                        *previous = packet;
+                    } else {
+                        pending.push_back((member, packet));
+                    }
+                }
+                while let Some((member, packet)) = pending.front() {
+                    let fragments = match fragmenter.split(packet) {
                         Ok(fragments) => fragments,
                         Err(error) => {
                             diag::warn!(Net, "master {role} packet not splittable: {error}");
+                            pending.pop_front();
                             continue;
                         }
                     };
-                    for fragment in fragments {
+                    let mut datagrams = Vec::with_capacity(fragments.len());
+                    for fragment in &fragments {
                         let datagram = if is_host {
                             RelayDatagram::HostToMember {
-                                member_id: member,
-                                payload: &fragment,
+                                member_id: *member,
+                                payload: fragment,
                             }
                         } else {
-                            RelayDatagram::ClientToHost(&fragment)
+                            RelayDatagram::ClientToHost(fragment)
                         };
-                        let bytes = encode_relay(datagram).map_err(|error| {
+                        datagrams.push(encode_relay(datagram).map_err(|error| {
                             TransportFault::with_connection("encode_relay", role, error, &connection)
-                        })?;
+                        })?);
+                    }
+                    let wire_bytes = datagrams.iter().map(Vec::len).sum::<usize>();
+                    if wire_bytes > DATAGRAM_SEND_BUFFER {
+                        return Err(TransportFault::with_connection(
+                            "send_datagram",
+                            role,
+                            "fragmented gameplay packet exceeds the send buffer",
+                            &connection,
+                        ));
+                    }
+                    let free = connection.datagram_send_buffer_space();
+                    let queued = empty_buffer_space.saturating_sub(free);
+                    let window = connection.stats().path.cwnd as usize;
+                    // Queue complete packets together. Quinn discards oldest
+                    // datagrams when its buffer fills, which can otherwise leave
+                    // every fragmented snapshot incomplete. One packet may exceed
+                    // the congestion window, but never enqueue a history behind it.
+                    if wire_bytes > free
+                        || (queued != 0 && queued.saturating_add(wire_bytes) > window)
+                    {
+                        break;
+                    }
+                    pending.pop_front();
+                    for bytes in datagrams {
                         if let Err(error) = connection.send_datagram(bytes.into()) {
                             return Err(TransportFault::with_connection(
                                 "send_datagram",
@@ -3240,6 +3280,7 @@ async fn connect(
         quinn::IdleTimeout::try_from(SESSION_IDLE).expect("session idle fits QUIC VarInt"),
     ));
     transport.keep_alive_interval(Some(SESSION_KEEP_ALIVE));
+    transport.datagram_send_buffer_size(DATAGRAM_SEND_BUFFER);
     transport.max_concurrent_uni_streams(MAX_RELAY_UNI_STREAMS.into());
     client_config.transport_config(Arc::new(transport));
 

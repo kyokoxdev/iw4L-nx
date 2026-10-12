@@ -912,6 +912,7 @@ fn action_needs_player_row(action: &ClientAction) -> bool {
             | ClientAction::LeaveMatch { .. }
             | ClientAction::SetName { .. }
             | ClientAction::SetProfile { .. }
+            | ClientAction::Chat { .. }
             | ClientAction::UseCopycat { .. }
             | ClientAction::ActionSlot { .. }
             | ClientAction::ChooseDefaultClass { .. }
@@ -996,6 +997,19 @@ fn apply_action(
             world.client_meta_mut(id).name = name;
 
             ActionOutcome::Applied
+        }
+        ClientAction::Chat {
+            team_only, text, ..
+        } => {
+            let end = text.iter().position(|b| *b == 0).unwrap_or(text.len());
+            let Ok(text) = core::str::from_utf8(&text[..end]) else {
+                return ActionOutcome::Refused;
+            };
+            if crate::chat::send(world, id, team_only, text) {
+                ActionOutcome::Applied
+            } else {
+                ActionOutcome::Refused
+            }
         }
         ClientAction::UseCopycat { .. } | ClientAction::SpawnClient { .. } => {
             ActionOutcome::Refused
