@@ -539,3 +539,19 @@ fn link(
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::script::{Catalog, Program};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn file_scope_vector_constant_and_childthread_load() {
+        let sources = BTreeMap::from([(
+            "maps/test".to_owned(),
+            "VEC = (1, 2, 3);\n\nmain()\n{\n    childthread worker(VEC);\n}\n\nworker(v)\n{\n}\n"
+                .to_owned(),
+        )]);
+        Program::load(&sources, &["maps/test"], &Catalog::iw4_sp()).unwrap();
+    }
+}
