@@ -78,6 +78,8 @@ pub fn add_runtime_plugins_with_role(app: &mut App, role: RuntimeRole) {
     });
 
     if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        // Measured: multithreaded render schedules compete with camera prepare's own
+        // ComputeTaskPool lanes for the same workers and lose ~5% fps.
         render_app.edit_schedule(bevy::render::renderer::RenderGraph, |schedule| {
             schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
         });
@@ -256,7 +258,6 @@ const PIPELINED_RENDERING_ENV: &str = "IW4L_PIPELINED_RENDERING";
 /// boundary; the bounded render channel permits one outstanding frame.
 /// Set IW4L_PIPELINED_RENDERING=0 for synchronous presentation.
 ///
-/// Off by default on macOS.
 fn pipelined_rendering() -> bool {
     match std::env::var_os(PIPELINED_RENDERING_ENV) {
         None => !cfg!(target_os = "macos"),

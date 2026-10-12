@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::ScriptCinematic;
 use crate::script::host::args::string;
-use crate::script::{Namespace, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 fn now_ms(world: &World) -> i32 {
     crate::level_time_ms(world.resource::<crate::step::StepRequest>().tick)
@@ -15,7 +15,7 @@ fn now_ms(world: &World) -> i32 {
 fn play(world: &mut World, args: &[Value], looped: bool) -> Result<Value, String> {
     let name = string(args, 0)?;
     let start_ms = now_ms(world);
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     runtime.engine.cinematic = Some(cinematic(&runtime.videos, &name, looped, start_ms)?);
     Ok(Value::Undefined)
 }
@@ -60,7 +60,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         if !args.is_empty() {
             return Err("stopcinematicingame expects no arguments".into());
         }
-        world.resource_mut::<Runtime>().engine.cinematic = None;
+        world.resource_mut::<RoundScript>().engine.cinematic = None;
         Ok(Value::Undefined)
     });
     registry.register(Function, "iscinematicplaying", |world, _, args| {
@@ -69,7 +69,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         }
         let now = now_ms(world);
         let playing = world
-            .resource::<Runtime>()
+            .resource::<RoundScript>()
             .engine
             .cinematic
             .as_ref()

@@ -1,4 +1,5 @@
 use bevy::platform::collections::HashSet;
+use frame::ScopeApp;
 
 use bevy::prelude::*;
 use dpvs_iw4::{
@@ -56,14 +57,15 @@ impl SceneEntCellBits {
 }
 
 pub fn register_dyn_ent_brush_systems(app: &mut App) {
-    app.init_resource::<DynEntBrushCellBits>()
-        .init_resource::<DynEntBrushPrimaryLightVis>()
-        .init_resource::<SceneEntCellBits>()
+    app.scoped::<DynEntBrushCellBits>(frame::MatchScope::Live)
+        .scoped::<DynEntBrushPrimaryLightVis>(frame::MatchScope::Live)
+        .scoped::<SceneEntCellBits>(frame::MatchScope::Live)
         .add_systems(
             Update,
             (
-                link_dyn_ent_brush_cells,
+                link_dyn_ent_brush_cells.in_set(frame::InMatch),
                 exec_cell_dyn_brush_cmds
+                    .in_set(frame::InMatch)
                     .after(link_dyn_ent_brush_cells)
                     .after(frame::WorkerCmdSet::CellStatic),
             )
@@ -73,11 +75,13 @@ pub fn register_dyn_ent_brush_systems(app: &mut App) {
         .add_systems(
             Update,
             (
-                size_scene_ent_cell_bits,
+                size_scene_ent_cell_bits.in_set(frame::InMatch),
                 link_scene_ents
+                    .in_set(frame::InMatch)
                     .after(size_scene_ent_cell_bits)
                     .after(crate::prepare::scene::gfx_scene::GfxSceneAdd),
                 exec_cell_scene_ent_cmds
+                    .in_set(frame::InMatch)
                     .after(link_scene_ents)
                     .after(frame::WorkerCmdSet::CellStatic),
             )
@@ -87,6 +91,7 @@ pub fn register_dyn_ent_brush_systems(app: &mut App) {
         .add_systems(
             Update,
             drain_dpvs_ent_cmds
+                .in_set(frame::InMatch)
                 .after(frame::WorkerCmdSet::CellSceneEnt)
                 .in_set(frame::WorkerCmdSet::DpvsEnt),
         );

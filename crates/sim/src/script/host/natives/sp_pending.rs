@@ -1,10 +1,10 @@
 //! IW4 builtins singleplayer scripts call that are not built yet. Each one returns a typed default
 //! instead of faulting, so level scripts keep running; the first call of each
-//! is logged and every call counts in `Runtime::unsupported`.
+//! is logged and every call counts in `RoundScript::unsupported`.
 use bevy_ecs::prelude::World;
 
 use crate::script::host::{arrays::new_array, players::entity_field};
-use crate::script::{Namespace, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 enum Stub {
     Undefined,
@@ -31,7 +31,7 @@ fn pending(
     args: &[Value],
 ) -> Result<Value, String> {
     let calls = {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let calls = runtime.unsupported.entry(name).or_default();
         *calls = calls.saturating_add(1);
         *calls
@@ -51,7 +51,7 @@ fn pending(
             let array = new_array(world, Vec::new())?;
             if let Value::Array(id) = array {
                 world
-                    .resource_mut::<Runtime>()
+                    .resource_mut::<RoundScript>()
                     .arrays
                     .get_mut(&id)
                     .unwrap()

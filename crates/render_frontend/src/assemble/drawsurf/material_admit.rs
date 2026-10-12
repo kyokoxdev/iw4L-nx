@@ -12,19 +12,7 @@ fn shader_from_generated_wgsl(source: String, path: String) -> Shader {
     } else {
         source
     };
-    if source.contains('#') {
-        return Shader::from_wgsl(source, path);
-    }
-    Shader {
-        import_path: bevy::shader::ShaderImport::AssetPath(path.clone()),
-        path,
-        source: bevy::shader::Source::Wgsl(source.into()),
-        imports: Vec::new(),
-        additional_imports: Vec::new(),
-        shader_defs: Vec::new(),
-        file_dependencies: Vec::new(),
-        validate_shader: bevy::shader::ValidateShader::Disabled,
-    }
+    Shader::from_wgsl(source, path)
 }
 
 enum PendingShader {

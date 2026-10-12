@@ -1,3 +1,8 @@
+pub mod scope;
+pub use scope::{
+    InMatch, InRound, MatchScope, Published, RoundPhase, ScopeApp, ScopeEpoch, ScopePlugin,
+    ScopeRegistry, ScopeSet, Staging,
+};
 mod screen_effects;
 pub use screen_effects::{ScreenEffectsDvars, ScreenEffectsPublished, ScreenEffectsView};
 pub mod class_presets;
@@ -25,12 +30,11 @@ pub use script_entity_notify::{AbortKillcam, BeginKillcam, KillcamEnded, Spawned
 pub use script_notify::{ExitLevelCalled, register_script_notify};
 pub use session::{
     AdmissionKey, AppScreen, BotNavigationReady, CacWeaponOffer, ClassSelectHandoff,
-    FrontendPending, HasWorld, Headless, HostClassLoadouts, HostClassSlot, HudInputView,
-    IntroPlaying, LaunchIdentity, LaunchReport, LifeEndCause, LifeEnded, LifeStartReason,
-    LifeStarted, LoadCinematicPlaying, LocalLoadKey, LocalSpawnArmed, MapLoadApproved,
-    MapLoadFailed, MatchInstalled, MatchKey, MatchTornDown, ReadinessState, ReturnedToMenu,
-    RuntimeRole, TeardownReason, UiCamera, UiDraw, ViewSubject, WorldGeneration, WorldProducts,
-    WorldReadiness,
+    DisplayEncodedCamera, FrontendPending, Headless, HostClassLoadouts, HostClassSlot, HudInputView,
+    InstalledMatch, IntroPlaying, LaunchIdentity, LaunchReport, LifeEndCause, LifeEnded,
+    LifeStartReason, LifeStarted, LoadCinematicPlaying, LocalLoadKey, LocalSpawnArmed,
+    MapLoadApproved, MapLoadFailed, MatchKey, ReadinessState, RuntimeRole, TeardownReason,
+    UiCamera, UiDraw, ViewSubject, WorldGeneration, WorldProducts, WorldReadiness, WorldStamp,
 };
 pub use settings::{DisplayResolution, GameSettings, OtherGame};
 pub use ui::{

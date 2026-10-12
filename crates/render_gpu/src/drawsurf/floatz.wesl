@@ -15,11 +15,10 @@ fn vs_fullscreen(@builtin(vertex_index) vertex_index: u32) -> VsOut {
 }
 
 // Unfilterable float, not texture_depth_*: GLSL has no textureLoad on depth textures.
-#ifdef MULTISAMPLED
+@if(MULTISAMPLED)
 @group(0) @binding(0) var depth_tex: texture_multisampled_2d<f32>;
-#else
+@else
 @group(0) @binding(0) var depth_tex: texture_2d<f32>;
-#endif
 @group(0) @binding(1) var<uniform> params: Params;
 
 @fragment

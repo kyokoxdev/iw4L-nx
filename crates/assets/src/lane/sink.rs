@@ -9,6 +9,11 @@ use super::helpers::MapXModelCatalog;
 
 fn is_cac_table(name: &str) -> bool {
     asset_game::is_stats_table_name(name)
+        || name.eq_ignore_ascii_case("mp/perkTable.csv")
+        || name.eq_ignore_ascii_case("mp/rankTable.csv")
+        || name.eq_ignore_ascii_case("mp/rankIconTable.csv")
+        || name.eq_ignore_ascii_case("mp/unlockTable.csv")
+        || name.eq_ignore_ascii_case("mp/unlockTableMP.csv")
         || name.eq_ignore_ascii_case("mp/attachmentTable.csv")
         || name.eq_ignore_ascii_case("mp/attachmentCombos.csv")
         || name.eq_ignore_ascii_case("mp/weaponoptions.csv")
@@ -1009,6 +1014,12 @@ impl fastfile_t5::AssetLinkSink for CommonWalkSink {
         {
             self.teamsets.insert(key, icons);
         }
+        self.player_anim_sources.capture(
+            asset_core::AssetNamespace::T5,
+            name,
+            data,
+            zlib_compressed,
+        );
         self.scripts.capture(name, data, zlib_compressed);
         Ok(())
     }

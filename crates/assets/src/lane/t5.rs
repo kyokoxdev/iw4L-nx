@@ -453,6 +453,7 @@ impl ZoneLane for T5Lane {
                         fx_models: Default::default(),
 
                         fx_glass: None,
+                        map_content: Default::default(),
                         impact_fx: sink.impact_fx.take_table(),
                         reflection_probe_images,
                         intermission_view,
@@ -681,6 +682,7 @@ impl ZoneLane for T5Lane {
             projectile_meshes: sink.projectile_meshes,
             world_weapons: sink.world_weapons,
             xanims: sink.xanims,
+            player_anim_sources: sink.player_anim_sources,
             fx: sink.fx,
             impact_fx: sink.impact_fx.take_table(),
             fx_models: sink.fx_models,

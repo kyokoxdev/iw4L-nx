@@ -28,7 +28,10 @@ impl Default for SimWorld {
         install_state_entity(&mut ecs, state_entity);
         ecs.insert_resource(crate::LocalPlayerProfile::default());
         ecs.insert_resource(crate::PersistentDataStore::default());
-        ecs.insert_resource(crate::script::Runtime::default());
+        ecs.init_resource::<crate::script::MatchScript>();
+        ecs.insert_resource(crate::script::RoundScript::new(
+            ecs.resource::<crate::script::MatchScript>(),
+        ));
         ecs.insert_resource(crate::script::Mechanics::default());
         ecs.insert_resource(crate::script::NativeRegistry::default());
         Self {
@@ -89,6 +92,42 @@ impl DerefMut for SimWorld {
 }
 
 impl SimWorld {
+    pub fn validate_entity_lifetimes(&self) -> Result<(), String> {
+        crate::frame::validate_entity_payloads(&self.ecs)
+    }
+
+    pub fn entity_lifetime_summary(&self) -> String {
+        let snapshot = self.entity_kernel().to_snapshot();
+        let occupied = snapshot
+            .slots
+            .iter()
+            .filter(|slot| slot.occupied.is_some())
+            .count();
+        let held = snapshot
+            .slots
+            .iter()
+            .filter(|slot| {
+                slot.occupied
+                    .is_some_and(|slot| slot.transient_event_time_ms.is_some())
+            })
+            .count();
+        let runtime = self.ecs.resource::<crate::script::RoundScript>();
+        format!(
+            "occupied_slots = {occupied}\nevent_holds = {held}\nprojectile_payloads = {}\nitem_payloads = {}\nmover_payloads = {}\nscript_objects = {}\nscript_defined_entities = {}\nentity_consistency = {:?}\nmap_glass = {:?}\n",
+            collect_projectiles(&self.ecs).len(),
+            collect_dropped_items(&self.ecs).len(),
+            collect_script_movers(&self.ecs).len(),
+            runtime.objects.len(),
+            runtime
+                .entities
+                .keys()
+                .filter(|id| runtime.script_is_defined(id))
+                .count(),
+            self.validate_entity_lifetimes(),
+            self.content().map().glass
+        )
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -160,7 +199,7 @@ impl SimWorld {
 
     /// Holds level entries until the first player begins (campaign).
     pub fn defer_gsc_until_player(&mut self, entries: Vec<String>) {
-        let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
+        let mut runtime = self.ecs.resource_mut::<crate::script::RoundScript>();
         runtime.started = true;
         runtime.deferred_entries = entries;
     }
@@ -183,31 +222,22 @@ impl SimWorld {
         crate::script::set_dvar(&mut self.ecs, name, value);
     }
 
-    pub fn set_glass_names(&mut self, names: Vec<(String, Vec<u32>)>) {
-        if !names.is_empty() {
-            let pieces: usize = names.iter().map(|(_, pieces)| pieces.len()).sum();
-            diag::info!(Sim, "glass: {} named sets, {pieces} pieces", names.len());
-        }
-        self.ecs
-            .insert_resource(crate::script::GlassNames(names.into_iter().collect()));
-    }
-
     /// The level's SP path nodes while actors have no route graph yet.
     pub fn path_nodes_awaiting_nav(&self) -> Option<std::sync::Arc<Vec<asset_core::PathNode>>> {
-        let runtime = self.ecs.resource::<crate::script::Runtime>();
+        let runtime = self.ecs.resource::<crate::script::RoundScript>();
         let nodes = &runtime.restart.as_ref()?.path_nodes;
         (runtime.actor_nav.is_none() && !nodes.is_empty()).then(|| nodes.clone())
     }
 
     /// Gives SP actors their route graph (the bot brain's, over path nodes).
     pub fn install_actor_nav(&mut self, nav: std::sync::Arc<dyn crate::script::ActorNav>) {
-        self.ecs.resource_mut::<crate::script::Runtime>().actor_nav =
+        self.ecs.resource_mut::<crate::script::RoundScript>().actor_nav =
             Some(crate::script::host::actors::NavHandle(nav));
     }
 
     pub fn gsc_realm(&self) -> Option<crate::script::Realm> {
         self.ecs
-            .resource::<crate::script::Runtime>()
+            .resource::<crate::script::RoundScript>()
             .program
             .as_ref()
             .map(|program| program.rules())
@@ -215,7 +245,7 @@ impl SimWorld {
 
     pub fn gsc_program_fingerprint(&self) -> Option<[u8; 32]> {
         self.ecs
-            .resource::<crate::script::Runtime>()
+            .resource::<crate::script::RoundScript>()
             .program_fingerprint()
     }
 
@@ -225,7 +255,7 @@ impl SimWorld {
         requested_ms: i32,
         attained_ms: i32,
     ) {
-        let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
+        let mut runtime = self.ecs.resource_mut::<crate::script::RoundScript>();
         if let Some(slot) = runtime.players.get_mut(&client.0)
             && slot.seat.archive_ms == requested_ms
         {
@@ -238,7 +268,7 @@ impl SimWorld {
     }
 
     pub fn take_script_fault(&mut self) -> Option<crate::script::Fault> {
-        let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
+        let mut runtime = self.ecs.resource_mut::<crate::script::RoundScript>();
         if runtime.fault_reported {
             return None;
         }
@@ -326,7 +356,7 @@ impl SimWorld {
     }
 
     pub fn retire_client(&mut self, id: ClientId) {
-        let mut runtime = self.ecs.resource_mut::<crate::script::Runtime>();
+        let mut runtime = self.ecs.resource_mut::<crate::script::RoundScript>();
         if runtime.players.contains_key(&id.0) {
             runtime.disconnects.insert(id.0);
         } else {
@@ -381,14 +411,14 @@ impl SimWorld {
 
     pub fn slow_motion(&self) -> Option<crate::ScriptSlowMotion> {
         self.ecs
-            .resource::<crate::script::Runtime>()
+            .resource::<crate::script::RoundScript>()
             .engine
             .slow_motion
     }
 
     pub fn cinematic(&self) -> Option<crate::ScriptCinematic> {
         self.ecs
-            .resource::<crate::script::Runtime>()
+            .resource::<crate::script::RoundScript>()
             .engine
             .cinematic
             .clone()
@@ -412,6 +442,15 @@ impl SimWorld {
             "prediction snapshots cannot restore authority GSC state"
         );
         self.frame().adopt_prediction_snapshot(snapshot, local)
+    }
+
+    pub fn request_round_restart(&mut self) -> Result<(), String> {
+        if !self.is_running() || !self.cheats_enabled() {
+            return Err("round restart needs an active match with cheats".into());
+        }
+        self.ecs
+            .resource_mut::<crate::script::RoundScript>()
+            .request_round_restart(true)
     }
 
     pub fn shutdown_game(&mut self) {
@@ -478,7 +517,7 @@ pub fn try_step(
     // A refusal before the frame (no program, stale tick) is as terminal as a
     // script fault; keeping it on the runtime lets `take_script_fault` report it.
     world.run(tick, input, msec, reason).inspect_err(|fault| {
-        let mut runtime = world.ecs.resource_mut::<crate::script::Runtime>();
+        let mut runtime = world.ecs.resource_mut::<crate::script::RoundScript>();
         if runtime.fault.is_none() {
             runtime.fault = Some(fault.clone());
         }

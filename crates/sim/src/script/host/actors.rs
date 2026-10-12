@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::arrays::new_array;
 use super::entities::EntityKind;
 use super::natives::engine::{entity_id, spawn_entity};
-use crate::script::{Namespace, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
@@ -116,7 +116,7 @@ pub(crate) fn spawn_path_nodes(
     world: &mut World,
     nodes: &[asset_core::PathNode],
 ) -> Result<(), String> {
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     for node in nodes {
         let id = runtime.new_object()?;
         runtime.set_object_field(id, "origin", Value::Vector(node.origin));
@@ -136,7 +136,7 @@ pub(crate) fn spawn_path_nodes(
 fn matching_nodes(world: &mut World, args: &[Value]) -> Result<Vec<Value>, String> {
     let value = Value::string(&super::args::string(args, 0)?);
     let key = super::args::string(args, 1)?.to_ascii_lowercase();
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let nodes = runtime.nodes.clone();
     Ok(nodes
         .into_iter()
@@ -153,7 +153,7 @@ fn set_goal(
     node: Option<u64>,
 ) -> Result<Value, String> {
     let id = actor(world, receiver)?;
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     runtime.set_object_field(id, "goalpos", Value::Vector(at));
     runtime.set_object_field(id, "node", node.map_or(Value::Undefined, Value::Object));
     runtime.actor_goals.insert(
@@ -172,13 +172,13 @@ fn origin_of(world: &mut World, value: &Value) -> Result<(u64, [f32; 3]), String
     let Value::Object(id) = value else {
         return Err(format!("{} has no origin", super::args::kind(value)));
     };
-    match world.resource_mut::<Runtime>().object_field(*id, "origin") {
+    match world.resource_mut::<RoundScript>().object_field(*id, "origin") {
         Value::Vector(origin) => Ok((*id, origin)),
         _ => Err("goal has no origin".into()),
     }
 }
 
-fn health(runtime: &mut Runtime, id: u64) -> i32 {
+fn health(runtime: &mut RoundScript, id: u64) -> i32 {
     match runtime.object_field(id, "health") {
         Value::Int(health) => health,
         Value::Float(health) => health as i32,
@@ -186,11 +186,11 @@ fn health(runtime: &mut Runtime, id: u64) -> i32 {
     }
 }
 
-fn live_actors(runtime: &Runtime) -> Vec<u64> {
+fn live_actors(runtime: &RoundScript) -> Vec<u64> {
     runtime
         .entities
         .iter()
-        .filter(|(id, e)| e.kind == EntityKind::Actor && !runtime.pending_deletes.contains(id))
+        .filter(|(id, e)| e.kind == EntityKind::Actor && runtime.script_is_defined(id))
         .map(|(id, _)| *id)
         .collect()
 }
@@ -248,7 +248,7 @@ fn clear_sight(world: &mut World, from: [f32; 3], to: [f32; 3]) -> bool {
 
 /// Hostile players and actors that can be fought: `(object, team)`.
 fn combatants(world: &mut World) -> Vec<(u64, Value)> {
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let mut out: Vec<u64> = runtime.players.values().map(|slot| slot.object).collect();
     out.extend(
         live_actors(&runtime)
@@ -270,7 +270,7 @@ fn look(world: &mut World) {
     let tick = u64::from(world.resource::<crate::step::StepRequest>().tick.0);
     let now = super::players::now_ms(world);
     let ids: Vec<u64> = {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         live_actors(&runtime)
             .into_iter()
             .filter(|id| (id + tick) % SIGHT_PERIOD == 0 && health(&mut runtime, *id) > 0)
@@ -282,7 +282,7 @@ fn look(world: &mut World) {
     let all = combatants(world);
     for id in ids {
         let (team, current, ignore_all, sight_sq, fov, angles) = {
-            let mut runtime = world.resource_mut::<Runtime>();
+            let mut runtime = world.resource_mut::<RoundScript>();
             let sight_sq = number(runtime.object_field(id, "maxsightdistsqrd"))
                 .unwrap_or(DEFAULT_SIGHT_DIST * DEFAULT_SIGHT_DIST);
             let fov = number(runtime.object_field(id, "fovcosine")).unwrap_or(DEFAULT_FOV_COS);
@@ -336,7 +336,7 @@ fn look(world: &mut World) {
         let enemy = match seen {
             Some((other, at)) => {
                 brain.enemy_seen_ms = now;
-                world.resource_mut::<Runtime>().set_object_field(
+                world.resource_mut::<RoundScript>().set_object_field(
                     id,
                     "lastenemysightpos",
                     Value::Vector(at),
@@ -360,7 +360,7 @@ fn look(world: &mut World) {
         };
         store(world, id, brain);
         if enemy != current {
-            world.resource_mut::<Runtime>().set_object_field(
+            world.resource_mut::<RoundScript>().set_object_field(
                 id,
                 "enemy",
                 enemy.map_or(Value::Undefined, Value::Object),
@@ -375,7 +375,7 @@ fn look(world: &mut World) {
 fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
     let id = actor(world, receiver)?;
     let (name, accuracy, enemy) = {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let name = match runtime.object_field(id, "weapon") {
             Value::String(name) => name.to_string(),
             _ => return Ok(Value::Undefined),
@@ -401,7 +401,7 @@ fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, S
         Some(Value::Vector(at)) => Some(*at),
         _ => enemy.and_then(|enemy| eye(world, enemy)),
     };
-    let forward = match world.resource_mut::<Runtime>().object_field(id, "angles") {
+    let forward = match world.resource_mut::<RoundScript>().object_field(id, "angles") {
         Value::Vector(angles) => math_iw4::angle_vectors(angles).0,
         _ => [1.0, 0.0, 0.0],
     };
@@ -434,7 +434,7 @@ fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, S
 /// The animscript for the actor's situation: `move` on a route, its cover
 /// script at a claimed cover node, `combat` with an enemy, else `stop`.
 fn desired_script(world: &mut World, id: u64) -> String {
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     if runtime
         .actor_goals
         .get(&id)
@@ -500,7 +500,7 @@ fn switch(world: &mut World, id: u64, brain: &mut ActorBrain, script: &str, star
     let receiver = Value::Object(id);
     if &*old == "scripted"
         && let Some(anim) = world
-            .resource_mut::<Runtime>()
+            .resource_mut::<RoundScript>()
             .entities
             .get_mut(&id)
             .and_then(|entity| entity.anim.as_mut())
@@ -517,7 +517,7 @@ fn switch(world: &mut World, id: u64, brain: &mut ActorBrain, script: &str, star
         }
     }
     {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let prev = if old.is_empty() { "none" } else { &old };
         runtime.set_object_field(id, "prevscript", Value::string(prev));
         runtime.set_object_field(id, "script", Value::string(script));
@@ -535,7 +535,7 @@ fn switch(world: &mut World, id: u64, brain: &mut ActorBrain, script: &str, star
 
 fn brain(world: &World, id: u64) -> ActorBrain {
     world
-        .resource::<Runtime>()
+        .resource::<RoundScript>()
         .actor_brains
         .get(&id)
         .cloned()
@@ -544,7 +544,7 @@ fn brain(world: &World, id: u64) -> ActorBrain {
 
 fn store(world: &mut World, id: u64, brain: ActorBrain) {
     world
-        .resource_mut::<Runtime>()
+        .resource_mut::<RoundScript>()
         .actor_brains
         .insert(id, brain);
 }
@@ -558,15 +558,15 @@ fn switch_to(world: &mut World, id: u64, script: &str, hold: Option<Hold>) {
 }
 
 fn run_scripts(world: &mut World) {
-    let library = world.resource::<Runtime>().anim_library.clone();
-    let ids = live_actors(world.resource::<Runtime>());
+    let library = world.resource::<RoundScript>().anim_library.clone();
+    let ids = live_actors(world.resource::<RoundScript>());
     world
-        .resource_mut::<Runtime>()
+        .resource_mut::<RoundScript>()
         .actor_brains
         .retain(|id, _| ids.contains(id));
     for id in ids {
         let mut brain = brain(world, id);
-        if health(&mut world.resource_mut::<Runtime>(), id) <= 0 {
+        if health(&mut world.resource_mut::<RoundScript>(), id) <= 0 {
             if brain.hold != Some(Hold::Death) {
                 switch_to(world, id, "death", Some(Hold::Death));
             }
@@ -578,7 +578,7 @@ fn run_scripts(world: &mut World) {
         brain.hold = match brain.hold {
             Some(Hold::Scripted { started, ended }) => {
                 let state = world
-                    .resource_mut::<Runtime>()
+                    .resource_mut::<RoundScript>()
                     .entities
                     .get_mut(&id)
                     .and_then(|entity| entity.anim.as_mut())
@@ -620,7 +620,7 @@ fn approach_yaw(from: f32, to: f32, max: f32) -> f32 {
 fn move_actors(world: &mut World) {
     let dt = crate::MATCH_TICK_MS as f32 / 1000.0;
     let mut notes = Vec::new();
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let nav = runtime.actor_nav.clone();
     let ids = live_actors(&runtime);
     let gone: Vec<u64> = runtime
@@ -788,7 +788,7 @@ fn move_actors(world: &mut World) {
 
 /// Engine fields a fresh actor carries before its scripts run.
 fn init_fields(world: &mut World, id: u64) {
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let yaw = match runtime.object_field(id, "angles") {
         Value::Vector(angles) => angles[1],
         _ => 0.0,
@@ -834,7 +834,7 @@ fn init_fields(world: &mut World, id: u64) {
 
 // ponytail: one aim cone for every actor (45 degrees each way); per-aitype
 // limits if an aim looks clipped.
-fn default_aim_limits(runtime: &mut Runtime, id: u64) {
+fn default_aim_limits(runtime: &mut RoundScript, id: u64) {
     for (name, limit) in [
         ("rightaimlimit", 45.0),
         ("leftaimlimit", -45.0),
@@ -852,7 +852,7 @@ fn highest_stance(world: &mut World, node: &Value) -> Result<&'static str, Strin
     let Value::Object(node) = node else {
         return Err("receiver is not a node".into());
     };
-    let kind = world.resource_mut::<Runtime>().object_field(*node, "type");
+    let kind = world.resource_mut::<RoundScript>().object_field(*node, "type");
     let Value::String(kind) = kind else {
         return Err("receiver is not a node".into());
     };
@@ -914,7 +914,7 @@ pub(crate) fn damaged(
     tag: &str,
 ) {
     let alive = {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let yaw = match runtime.object_field(id, "angles") {
             Value::Vector(angles) => angles[1],
             _ => 0.0,
@@ -941,7 +941,7 @@ pub(crate) fn damaged(
     };
     let pain_allowed = !matches!(
         world
-            .resource_mut::<Runtime>()
+            .resource_mut::<RoundScript>()
             .object_field(id, "allowpain"),
         Value::Int(0)
     );
@@ -952,14 +952,14 @@ pub(crate) fn damaged(
 
 fn has_entry(world: &World, name: &str) -> bool {
     world
-        .resource::<Runtime>()
+        .resource::<RoundScript>()
         .program
         .as_ref()
         .is_some_and(|program| program.names.contains_key(name))
 }
 
 fn spawners(world: &mut World) -> Vec<u64> {
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let ids: Vec<u64> = runtime
         .entities
         .iter()
@@ -982,7 +982,7 @@ pub(crate) fn init_spawners(world: &mut World) {
     let now = super::players::now_ms(world);
     let mut types: Vec<String> = spawners(world)
         .into_iter()
-        .map(|id| aitype(&world.resource::<Runtime>().entities[&id].classname))
+        .map(|id| aitype(&world.resource::<RoundScript>().entities[&id].classname))
         .collect();
     types.sort();
     types.dedup();
@@ -993,7 +993,7 @@ pub(crate) fn init_spawners(world: &mut World) {
         }
     }
     for spawner in spawners(world) {
-        let classname = world.resource::<Runtime>().entities[&spawner]
+        let classname = world.resource::<RoundScript>().entities[&spawner]
             .classname
             .clone();
         let entry = format!("{}::spawner", aitype(&classname));
@@ -1013,7 +1013,7 @@ pub(crate) fn init_spawners(world: &mut World) {
 /// with the spawner's aitype `main` run on it.
 fn spawn_from(world: &mut World, spawner: u64, actor: bool) -> Result<u64, String> {
     let (origin, angles, classname, fields) = {
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let origin = runtime.object_field(spawner, "origin");
         let angles = runtime.object_field(spawner, "angles");
         let classname = runtime.entities[&spawner].classname.clone();
@@ -1024,7 +1024,7 @@ fn spawn_from(world: &mut World, spawner: u64, actor: bool) -> Result<u64, Strin
         return Err("spawner has no origin".into());
     };
     let id = spawn_entity(world, "script_model", origin, 0, None)?;
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     // ponytail: copies every spawner key but classname/targetname/count; narrow if a
     // level looks AI up by a spawner key the engine would not copy.
     let skip = ["classname", "targetname", "count"].map(|name| runtime.symbol(name));
@@ -1058,7 +1058,7 @@ fn spawn_from(world: &mut World, spawner: u64, actor: bool) -> Result<u64, Strin
 fn spawn_actor(world: &mut World, receiver: &Value) -> Result<Value, String> {
     let spawner = entity_id(world, receiver)?;
     let count = match world
-        .resource_mut::<Runtime>()
+        .resource_mut::<RoundScript>()
         .object_field(spawner, "count")
     {
         Value::Int(n) => n,
@@ -1068,7 +1068,7 @@ fn spawn_actor(world: &mut World, receiver: &Value) -> Result<Value, String> {
         return Ok(Value::Undefined);
     }
     world
-        .resource_mut::<Runtime>()
+        .resource_mut::<RoundScript>()
         .set_object_field(spawner, "count", Value::Int(count - 1));
     let id = spawn_from(world, spawner, true)?;
     const INIT: &str = "animscripts/init::main";
@@ -1084,7 +1084,7 @@ fn spawn_actor(world: &mut World, receiver: &Value) -> Result<Value, String> {
 
 fn actor(world: &World, receiver: &Value) -> Result<u64, String> {
     let id = entity_id(world, receiver)?;
-    match world.resource::<Runtime>().entities.get(&id) {
+    match world.resource::<RoundScript>().entities.get(&id) {
         Some(entity) if entity.kind == EntityKind::Actor => Ok(id),
         _ => Err("receiver is not an actor".into()),
     }
@@ -1093,11 +1093,11 @@ fn actor(world: &World, receiver: &Value) -> Result<u64, String> {
 /// Live actors whose team is one of `teams` ("all" or none given: any).
 fn actors(world: &mut World, teams: &[Value]) -> Vec<Value> {
     let any = teams.is_empty() || teams.iter().any(|t| *t == Value::string("all"));
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let ids: Vec<u64> = runtime
         .entities
         .iter()
-        .filter(|(id, e)| e.kind == EntityKind::Actor && !runtime.pending_deletes.contains(id))
+        .filter(|(id, e)| e.kind == EntityKind::Actor && runtime.script_is_defined(id))
         .map(|(id, _)| *id)
         .collect();
     ids.into_iter()
@@ -1129,7 +1129,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Function, "getspawnerteamarray", |world, _, args| {
         let team = super::args::arg(args, 0)?.clone();
         let mut ids = spawners(world);
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         ids.retain(|id| runtime.object_field(*id, "team") == team);
         new_array(world, ids.into_iter().map(Value::Object).collect())
     });
@@ -1149,7 +1149,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "forceteleport", |world, receiver, args| {
         let id = actor(world, receiver)?;
         let origin = super::args::vector(args, 0)?;
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         runtime.set_object_field(id, "origin", Value::Vector(origin));
         if let Some(angles) = args.get(1).filter(|v| **v != Value::Undefined) {
             runtime.set_object_field(id, "angles", angles.clone());
@@ -1171,7 +1171,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     registry.register(Function, "getallnodes", |world, _, _| {
         let nodes = world
-            .resource::<Runtime>()
+            .resource::<RoundScript>()
             .nodes
             .iter()
             .copied()
@@ -1214,7 +1214,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         crate::script::runtime::run_now(world, INIT, receiver.clone(), args.to_vec(), now)
             .map_err(|fault| format!("{INIT}: {fault:?}"))?;
         if let Some(anim) = world
-            .resource_mut::<Runtime>()
+            .resource_mut::<RoundScript>()
             .entities
             .get_mut(&id)
             .and_then(|entity| entity.anim.as_mut())
@@ -1265,7 +1265,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "teleport", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
         let origin = super::args::vector(args, 0)?;
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         runtime.set_object_field(id, "origin", Value::Vector(origin));
         if let Some(angles) = args.get(1).filter(|v| **v != Value::Undefined) {
             runtime.set_object_field(id, "angles", angles.clone());
@@ -1275,7 +1275,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "nearnode", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
         let (_, at) = origin_of(world, super::args::arg(args, 0)?)?;
-        let origin = match world.resource_mut::<Runtime>().object_field(id, "origin") {
+        let origin = match world.resource_mut::<RoundScript>().object_field(id, "origin") {
             Value::Vector(origin) => origin,
             _ => return Ok(Value::Int(0)),
         };
@@ -1283,11 +1283,11 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     registry.register(Method, "getmuzzleangle", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
-        Ok(world.resource_mut::<Runtime>().object_field(id, "angles"))
+        Ok(world.resource_mut::<RoundScript>().object_field(id, "angles"))
     });
     registry.register(Method, "kill", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         if health(&mut runtime, id) <= 0 {
             return Ok(Value::Undefined);
         }
@@ -1318,7 +1318,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "getshootatpos", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
         Ok(
-            match world.resource_mut::<Runtime>().object_field(id, "origin") {
+            match world.resource_mut::<RoundScript>().object_field(id, "origin") {
                 Value::Vector([x, y, z]) => Value::Vector([x, y, z + EYE_HEIGHT]),
                 other => other,
             },
@@ -1333,7 +1333,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "shoot", shoot);
     registry.register(Method, "setdefaultaimlimits", |world, receiver, _| {
         let id = actor(world, receiver)?;
-        default_aim_limits(&mut world.resource_mut::<Runtime>(), id);
+        default_aim_limits(&mut world.resource_mut::<RoundScript>(), id);
         Ok(Value::Undefined)
     });
     // `seerecently(ent, seconds)`: the enemy was seen that recently; anyone else is
@@ -1342,7 +1342,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let id = actor(world, receiver)?;
         let target = entity_id(world, super::args::arg(args, 0)?)?;
         let window = number(super::args::arg(args, 1)?.clone()).unwrap_or(0.0);
-        let enemy = world.resource_mut::<Runtime>().object_field(id, "enemy");
+        let enemy = world.resource_mut::<RoundScript>().object_field(id, "enemy");
         if enemy == Value::Object(target) {
             let now = super::players::now_ms(world);
             let seen = brain(world, id).enemy_seen_ms;
@@ -1367,7 +1367,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let (origin, angles) = match super::presence::tag_world(world, id, tag) {
             Some((origin, axis)) => (origin, math_iw4::axis_to_angles(axis)),
             None => {
-                let mut runtime = world.resource_mut::<Runtime>();
+                let mut runtime = world.resource_mut::<RoundScript>();
                 let origin = match runtime.object_field(id, "origin") {
                     Value::Vector([x, y, z]) => [x, y, z + 40.0],
                     _ => return Ok(Value::Undefined),
@@ -1396,7 +1396,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     registry.register(Method, "canshootenemy", |world, receiver, _| {
         let id = actor(world, receiver)?;
-        let Value::Object(enemy) = world.resource_mut::<Runtime>().object_field(id, "enemy") else {
+        let Value::Object(enemy) = world.resource_mut::<RoundScript>().object_field(id, "enemy") else {
             return Ok(Value::Int(0));
         };
         let from = super::turrets::muzzle(world, id);
@@ -1418,19 +1418,19 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "clearenemy", |world, receiver, _| {
         let id = actor(world, receiver)?;
         world
-            .resource_mut::<Runtime>()
+            .resource_mut::<RoundScript>()
             .set_object_field(id, "enemy", Value::Undefined);
         Ok(Value::Undefined)
     });
     registry.register(Method, "isbadguy", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
-        let team = world.resource_mut::<Runtime>().object_field(id, "team");
+        let team = world.resource_mut::<RoundScript>().object_field(id, "team");
         Ok(Value::Int((team == Value::string("axis")).into()))
     });
     registry.register(Function, "issentient", |world, _, args| {
         let sentient = match super::args::arg(args, 0)? {
             Value::Object(id) => {
-                let runtime = world.resource::<Runtime>();
+                let runtime = world.resource::<RoundScript>();
                 runtime.player_client(*id).is_some()
                     || runtime
                         .entities
@@ -1446,7 +1446,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             return Ok(Value::Int(0));
         };
         let id = *id;
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let Some(entity) = runtime
             .entities
             .get(&id)
@@ -1469,7 +1469,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     registry.register(Function, "isai", |world, _, args| {
         let actor = world
-            .resource::<Runtime>()
+            .resource::<RoundScript>()
             .entity(super::args::arg(args, 0)?)
             .is_some_and(|(_, e)| e.kind == EntityKind::Actor);
         Ok(Value::Int(actor.into()))

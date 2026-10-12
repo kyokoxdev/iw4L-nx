@@ -1,7 +1,7 @@
 use super::super::args::{arg, kind, string};
 use super::player::player;
 use crate::LocalPlayerProfile;
-use crate::script::{Namespace::Method, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace::Method, NativeRegistry, MatchScript, Value};
 
 /// Campaign profile fields, lowercase, with the value a fresh profile reads.
 const SP_FIELDS: &[(&str, i32)] = &[
@@ -36,7 +36,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             let fresh = sp_default(&name)
                 .ok_or_else(|| format!("unknown local player profile field {name}"))?;
             let stored = world
-                .resource::<Runtime>()
+                .resource::<MatchScript>()
                 .sp_profile
                 .get(&name.to_ascii_lowercase())
                 .cloned();
@@ -60,7 +60,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
                 }
                 let value = arg(args, 1)?.clone();
                 world
-                    .resource_mut::<Runtime>()
+                    .resource_mut::<MatchScript>()
                     .sp_profile
                     .insert(name.to_ascii_lowercase(), value);
                 return Ok(Value::Undefined);

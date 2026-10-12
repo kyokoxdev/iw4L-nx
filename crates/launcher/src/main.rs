@@ -82,6 +82,15 @@ fn main() {
         }
         return;
     }
+    step("process root");
+    prepare_process_root().unwrap_or_else(|e| launch_error(&e));
+    step("artifacts dir");
+    let artifacts = ensure_artifacts_dir().unwrap_or_else(|e| launch_error(&e));
+    step("init log");
+    let log = diag::init_log(&artifacts);
+    step(&format!("log at {}", log.display()));
+    announce_log(log);
+    step("log ready");
     // Switch: no community descriptor or self-update; argv is taken as is.
     #[cfg(target_os = "horizon")]
     let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -95,15 +104,6 @@ fn main() {
     }
     step("bench arm");
     bootstrap::bench::arm();
-    step("process root");
-    prepare_process_root().unwrap_or_else(|e| launch_error(&e));
-    step("artifacts dir");
-    let artifacts = ensure_artifacts_dir().unwrap_or_else(|e| launch_error(&e));
-    step("init log");
-    let log = diag::init_log(&artifacts);
-    step(&format!("log at {}", log.display()));
-    announce_log(log);
-    step("log ready");
     let (mode, acceptance, cheats) = bootstrap::parse_cli(
         args.into_iter()
             .map(|arg| arg.to_string_lossy().into_owned()),

@@ -1,5 +1,5 @@
 use super::super::args::string;
-use crate::script::{Namespace, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 use bevy_ecs::prelude::World;
 
 pub(crate) fn register(registry: &mut NativeRegistry) {
@@ -34,7 +34,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         }
         let name = dvar_name(args)?;
         let value = dvar_value(args)?;
-        let mut runtime = runtime(world);
+        let mut runtime = world.resource_mut::<crate::script::MatchScript>();
         let slot = runtime.dvars.entry(name).or_default();
         if slot.is_empty() {
             *slot = value;
@@ -112,19 +112,34 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         } else {
             String::new()
         };
-        let mut runtime = runtime(world);
-        runtime.server_info.insert(name.clone());
-        runtime.dvars.entry(name).or_insert(value);
+        world
+            .resource_mut::<RoundScript>()
+            .server_info
+            .insert(name.clone());
+        let mut runtime = world.resource_mut::<crate::script::MatchScript>();
+        if let std::collections::btree_map::Entry::Vacant(entry) = runtime.dvars.entry(name.clone())
+        {
+            entry.insert(value.clone());
+            world
+                .resource_mut::<RoundScript>()
+                .server_info_defaults
+                .insert(name, value);
+        }
         Ok(Value::Undefined)
     });
 }
 
 pub(crate) fn precache(world: &mut World, kind: &'static str, name: String) -> Result<i32, String> {
-    let mut runtime = runtime(world);
-    if let Some(&index) = runtime.precached.get(&(kind, name.clone())) {
+    if let Some(&index) = world
+        .resource::<crate::script::MatchScript>()
+        .precached
+        .get(&(kind, name.clone()))
+    {
         return Ok(index);
     }
-    if !runtime.loading {
+    let loading = world.resource::<RoundScript>().loading;
+    let mut runtime = world.resource_mut::<crate::script::MatchScript>();
+    if !loading {
         return Err(format!(
             "{kind} must be precached before any wait statements in the gametype or level script"
         ));
@@ -138,7 +153,7 @@ pub(crate) fn precache(world: &mut World, kind: &'static str, name: String) -> R
 }
 
 pub(crate) fn register_local_presentation_dvars(world: &mut World, local: Option<crate::ClientId>) {
-    let mut runtime = runtime(world);
+    let mut runtime = world.resource_mut::<crate::script::MatchScript>();
     runtime.local_presentation_dvars = true;
     if runtime.local_presentation_client != local {
         runtime.pending_local_dvars.clear();
@@ -162,7 +177,7 @@ pub(crate) fn register_local_presentation_dvars(world: &mut World, local: Option
 
 pub(crate) fn set_dvar(world: &mut World, name: &str, value: &str) {
     let name = name.to_ascii_lowercase();
-    let mut runtime = runtime(world);
+    let mut runtime = world.resource_mut::<crate::script::MatchScript>();
     let value = if runtime.local_presentation_dvars
         && let Some(setting) = crate::TargetBoxDvar::named(&name)
     {
@@ -184,10 +199,17 @@ pub(crate) fn deliver_local_presentation_dvars(world: &mut World) {
     {
         return;
     }
-    let Some(client) = world.resource::<Runtime>().local_presentation_client else {
+    let Some(client) = world
+        .resource::<crate::script::MatchScript>()
+        .local_presentation_client
+    else {
         return;
     };
-    let commands = std::mem::take(&mut runtime(world).pending_local_dvars);
+    let commands = std::mem::take(
+        &mut world
+            .resource_mut::<crate::script::MatchScript>()
+            .pending_local_dvars,
+    );
     if crate::frame::FrameWorld::from_world(world)
         .client_meta(client)
         .is_none()
@@ -200,7 +222,7 @@ pub(crate) fn deliver_local_presentation_dvars(world: &mut World) {
     }
     // Every tick: look up the four keys (stored lowercase, BTreeMap order)
     // instead of scanning and lowercasing every script dvar.
-    let script_dvars = &world.resource::<Runtime>().dvars;
+    let script_dvars = &world.resource::<crate::script::MatchScript>().dvars;
     let values: Vec<_> = [
         "foficonminsize",
         "foficonscale",
@@ -223,8 +245,8 @@ pub(crate) fn deliver_local_presentation_dvars(world: &mut World) {
     }
 }
 
-fn runtime(world: &mut World) -> bevy_ecs::world::Mut<'_, Runtime> {
-    world.resource_mut::<Runtime>()
+fn runtime(world: &mut World) -> bevy_ecs::world::Mut<'_, RoundScript> {
+    world.resource_mut::<RoundScript>()
 }
 
 fn dvar(world: &mut World, args: &[Value]) -> Result<String, String> {
@@ -233,9 +255,13 @@ fn dvar(world: &mut World, args: &[Value]) -> Result<String, String> {
         2 => string(args, 1)?,
         _ => return Err("wrong number of parameters".into()),
     };
-    let mut name = string(args, 0)?;
-    name.make_ascii_lowercase();
-    Ok(runtime(world).dvars.get(&name).cloned().unwrap_or(fallback))
+    let name = string(args, 0)?.to_ascii_lowercase();
+    Ok(world
+        .resource_mut::<crate::script::MatchScript>()
+        .dvars
+        .get(&name)
+        .cloned()
+        .unwrap_or(fallback))
 }
 
 fn dvar_name(args: &[Value]) -> Result<String, String> {

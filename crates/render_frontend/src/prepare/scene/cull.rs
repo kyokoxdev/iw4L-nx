@@ -109,9 +109,11 @@ fn single_cell_from_env() -> bool {
 pub struct WorldMeshEntity;
 
 #[derive(Component)]
+#[require(bevy::prelude::DespawnOnExit<frame::MatchScope> = bevy::prelude::DespawnOnExit(frame::MatchScope::Live))]
 pub struct StaticModelEntity;
 
 #[derive(Component)]
+#[require(bevy::prelude::DespawnOnExit<frame::MatchScope> = bevy::prelude::DespawnOnExit(frame::MatchScope::Live))]
 pub struct ScriptModelEntity;
 
 pub use render_scene::DynEntModelEntity;

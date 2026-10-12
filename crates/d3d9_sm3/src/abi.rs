@@ -64,4 +64,5 @@ pub struct PassLoweringAbi {
     /// One texture and one sampler binding per entry of `samplers`
     /// (`bound_slot_bindings`) instead of the bindless texture table.
     pub bound_slots: bool,
+    pub depth_to_colour: bool,
 }

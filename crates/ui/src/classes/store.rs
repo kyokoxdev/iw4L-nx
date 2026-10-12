@@ -8,7 +8,6 @@ use sim::match_state::PERSONAL_CLASS_SLOTS;
 pub struct SessionClassStore {
     pub slots: Vec<ClassSlotState>,
 
-    pub equipped: Option<usize>,
     pub selected: usize,
 }
 
@@ -117,13 +116,8 @@ impl SessionClassStore {
         }
         Self {
             slots: slots.iter().map(ClassSlotState::from_host_slot).collect(),
-            equipped: None,
             selected: 0,
         }
-    }
-
-    pub fn equipped_slot(&self) -> Option<&ClassSlotState> {
-        self.equipped.and_then(|i| self.slots.get(i))
     }
 
     pub fn apply_coverage_locks(&mut self, reasons: impl IntoIterator<Item = Option<String>>) {
@@ -411,3 +405,6 @@ pub(crate) fn save_class_store(
         }
     }
 }
+
+#[derive(Resource, Default)]
+pub struct EquippedClass(pub Option<usize>);

@@ -89,6 +89,7 @@ pub fn pass_lowering_abi(abi: &PassProgramAbi) -> PassLoweringAbi {
             .collect(),
         alpha_tests: MATERIAL_ALPHA_TESTS.to_vec(),
         bound_slots: super::gpu_contract::bound_slots(),
+        depth_to_colour: abi.depth_to_colour,
     }
 }
 
@@ -187,6 +188,7 @@ mod instance_prologue_tests {
             samplers: Vec::new(),
             alpha_tests: MATERIAL_ALPHA_TESTS.to_vec(),
             bound_slots: false,
+            depth_to_colour: false,
         };
         let lowered = lower_pass_to_wgsl(&abi, &vertex, &pixel).unwrap();
         assert!(lowered.source.contains(d3d9_sm3::wgsl::INSTANCE_BASE_PROLOGUE));

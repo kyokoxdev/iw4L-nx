@@ -308,18 +308,6 @@ impl AudioRuntime {
     }
 
     pub(crate) fn set_event_context(&self, context: Option<crate::event::EventContext>) {
-        let previous = self.event_context.get();
-        if previous
-            .zip(context)
-            .is_some_and(|(old, new)| old.world != new.world || old.timeline != new.timeline)
-        {
-            self.cue_cancellation.cancel(
-                None,
-                None,
-                None,
-                self.shared.match_epoch.load(Ordering::Acquire),
-            );
-        }
         self.event_context.set(context);
     }
 
@@ -343,6 +331,7 @@ impl AudioRuntime {
             class,
             epoch,
             pitch_scale,
+            volume_scale,
             fallbacks,
         } = request;
         if fallbacks.len() > 16 {
@@ -379,6 +368,7 @@ impl AudioRuntime {
             scope: class.scope(),
             epoch,
             pitch_scale,
+            volume_scale,
             execution: CueIntent {
                 event,
                 origin_inches,
@@ -1011,6 +1001,7 @@ fn control(
                     scope: source.key.scope,
                     epoch: source.key.epoch,
                     pitch_scale: 1.0,
+                    volume_scale: 1.0,
                     execution: CueIntent {
                         event: None,
                         origin_inches: source.origin_inches,

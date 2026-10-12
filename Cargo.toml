@@ -10,21 +10,21 @@ quinn-proto = { git = "https://github.com/quinn-rs/quinn", rev = "f650e0f213b01e
 libc = { git = "https://github.com/kyokoxdev/libc", rev = "90345107c821d02f17face49295cc4b362176338" }
 # wgpu: static EGL + NWindow surface for the GL backend. The whole family is
 # patched or wgpu-types duplicates.
-wgpu = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-core = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-hal = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-types = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-naga-bridge = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-core-deps-apple = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
-naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "0bcda288fbb6bf24d3e2fa27ec12106fa9dfdbd7" }
+wgpu = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-core = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-hal = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-types = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-naga-bridge = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-core-deps-apple = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
 # bevy_asset: horizon takes the Windows file reader (async-io/rustix have no
 # Horizon backend).
-bevy_asset = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b" }
+bevy_asset = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
 # memmap2 (via fontique): horizon has no mmap, use the stub backend.
-memmap2 = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b" }
+memmap2 = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
 # cpal (via rodio/bevy_audio): horizon host over the SDL2 audio callback.
-cpal = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "dbe0b2077d9ccc02ee5cfeb011b273ded3e2ac5b" }
+cpal = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "0f73d8a8485c411c62a19b19aa46da3116c73c5a" }
 
 [workspace]
 resolver = "3"
@@ -103,7 +103,9 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
+    "bevy_state",
+    "debug",
     "bevy_window",
     "bevy_ui",
     "bevy_ui_render",
@@ -120,7 +122,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_clipboard",
     "ui_picking",
 ] }
-bevy_ecs = "0.19"
+bevy_ecs = "0.20"
 miniz_oxide = "0.8"
 lzokay-native = "0.1"
 bcdec_rs = "0.2"
@@ -194,7 +196,7 @@ trace_iw4 = { path = "crates/trace_iw4" }
 ui = { path = "crates/ui" }
 weapon_iw4 = { path = "crates/weapon_iw4" }
 xmodel_runtime = { path = "crates/xmodel_runtime" }
-glam = "0.32.1"
+glam = "0.33.2"
 
 # Transcribing a retail constant at full precision is the requirement, not a
 # style slip. `clippy::excessive_precision` fired on

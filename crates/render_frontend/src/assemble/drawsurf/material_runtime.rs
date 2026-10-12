@@ -216,6 +216,7 @@ impl RuntimeProgramPort {
             && pass.arguments == self.arguments
             && pass.color_space == self.color_space
             && pass.hardware_shadow_compare == self.hardware_shadow_compare
+            && pass.depth_to_colour == self.abi.depth_to_colour
             && self.abi.vertex_type == vertex_type
     }
 }
@@ -278,6 +279,7 @@ impl RuntimeProgramRegistry {
                 u8,
                 render_material::PassColorSpace,
                 bool,
+                bool,
                 Vec<RuntimeArgumentBinding>,
             ),
             usize,
@@ -299,6 +301,7 @@ impl RuntimeProgramRegistry {
                     pass.t5_custom_sampler_flags,
                     pass.color_space,
                     pass.hardware_shadow_compare,
+                    pass.depth_to_colour,
                     pass.arguments.clone(),
                 );
                 if seen.contains_key(&key) {

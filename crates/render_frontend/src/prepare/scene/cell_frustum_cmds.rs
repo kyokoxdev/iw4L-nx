@@ -29,6 +29,7 @@ pub fn register_cell_frustum_cmds(app: &mut App) {
     app.add_systems(
         Update,
         enqueue_cell_frustum_cmds_after_vis
+            .in_set(frame::InMatch)
             .after(crate::prepare::scene::cull::apply_dpvs_cull)
             .in_set(frame::WorkerCmdSet::CellStatic),
     );

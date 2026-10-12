@@ -16,7 +16,7 @@ use xmodel_runtime::{
 
 use super::args::{float, vector};
 use super::arrays::new_array;
-use crate::script::{Namespace, NativeRegistry, Runtime, Value};
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 const ANIMFLAG_ADDITIVE: u16 = anim_iw4::ANIMFLAG_ADDITIVE;
 /// Blend time when a call leaves it out.
@@ -517,12 +517,12 @@ fn crossed_notes(
 }
 
 fn library(world: &World) -> Arc<AnimLibrary> {
-    world.resource::<Runtime>().anim_library.clone()
+    world.resource::<RoundScript>().anim_library.clone()
 }
 
 fn entity_id(world: &World, receiver: &Value) -> Result<u64, String> {
     match receiver {
-        Value::Object(id) if world.resource::<Runtime>().entities.contains_key(id) => Ok(*id),
+        Value::Object(id) if world.resource::<RoundScript>().entities.contains_key(id) => Ok(*id),
         _ => Err("receiver is not an entity".into()),
     }
 }
@@ -563,7 +563,7 @@ fn with_anim<T>(
 ) -> Result<T, String> {
     let id = entity_id(world, receiver)?;
     let library = library(world);
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let entity = runtime.entities.get_mut(&id).unwrap();
     if entity.anim.is_none() {
         let tree_name = anim_tree
@@ -666,7 +666,7 @@ pub(crate) fn start_scripted(
             None => (origin, angles),
         })
     })?;
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     runtime.set_object_field(id, "origin", Value::Vector(start_origin));
     runtime.set_object_field(id, "angles", Value::Vector(start_angles));
     Ok(())
@@ -716,7 +716,7 @@ pub(crate) fn advance(world: &mut World) {
         return;
     }
     let dt = crate::MATCH_TICK_MS as f32 / 1000.0;
-    let mut runtime = world.resource_mut::<Runtime>();
+    let mut runtime = world.resource_mut::<RoundScript>();
     let ids: Vec<u64> = runtime
         .entities
         .iter()
@@ -791,7 +791,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             .ok_or_else(|| format!("animtree {tree} is not loaded"))?
             .clone();
         let id = entity_id(world, receiver)?;
-        let mut runtime = world.resource_mut::<Runtime>();
+        let mut runtime = world.resource_mut::<RoundScript>();
         let entity = runtime.entities.get_mut(&id).unwrap();
         if !entity
             .anim
@@ -871,7 +871,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "stopanimscripted", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
         if let Some(anim) = world
-            .resource_mut::<Runtime>()
+            .resource_mut::<RoundScript>()
             .entities
             .get_mut(&id)
             .and_then(|entity| entity.anim.as_mut())

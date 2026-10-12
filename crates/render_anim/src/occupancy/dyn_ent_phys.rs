@@ -1,3 +1,4 @@
+use frame::ScopeApp;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -60,9 +61,9 @@ struct DynEntPhysBody {
 }
 
 pub(crate) fn register_dyn_ent_phys(app: &mut App) {
-    app.init_resource::<DynEntPhysClip>()
-        .init_resource::<DynEntPhysWorld>()
-        .add_message::<DynEntPhysImpulse>();
+    app.staged::<DynEntPhysClip>(frame::MatchScope::Live)
+        .staged::<DynEntPhysWorld>(frame::MatchScope::Live)
+        .scoped_message::<DynEntPhysImpulse>(frame::MatchScope::Live);
 }
 
 pub fn step_phys_world0(
