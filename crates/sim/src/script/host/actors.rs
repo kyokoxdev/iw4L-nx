@@ -241,6 +241,7 @@ fn yaw_to(from: [f32; 3], to: [f32; 3]) -> f32 {
 
 /// Once per tick, before threads run: picks each actor's animscript, then moves it.
 pub(crate) fn advance(world: &mut World) {
+    suppress(world);
     look(world);
     run_scripts(world);
     move_actors(world);
@@ -423,6 +424,97 @@ fn look(world: &mut World) {
                 enemy.map_or(Value::Undefined, Value::Object),
             );
             crate::script::runtime::raise(world, Value::Object(id), "enemy", Vec::new());
+        }
+    }
+}
+
+/// A hostile bullet passing this close to an actor's eye suppresses it.
+const SUPPRESS_RADIUS: f32 = 64.0;
+/// `suppressionmeter` gained per near miss.
+const SUPPRESS_STEP: f32 = 0.25;
+/// `suppressionmeter` lost per second.
+const SUPPRESS_DECAY: f32 = 0.33;
+
+fn segment_distance(point: [f32; 3], from: [f32; 3], to: [f32; 3]) -> f32 {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let p = [point[0] - from[0], point[1] - from[1], point[2] - from[2]];
+    let len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    let t = if len_sq > 0.0 {
+        ((p[0] * d[0] + p[1] * d[1] + p[2] * d[2]) / len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    distance(
+        point,
+        [from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t],
+    )
+}
+
+fn shooter_team(world: &mut World, number: i32) -> Value {
+    let object =
+        match u32::try_from(number).map(|client| super::players::player_object(world, client)) {
+            Ok(Value::Object(id)) => Some(id),
+            _ => world
+                .resource::<RoundScript>()
+                .entities
+                .iter()
+                .find(|(_, entity)| entity.number == number)
+                .map(|(id, _)| *id),
+        };
+    object.map_or(Value::Undefined, |id| {
+        world.resource_mut::<RoundScript>().object_field(id, "team")
+    })
+}
+
+/// Last tick's hostile bullets that passed near an actor fill its
+/// `suppressionmeter`, which drains over time.
+// ponytail: only shots that hit something raise a hit event, so a bullet into
+// the sky does not suppress; record shot segments if AI ignores skyward fire.
+fn suppress(world: &mut World) {
+    let tick = world.resource::<crate::step::StepRequest>().tick.0;
+    let shots: Vec<(i32, [f32; 3], [f32; 3])> = crate::frame::FrameWorld::from_world(world)
+        .entity_events()
+        .iter()
+        .filter(|record| {
+            record.tick.0 + 1 == tick
+                && matches!(
+                    entity_iw4::entity_event_action(record.event),
+                    Ok(entity_iw4::EntityEventAction::BulletHit)
+                )
+        })
+        .map(|record| {
+            (
+                record.payload.number,
+                record.payload.origin2,
+                record.payload.origin,
+            )
+        })
+        .collect();
+    let shots: Vec<(Value, [f32; 3], [f32; 3])> = shots
+        .into_iter()
+        .map(|(number, from, to)| (shooter_team(world, number), from, to))
+        .collect();
+    let decay = SUPPRESS_DECAY * crate::MATCH_TICK_MS as f32 / 1000.0;
+    let mut runtime = world.resource_mut::<RoundScript>();
+    for id in live_actors(&runtime) {
+        let meter = number(runtime.object_field(id, "suppressionmeter")).unwrap_or(0.0);
+        let mut next = meter - decay;
+        if !truthy(&runtime.object_field(id, "ignoresuppression"))
+            && let Value::Vector([x, y, z]) = runtime.object_field(id, "origin")
+        {
+            let team = runtime.object_field(id, "team");
+            let near = shots
+                .iter()
+                .filter(|(shooter, from, to)| {
+                    hostile(&team, shooter)
+                        && segment_distance([x, y, z + EYE_HEIGHT], *from, *to) < SUPPRESS_RADIUS
+                })
+                .count();
+            next += SUPPRESS_STEP * near as f32;
+        }
+        let next = next.clamp(0.0, 1.0);
+        if next != meter {
+            runtime.set_object_field(id, "suppressionmeter", Value::Float(next));
         }
     }
 }
@@ -1584,6 +1676,13 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             Some((seen, at, _)) if seen == target => Ok(Value::Vector(at)),
             _ => Ok(super::players::entity_field(world, target, "origin")),
         }
+    });
+    registry.register(Method, "issuppressed", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let meter = number(runtime.object_field(id, "suppressionmeter")).unwrap_or(0.0);
+        let ignore = truthy(&runtime.object_field(id, "ignoresuppression"));
+        Ok(Value::Int((meter > 0.0 && !ignore).into()))
     });
     registry.register(Method, "lastknowntime", |world, receiver, args| {
         let id = actor(world, receiver)?;

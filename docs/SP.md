@@ -114,7 +114,10 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `weaponisboltaction` read the weapon's fire type; `lastknownpos`/`lastknowntime`
    answer for the last hostile seen (others: where they are now);
    `canattackenemynode` traces muzzle → the enemy's node (else eye);
-   `maymovetopoint` sweeps a body-sized box at step height. Not yet: `issuppressed`, `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
+   `maymovetopoint` sweeps a body-sized box at step height. Hostile bullets that
+   hit something within 64 units of an actor's eye fill `suppressionmeter`
+   (drains over ~3 s); `issuppressed` reads it, `ignoresuppression` blocks it.
+   Not yet: `ismovesuppressed`, `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
    `clearfixednodesafevolume` (no consumer in the retail dump), `nearclaimnode`/`nearclaimnodeandangle`, `startcoverarrival`
    (arrival motion). Then saves.
 7. Switch: SP zones' memory budget.

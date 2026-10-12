@@ -204,7 +204,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "isknownenemyinvolume" => Zero;
         Method "ismovesuppressed" => Zero;
         Method "isstanceallowed" => One;
-        Method "issuppressed" => Zero;
         Method "iswaitingonsound" => Zero;
         Method "laserforceoff" => Undefined;
         Method "laserforceon" => Undefined;
