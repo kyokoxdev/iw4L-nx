@@ -29,7 +29,12 @@ pub(super) fn begin_traverse(runtime: &mut RoundScript, id: u64, (start, end): (
     ) else {
         return;
     };
-    runtime.campaign.actor_brains.entry(id).or_default().traverse = Some((start, end));
+    runtime
+        .campaign
+        .actor_brains
+        .entry(id)
+        .or_default()
+        .traverse = Some((start, end));
 }
 
 /// `traverse/<animscript>` while the actor crosses a traverse. A traverse whose
@@ -52,7 +57,12 @@ pub(super) fn traverse_script(world: &mut World, brain: &mut ActorBrain) -> Opti
 }
 
 /// Ends the traverse once its animscript returns: the actor stands at the end node.
-pub(super) fn finish_traverse(world: &mut World, id: u64, brain: &mut ActorBrain, thread_done: bool) {
+pub(super) fn finish_traverse(
+    world: &mut World,
+    id: u64,
+    brain: &mut ActorBrain,
+    thread_done: bool,
+) {
     let Some((_, end)) = brain.traverse else {
         return;
     };
@@ -80,7 +90,8 @@ pub(crate) struct ThreatBias {
 
 impl ThreatBias {
     pub(super) fn ignores(&self, viewer: &str, target: &str) -> bool {
-        self.ignore.contains(&(viewer.to_string(), target.to_string()))
+        self.ignore
+            .contains(&(viewer.to_string(), target.to_string()))
     }
 
     pub(super) fn bias(&self, viewer: &str, target: &str) -> f32 {
@@ -108,7 +119,11 @@ pub(super) fn group_of(runtime: &mut RoundScript, id: u64) -> String {
 }
 
 /// `getnegotiationstartnode` / `getnegotiationendnode`: the traverse being crossed, else undefined.
-pub(super) fn negotiation_node(world: &mut World, receiver: &Value, start: bool) -> Result<Value, String> {
+pub(super) fn negotiation_node(
+    world: &mut World,
+    receiver: &Value,
+    start: bool,
+) -> Result<Value, String> {
     let id = actor(world, receiver)?;
     Ok(match brain(world, id).traverse {
         Some((s, e)) => Value::Object(if start { s } else { e }),
@@ -276,28 +291,46 @@ pub(super) fn register(registry: &mut NativeRegistry) {
     use Namespace::{Function, Method};
     registry.register(Function, "createthreatbiasgroup", |world, _, args| {
         let name = string(args, 0)?;
-        world.resource_mut::<RoundScript>().campaign.threat.groups.insert(name);
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .threat
+            .groups
+            .insert(name);
         Ok(Value::Undefined)
     });
     registry.register(Function, "threatbiasgroupexists", |world, _, args| {
         let name = string(args, 0)?;
         let runtime = world.resource::<RoundScript>();
-        Ok(Value::Int(runtime.campaign.threat.groups.contains(&name).into()))
+        Ok(Value::Int(
+            runtime.campaign.threat.groups.contains(&name).into(),
+        ))
     });
     registry.register(Function, "setignoremegroup", |world, _, args| {
         let pair = (string(args, 0)?, string(args, 1)?);
-        world.resource_mut::<RoundScript>().campaign.threat.ignore.insert(pair);
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .threat
+            .ignore
+            .insert(pair);
         Ok(Value::Undefined)
     });
     registry.register(Function, "setthreatbias", |world, _, args| {
         let key = (string(args, 0)?, string(args, 1)?);
         let bias = number(arg(args, 2)?.clone()).ok_or("setthreatbias expects a number")?;
-        world.resource_mut::<RoundScript>().campaign.threat.bias.insert(key, bias);
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .threat
+            .bias
+            .insert(key, bias);
         Ok(Value::Undefined)
     });
     registry.register(Function, "setthreatbiasagainstall", |world, _, args| {
         let target = string(args, 0)?;
-        let bias = number(arg(args, 1)?.clone()).ok_or("setthreatbiasagainstall expects a number")?;
+        let bias =
+            number(arg(args, 1)?.clone()).ok_or("setthreatbiasagainstall expects a number")?;
         world
             .resource_mut::<RoundScript>()
             .campaign
@@ -313,9 +346,11 @@ pub(super) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "setthreatbiasgroup", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
         let group = string(args, 0)?;
-        world
-            .resource_mut::<RoundScript>()
-            .set_object_field(id, "threatbiasgroup", Value::string(&group));
+        world.resource_mut::<RoundScript>().set_object_field(
+            id,
+            "threatbiasgroup",
+            Value::string(&group),
+        );
         Ok(Value::Undefined)
     });
     registry.register(Method, "getthreatbiasgroup", |world, receiver, _| {
@@ -359,17 +394,21 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         Ok(Value::Int(1))
     });
     // Valid when the cover does not face the actor's enemy (the order `best_cover` prefers).
-    registry.register(Method, "iscovervalidagainstenemy", |world, receiver, args| {
-        let id = actor(world, receiver)?;
-        let (node, _) = origin_of(world, arg(args, 0)?)?;
-        let mut runtime = world.resource_mut::<RoundScript>();
-        let enemy = match runtime.object_field(id, "enemy") {
-            Value::Object(enemy) => vector_field(&mut runtime, enemy, "origin"),
-            _ => None,
-        };
-        let valid = cover_at(&mut runtime, node).is_some_and(|cover| !faces(&cover, enemy));
-        Ok(Value::Int(valid.into()))
-    });
+    registry.register(
+        Method,
+        "iscovervalidagainstenemy",
+        |world, receiver, args| {
+            let id = actor(world, receiver)?;
+            let (node, _) = origin_of(world, arg(args, 0)?)?;
+            let mut runtime = world.resource_mut::<RoundScript>();
+            let enemy = match runtime.object_field(id, "enemy") {
+                Value::Object(enemy) => vector_field(&mut runtime, enemy, "origin"),
+                _ => None,
+            };
+            let valid = cover_at(&mut runtime, node).is_some_and(|cover| !faces(&cover, enemy));
+            Ok(Value::Int(valid.into()))
+        },
+    );
     registry.register(Method, "isingoal", |world, receiver, args| {
         let id = actor(world, receiver)?;
         let at = vector(args, 0)?;
