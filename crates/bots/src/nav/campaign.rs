@@ -11,12 +11,16 @@ use super::{EXPAND_CAP, NavEdge, NavGraph, PathError, RouteSearch, TraversalKind
 const PATH_NODE_SNAP_IN: f32 = 512.0;
 
 /// SP actors route over the level's path nodes: links are walk edges at their
-/// path distance, searched by the same A\* as bot routes.
-struct PathNav(NavGraph);
+/// path distance, searched by the same A\* as bot routes. `traversals` are
+/// negotiation (begin, end) node pairs; the actor crosses one with its animscript.
+struct PathNav {
+    graph: NavGraph,
+    traversals: Vec<(usize, usize)>,
+}
 
 impl sim::script::ActorNav for PathNav {
     fn route(&self, from: [f32; 3], to: [f32; 3]) -> Option<Vec<[f32; 3]>> {
-        let graph = &self.0;
+        let graph = &self.graph;
         let start = nearest_within(graph, from, PATH_NODE_SNAP_IN)?;
         let goal = nearest_within(graph, to, PATH_NODE_SNAP_IN)?;
         let mut search = RouteSearch::begin(graph, &[(start, 0.0)], &[goal]);
@@ -30,11 +34,41 @@ impl sim::script::ActorNav for PathNav {
         };
         Some(steps.iter().map(|step| step.position).chain([to]).collect())
     }
+
+    fn traversal_at(&self, at: [f32; 3]) -> Option<(usize, usize)> {
+        self.traversals
+            .iter()
+            .copied()
+            .find(|&(start, _)| self.graph.nodes[start] == at)
+    }
+}
+
+fn key<'a>(node: &'a sim::script::PathNode, name: &str) -> Option<&'a str> {
+    node.keys
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v.as_str())
+}
+
+/// (begin, end) indices: a `Begin` node whose `target` names an `End` node's `targetname`.
+fn traversals(nodes: &[sim::script::PathNode]) -> Vec<(usize, usize)> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, begin)| begin.kind == "Begin")
+        .filter_map(|(b, begin)| {
+            let target = key(begin, "target")?;
+            let end = nodes
+                .iter()
+                .position(|end| end.kind == "End" && key(end, "targetname") == Some(target))?;
+            Some((b, end))
+        })
+        .collect()
 }
 
 fn path_nav(nodes: &[sim::script::PathNode]) -> std::sync::Arc<dyn sim::script::ActorNav> {
     let n = nodes.len();
-    let adj = nodes
+    let mut adj: Vec<Vec<NavEdge>> = nodes
         .iter()
         .map(|node| {
             node.links
@@ -48,12 +82,33 @@ fn path_nav(nodes: &[sim::script::PathNode]) -> std::sync::Arc<dyn sim::script::
                 .collect()
         })
         .collect();
-    std::sync::Arc::new(PathNav(NavGraph {
-        nodes: nodes.iter().map(|node| node.origin).collect(),
-        component: vec![0; n],
-        adj,
-        ..Default::default()
-    }))
+    let traversals = traversals(nodes);
+    for &(begin, end) in &traversals {
+        if adj[begin].iter().any(|edge| usize::from(edge.to) == end) {
+            continue;
+        }
+        let cost = nodes[begin]
+            .origin
+            .iter()
+            .zip(nodes[end].origin)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        adj[begin].push(NavEdge {
+            to: end as u16,
+            cost,
+            kind: TraversalKind::Walk,
+        });
+    }
+    std::sync::Arc::new(PathNav {
+        graph: NavGraph {
+            nodes: nodes.iter().map(|node| node.origin).collect(),
+            component: vec![0; n],
+            adj,
+            ..Default::default()
+        },
+        traversals,
+    })
 }
 
 /// SP actors route over the level's path nodes with the bots' A\*.
@@ -69,5 +124,30 @@ pub(crate) fn install_actor_nav(world: Option<Res<AuthorityWorld>>) {
             nodes.len()
         );
         world.install_actor_nav(path_nav(&nodes));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim::script::{ActorNav, PathNode};
+
+    /// A begin node with no walk link still routes to its end node.
+    #[test]
+    fn traversal_joins_begin_to_end() {
+        let node = |kind, key_name, value: &str, origin| PathNode {
+            kind,
+            origin,
+            keys: vec![(key_name, value.to_owned())],
+            ..Default::default()
+        };
+        let nodes = [
+            node("Begin", "target", "end_a", [0.0, 0.0, 0.0]),
+            node("End", "targetname", "end_a", [100.0, 0.0, 64.0]),
+        ];
+        assert_eq!(traversals(&nodes), vec![(0, 1)]);
+        let nav = path_nav(&nodes);
+        assert_eq!(nav.traversal_at([0.0, 0.0, 0.0]), Some((0, 1)));
+        assert!(nav.route([0.0, 0.0, 0.0], [100.0, 0.0, 64.0]).is_some());
     }
 }

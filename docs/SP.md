@@ -87,7 +87,9 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    route at the anim tree's blended root-motion speed (`animmode` none) or applies
    root motion, turning per `orientmode`. Path nodes are script objects; goals
    route with the bots' A\* (`bots::nav::campaign`); node objects take the keys of
-   the map's `node_*` entity at their origin (`script_linkto`, ...). Sight picks the nearest
+   the map's `node_*` entity at their origin (`script_linkto`, ...). A route crossing a
+   `Begin` node (`target` = an `End` node's `targetname`) runs `animscripts/traverse/<animscript>::main`
+   (`getnegotiationstartnode`/`endnode`), then the actor stands at the end node; no such script = plain walk. Sight picks the nearest
    visible hostile (`enemy`); `shoot` fires the actor's weapon through the turret
    bullet path, which raises `EV_FIRE_WEAPON` (fire sound, muzzle flash on the
    attached gun's `tag_flash`) for actors, turrets and vehicles alike. Tags of
@@ -97,6 +99,6 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `weapon_*` and actor drops are weapon items, level `misc_turret`s turrets of
    their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
-   firefight does. Not yet: traverse nodes, cover queries, goal volumes, threat
+   firefight does. Not yet: cover queries, goal volumes, threat
    bias, `setviewmodel` hands. Then saves.
 7. Switch: SP zones' memory budget.

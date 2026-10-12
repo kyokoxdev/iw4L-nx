@@ -9,6 +9,8 @@ use super::entities::EntityKind;
 use super::natives::engine::entity_id;
 use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
+mod campaign;
+
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
 /// The same for a `script_vehicle` (its flag 1 marks a drivable vehicle).
@@ -18,6 +20,8 @@ pub(crate) const VEHICLE_SPAWNER: i32 = 2;
 pub trait ActorNav: Send + Sync {
     /// Waypoints from `from` to `to`, `to` last; `None` when no route joins them.
     fn route(&self, from: [f32; 3], to: [f32; 3]) -> Option<Vec<[f32; 3]>>;
+    /// The traverse (negotiation begin, end) node indices whose begin node is at `at`.
+    fn traversal_at(&self, at: [f32; 3]) -> Option<(usize, usize)>;
 }
 
 #[derive(Clone)]
@@ -86,6 +90,8 @@ pub(crate) struct ActorBrain {
     orient: Orient,
     /// Level time the enemy was last seen.
     enemy_seen_ms: i64,
+    /// Negotiation (start, end) nodes while the actor crosses a traverse.
+    traverse: Option<(u64, u64)>,
 }
 
 /// Movement without an animation tree (an aitype with no animscripts).
@@ -618,6 +624,7 @@ fn run_scripts(world: &mut World) {
         let thread_done = brain
             .thread
             .is_none_or(|thread| !crate::script::runtime::campaign::running(world, thread));
+        campaign::finish_traverse(world, id, &mut brain, thread_done);
         brain.hold = match brain.hold {
             Some(Hold::Scripted { started, ended }) => {
                 let state = world
@@ -641,7 +648,8 @@ fn run_scripts(world: &mut World) {
             hold => hold,
         };
         if brain.hold.is_none() {
-            let desired = desired_script(world, id);
+            let desired = campaign::traverse_script(world, &mut brain)
+                .unwrap_or_else(|| desired_script(world, id));
             if *brain.script != *desired {
                 let entry = format!("animscripts/{desired}::main");
                 switch(world, id, &mut brain, &desired, Start::Entry(&entry));
@@ -704,9 +712,11 @@ fn move_actors(world: &mut World) {
         }
         let code_moves = matches!(&*brain.anim_mode, "" | "none" | "normal");
         let walking = code_moves && (brain.script.is_empty() || &*brain.script == "move");
+        let root_motion = !code_moves || brain.traverse.is_some();
         let start = origin;
         let mut heading = None;
         let mut path_goal = None;
+        let mut traverse = None;
         if let Some(target) = runtime
             .campaign
             .actor_goals
@@ -778,6 +788,10 @@ fn move_actors(world: &mut World) {
                             origin = next;
                             goal.route.remove(0);
                             left -= d;
+                            traverse = nav.as_ref().and_then(|nav| nav.0.traversal_at(origin));
+                            if traverse.is_some() {
+                                break;
+                            }
                         } else {
                             let t = left / d;
                             origin = std::array::from_fn(|k| origin[k] + (next[k] - origin[k]) * t);
@@ -787,7 +801,10 @@ fn move_actors(world: &mut World) {
                 }
             }
         }
-        if !code_moves {
+        if let Some(link) = traverse {
+            campaign::begin_traverse(&mut runtime, id, link);
+        }
+        if root_motion {
             let world_delta = super::script_anim::rotate([0.0, angles[1], 0.0], delta);
             origin = std::array::from_fn(|k| origin[k] + world_delta[k]);
         }
@@ -811,7 +828,7 @@ fn move_actors(world: &mut World) {
         };
         let yaw = match want {
             Some(want) => approach_yaw(angles[1], want, TURN_RATE * dt),
-            None if !code_moves => math_iw4::angle_normalize_360(angles[1] + turn),
+            None if root_motion => math_iw4::angle_normalize_360(angles[1] + turn),
             None => angles[1],
         };
         let moved = origin != start || yaw != angles[1];
@@ -1471,10 +1488,11 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         crate::script::runtime::raise(world, receiver.clone(), "death", vec![Value::Undefined]);
         Ok(Value::Undefined)
     });
-    // ponytail: negotiation (traverse) nodes are walked like any link; return
-    // their start node once routes cross them with traverse animscripts.
-    registry.register(Method, "getnegotiationstartnode", |_, _, _| {
-        Ok(Value::Undefined)
+    registry.register(Method, "getnegotiationstartnode", |world, receiver, _| {
+        campaign::negotiation_node(world, receiver, true)
+    });
+    registry.register(Method, "getnegotiationendnode", |world, receiver, _| {
+        campaign::negotiation_node(world, receiver, false)
     });
     registry.register(Method, "gethighestnodestance", |world, receiver, _| {
         Ok(Value::string(highest_stance(world, receiver)?))

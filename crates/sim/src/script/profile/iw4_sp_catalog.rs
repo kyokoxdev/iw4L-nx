@@ -133,6 +133,7 @@ pub(super) const IW4_SP: &[Builtin] = &[
     Builtin::new(Method, "getmuzzleangle", Entity, false),
     Builtin::new(Method, "getmuzzlepos", Entity, false),
     Builtin::new(Method, "getmuzzlesideoffsetpos", Entity, false),
+    Builtin::new(Method, "getnegotiationendnode", Entity, false),
     Builtin::new(Method, "getnegotiationstartnode", Entity, false),
     Builtin::new(Method, "getplayerintelisfound", Entity, false),
     Builtin::new(Method, "getshootatpos", Entity, false),
