@@ -481,6 +481,16 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         "forceusehintoff",
         "predictstreampos",
     );
+    // ponytail: returns the script's last setviewmodel only; render keeps the load-time hands
+    // (fpv_prepared builds FPV assemblies per weapon at load). Swap needs per-hands prep.
+    registry.register(Method, "getviewmodel", |world, receiver, _| {
+        let client = player(world, receiver)?;
+        Ok(slot(world, client)?
+            .presented
+            .get("setviewmodel")
+            .and_then(|args| args.first().cloned())
+            .unwrap_or(Value::Undefined))
+    });
     registry.register(Method, "isitemunlocked", |world, receiver, args| {
         let client = data_client(world, player(world, receiver)?)?;
         let name = string(args, 0)?;

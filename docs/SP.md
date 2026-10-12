@@ -99,6 +99,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `weapon_*` and actor drops are weapon items, level `misc_turret`s turrets of
    their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
-   firefight does. Not yet:
-   `setthreatbiasagainstall` (leapfrog; not in the catalog), `setviewmodel` hands, `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
+   firefight does. `setviewmodel` stores the name; `getviewmodel` returns it.
+   Arms still bind at load (`fpv_prepared`), so the render ignores the script
+   pick: per-hands FPV prep is the gap. Not yet:
+   `setthreatbiasagainstall` (leapfrog; not in the catalog), `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
 7. Switch: SP zones' memory budget.
