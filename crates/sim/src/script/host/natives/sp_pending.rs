@@ -195,7 +195,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getmuzzlesideoffsetpos" => Origin;
         Method "getplayerintelisfound" => Zero;
         Method "getturret" => Undefined;
-        Method "getvalidcoverpeekouts" => EmptyArray;
         Method "giveachievement" => Undefined;
         Method "isgrenadepossafe" => Zero;
         Method "isindoor" => Zero;

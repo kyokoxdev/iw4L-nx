@@ -13,8 +13,8 @@ use super::super::args::{arg, string, vector};
 use super::super::natives::engine::entity_id;
 use super::super::triggers::entity_bounds;
 use super::{
-    ActorBrain, DEFAULT_GOAL_HEIGHT, DEFAULT_GOAL_RADIUS, GoalTarget, actor, brain, cover_script,
-    distance, has_entry, number, origin_of, set_goal,
+    ActorBrain, DEFAULT_GOAL_HEIGHT, DEFAULT_GOAL_RADIUS, GoalTarget, actor, brain, clear_sight,
+    cover_script, distance, has_entry, number, origin_of, set_goal,
 };
 use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
@@ -409,6 +409,12 @@ pub(super) fn register(registry: &mut NativeRegistry) {
             Ok(Value::Int(valid.into()))
         },
     );
+    registry.register(Method, "getvalidcoverpeekouts", |world, receiver, _| {
+        let node = entity_id(world, receiver)?;
+        let cover = cover_at(&mut world.resource_mut::<RoundScript>(), node);
+        let modes = cover.map_or_else(Vec::new, |cover| peekouts(world, &cover));
+        super::super::arrays::new_array(world, modes.into_iter().map(Value::string).collect())
+    });
     registry.register(Method, "isingoal", |world, receiver, args| {
         let id = actor(world, receiver)?;
         let at = vector(args, 0)?;
@@ -430,6 +436,37 @@ pub(super) fn register(registry: &mut NativeRegistry) {
             .set_object_field(id, "goalvolume", Value::Undefined);
         Ok(Value::Undefined)
     });
+}
+
+/// How far a peek steps out sideways, then looks ahead.
+const PEEK_STEP: f32 = 32.0;
+/// Eye height a peek is traced at.
+const PEEK_HEIGHT: f32 = 40.0;
+
+/// Sides of a cover an actor can step out of: the step sideways is clear and
+/// so is the view ahead from there.
+// ponytail: two traces per side at one height, no "over" for crouch walls;
+// add it if crouch covers never fire over the top.
+fn peekouts(world: &mut World, cover: &Cover) -> Vec<&'static str> {
+    let [fx, fy, _] = cover.forward;
+    let from = [
+        cover.origin[0],
+        cover.origin[1],
+        cover.origin[2] + PEEK_HEIGHT,
+    ];
+    [("left", -1.0), ("right", 1.0)]
+        .into_iter()
+        .filter(|(_, sign)| {
+            let side = [
+                from[0] + fy * sign * PEEK_STEP,
+                from[1] - fx * sign * PEEK_STEP,
+                from[2],
+            ];
+            let ahead = [side[0] + fx * PEEK_STEP, side[1] + fy * PEEK_STEP, side[2]];
+            clear_sight(world, from, side) && clear_sight(world, side, ahead)
+        })
+        .map(|(mode, _)| mode)
+        .collect()
 }
 
 /// `setgoalvolume(volume)`: the goal must stay in the volume. A goal already

@@ -118,7 +118,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    hit something within 64 units of an actor's eye fill `suppressionmeter`
    (drains over ~3 s); `issuppressed` reads it, `ignoresuppression` blocks it.
    `nearclaimnode[andangle]`: at the claimed node (and within 45° of its yaw).
-   Not yet: `ismovesuppressed`, `getvalidcoverpeekouts` (corner peek geometry), `setfixednodesafevolume`/
+   `getvalidcoverpeekouts`: sides of a cover node with room to step out (32 units
+   sideways, then clear ahead). Not yet: `ismovesuppressed`, `setfixednodesafevolume`/
    `clearfixednodesafevolume` (no consumer in the retail dump), `startcoverarrival`
    (arrival motion). Then saves.
 7. Switch: SP zones' memory budget.
