@@ -100,7 +100,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
    firefight does. `setviewmodel` stores the name; `getviewmodel` returns it.
-   Arms still bind at load (`fpv_prepared`), so the render ignores the script
-   pick: per-hands FPV prep is the gap. Not yet:
+   Arms bind at load: the level's hands (`setViewmodel` literal from its own
+   script, else its `_loadout` branch for `level.script`) are prepared for every
+   weapon (`match_walk/campaign.rs`). Runtime switches are ignored; per-hands FPV prep is the gap. Not yet:
    `setthreatbiasagainstall` (leapfrog; not in the catalog), `getvalidcoverpeekouts`/`iscovervalidagainstenemy`, `setfixednodesafevolume`. Then saves.
 7. Switch: SP zones' memory budget.

@@ -1,5 +1,7 @@
 use super::*;
 
+mod campaign;
+
 static NEXT_PRODUCTS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub(super) async fn walk_prepared_match(
@@ -301,6 +303,7 @@ pub(super) async fn walk_prepared_match(
         "GSC source assets: {} (map overrides common_mp)",
         scripts.len()
     ));
+    let viewhands = campaign::viewhands(&scripts, &zone_name);
 
     report.push(format!(
         "map teams: allies={:?} axis={:?} attackers={:?} defenders={:?}",
@@ -692,7 +695,7 @@ pub(super) async fn walk_prepared_match(
         &player_anim_sources,
         &xanims,
     );
-    weapons.resolve_fpv_soldiers(&fpv_meshes, &soldiers);
+    weapons.resolve_fpv_soldiers(&fpv_meshes, &soldiers, viewhands.as_deref());
     let assembly_started = std::time::Instant::now();
     let assemblies = weapons.resolve_fpv_assemblies(&fpv_meshes, &xanims);
     report.push(format!(
