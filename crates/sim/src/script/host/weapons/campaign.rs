@@ -135,7 +135,10 @@ fn arc(from: [f32; 3], at: [f32; 3], fuse_ms: i32) -> ([f32; 3], f32) {
     let reach = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     let fuse = (fuse_ms as f32 / 1000.0).max(0.1);
     let t = (reach / 600.0).clamp(0.3, 1.5).min(fuse);
-    ([d[0] / t, d[1] / t, d[2] / t + 0.5 * GRENADE_GRAVITY * t], t)
+    (
+        [d[0] / t, d[1] / t, d[2] / t + 0.5 * GRENADE_GRAVITY * t],
+        t,
+    )
 }
 
 /// A thrown grenade: its script model, its physics flight, and where that
@@ -230,7 +233,10 @@ fn ride_arc(world: &mut World, model: u64, from: [f32; 3], at: [f32; 3], fuse_ms
         .resource::<RoundScript>()
         .restart
         .clone()
-        .and_then(|r| r.natives.get(crate::script::Namespace::Method, "movegravity"))
+        .and_then(|r| {
+            r.natives
+                .get(crate::script::Namespace::Method, "movegravity")
+        })
     else {
         return;
     };
@@ -267,12 +273,11 @@ fn step_flights(world: &mut World) {
     let stepped: Vec<(usize, crate::equipment::ProjectileState)> = flights
         .into_iter()
         .map(|(i, state, from)| {
-            let next =
-                crate::equipment::predict_projectile_state(&frame, state, from, now - from)
-                    .filter(|next| {
-                        let d: [f32; 3] = std::array::from_fn(|k| next.origin[k] - state.origin[k]);
-                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= REST_STEP
-                    });
+            let next = crate::equipment::predict_projectile_state(&frame, state, from, now - from)
+                .filter(|next| {
+                    let d: [f32; 3] = std::array::from_fn(|k| next.origin[k] - state.origin[k]);
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() >= REST_STEP
+                });
             (i, next.unwrap_or_else(|| at_rest(state)))
         })
         .collect();
@@ -464,8 +469,114 @@ pub(crate) fn advance_magic_grenades(world: &mut World) {
     }
 }
 
+/// `target_set` keeps at most this many targets.
+const MAX_TARGETS: usize = 32;
+
+/// Where `target` shows on `player`'s screen at `fov` degrees: pixels from the
+/// centre on a 640-wide view, `None` behind the player.
+fn target_on_screen(world: &mut World, args: &[Value]) -> Result<Option<(f32, f32)>, String> {
+    use super::super::args::{arg, float};
+    use super::super::natives::engine::entity_id;
+    let target = entity_id(world, arg(args, 0)?)?;
+    let player = entity_id(world, arg(args, 1)?)?;
+    let fov = float(args, 2)?;
+    let runtime = world.resource::<RoundScript>();
+    let offset = runtime
+        .campaign
+        .targets
+        .iter()
+        .find(|(id, _)| *id == target)
+        .map_or([0.0; 3], |(_, offset)| *offset);
+    let client = runtime
+        .player_client(player)
+        .ok_or("target test needs a player")?;
+    let Value::Vector(at) = super::super::players::entity_field(world, target, "origin") else {
+        return Ok(None);
+    };
+    let Some(ps) = FrameWorld::from_world(world)
+        .player(ClientId(client))
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let eye = glam::Vec3::from_array(ps.origin) + glam::Vec3::Z * ps.view_height_current;
+    let delta = glam::Vec3::from_array(at) + glam::Vec3::from_array(offset) - eye;
+    let (forward, right, up) = math_iw4::angle_vectors(ps.viewangles);
+    let depth = delta.dot(glam::Vec3::from_array(forward));
+    if depth <= 0.0 {
+        return Ok(None);
+    }
+    let scale = 320.0 / (fov.to_radians() * 0.5).tan() / depth;
+    Ok(Some((
+        delta.dot(glam::Vec3::from_array(right)) * scale,
+        delta.dot(glam::Vec3::from_array(up)) * scale,
+    )))
+}
+
+fn register_targets(registry: &mut crate::script::NativeRegistry) {
+    use super::super::args::{arg, float, optional, vector};
+    use super::super::natives::engine::entity_id;
+    use crate::script::Namespace::Function;
+    registry.register(Function, "target_set", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let offset = optional(args, 1, vector)?.unwrap_or([0.0; 3]);
+        let targets = &mut world.resource_mut::<RoundScript>().campaign.targets;
+        if let Some(target) = targets.iter_mut().find(|(target, _)| *target == id) {
+            target.1 = offset;
+        } else if targets.len() >= MAX_TARGETS {
+            return Err("Maximum number of targets exceeded".into());
+        } else {
+            targets.push((id, offset));
+        }
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_remove", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let targets = &mut world.resource_mut::<RoundScript>().campaign.targets;
+        targets.retain(|(target, _)| *target != id);
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_istarget", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let targets = &world.resource::<RoundScript>().campaign.targets;
+        Ok(Value::Int(
+            targets.iter().any(|(target, _)| *target == id).into(),
+        ))
+    });
+    registry.register(Function, "target_getarray", |world, _, _| {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let runtime = &mut *runtime;
+        let entities = &runtime.entities;
+        runtime
+            .campaign
+            .targets
+            .retain(|(target, _)| entities.contains_key(target));
+        let targets = runtime
+            .campaign
+            .targets
+            .iter()
+            .map(|(target, _)| Value::Object(*target))
+            .collect();
+        super::super::arrays::new_array(world, targets)
+    });
+    // (target, player, fov, half width, half height) in screen pixels.
+    registry.register(Function, "target_isinrect", |world, _, args| {
+        let (w, h) = (float(args, 3)?, float(args, 4)?);
+        let inside =
+            target_on_screen(world, args)?.is_some_and(|(x, y)| x.abs() < w && y.abs() < h);
+        Ok(Value::Int(inside.into()))
+    });
+    registry.register(Function, "target_isincircle", |world, _, args| {
+        let radius = float(args, 3)?;
+        let inside =
+            target_on_screen(world, args)?.is_some_and(|(x, y)| x * x + y * y < radius * radius);
+        Ok(Value::Int(inside.into()))
+    });
+}
+
 pub(crate) fn register_sp(registry: &mut crate::script::NativeRegistry) {
     use crate::script::Namespace::{Function, Method};
+    register_targets(registry);
     for namespace in [Function, Method] {
         registry.register(namespace, "magicgrenade", |world, receiver, args| {
             magic_grenade(world, receiver, args, false)

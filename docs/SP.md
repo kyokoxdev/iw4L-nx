@@ -204,7 +204,7 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    turret weapon with an `aiScript` (`saw/stand`) runs
    `animscripts/<aiScript>::main` on the gunner, which fires it
    (`shootturret`); one without fires on its own. The gunner is not placed on
-   the turret's tag.
+   the turret's tag. `startfiring`/`stopfiring` make a turret shoot where it aims at its weapon's fire rate, with or without a gunner.
 7. Player: `notifyoncommand` binds console commands (campaign set in
    `controls/campaign.rs`). Use triggers reach 72 units (retail SP `player_useRadius`). Tagged links ride the tag in campaign, so rig scenes
    place the player; `playerlinktoblend` eases onto the tag over its blend time, `lerpviewangleclamp`
@@ -213,7 +213,7 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    handling over the ground. `magicgrenade[manual]` and AI grenades fly
    under the weapon's projectile bounce physics (`predict_projectile_state`, ownerless: no player is
    credited) and explode wherever they are when the timer runs out; AI flee from the predicted resting spot. `allowfire`/`allowmelee`
-   refuse those buttons. Objectives follow retail (`objectives/campaign.rs`): text, up to eight
+   refuse those buttons. Lock-on targets (`target_set`/`target_remove`/`target_istarget`/`target_getarray`, at most 32) feed the Javelin and Stinger scripts; `target_isinrect`/`target_isincircle` project the target onto the player's screen (640 wide at the given fov). Their HUD shaders are not drawn. `linktoblendtotag` links onto the tag (no ease). Objectives follow retail (`objectives/campaign.rs`): text, up to eight
    positions (`objective_additionalposition`), pointer text and entity offset per
    objective; `objective_current` makes the listed ones current (others active).
    Only current objectives show on the compass and as on-screen markers

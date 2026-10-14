@@ -412,6 +412,7 @@ fn acquire(world: &mut World, object: u64, turret: &Turret, from: [f32; 3]) -> O
 pub(crate) fn advance(world: &mut World) {
     campaign::player_turrets(world);
     campaign::gunner_turrets(world);
+    campaign::scripted_fire(world);
     let objects: Vec<u64> = world
         .resource::<RoundScript>()
         .engine

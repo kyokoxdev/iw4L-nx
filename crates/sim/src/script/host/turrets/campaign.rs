@@ -117,8 +117,24 @@ pub(super) fn fire_event(world: &mut World, object: u64, from: [f32; 3], weapon:
 /// `turret useby(player)`: the player mans the turret until it is used again
 /// or deleted. Players only; actor gunners are not modelled.
 pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
+    use super::super::natives::engine::entity_id;
     use crate::script::Namespace::Method;
     registry.register(Method, "useturret", use_turret);
+    registry.register(Method, "startfiring", |world, receiver, _| {
+        let object = entity_id(world, receiver)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        if !runtime.engine.turrets.contains_key(&object) {
+            return Err("startfiring: not a turret".into());
+        }
+        runtime.campaign.turret_firing.entry(object).or_insert(0);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "stopfiring", |world, receiver, _| {
+        let object = entity_id(world, receiver)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.campaign.turret_firing.remove(&object);
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "stopuseturret", |world, receiver, _| {
         stop_use_turret(world, receiver)
     });
@@ -281,6 +297,47 @@ pub(super) fn gunner_turrets(world: &mut World) {
         {
             entry.1 = now + i64::from(interval);
         }
+        let from = super::muzzle(world, object);
+        super::fire_bullet(world, object, from, aim, weapon, None);
+    }
+}
+
+/// Turrets under `startfiring` shoot where they aim at their weapon's fire rate.
+pub(super) fn scripted_fire(world: &mut World) {
+    let now = super::super::players::now_ms(world);
+    let firing: Vec<(u64, i64)> = world
+        .resource::<RoundScript>()
+        .campaign
+        .turret_firing
+        .iter()
+        .map(|(turret, next)| (*turret, *next))
+        .collect();
+    for (object, next) in firing {
+        let turret = world
+            .resource::<RoundScript>()
+            .engine
+            .turrets
+            .get(&object)
+            .map(|t| (t.weapon, t.aim, t.fire_enabled));
+        let Some((weapon, aim, enabled)) = turret else {
+            world
+                .resource_mut::<RoundScript>()
+                .campaign
+                .turret_firing
+                .remove(&object);
+            continue;
+        };
+        if !enabled || now < next {
+            continue;
+        }
+        let interval = FrameWorld::from_world(world)
+            .combat_facts_for(weapon)
+            .map_or(100, |facts| facts.fire_time_ms.max(1));
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .turret_firing
+            .insert(object, now + i64::from(interval));
         let from = super::muzzle(world, object);
         super::fire_bullet(world, object, from, aim, weapon, None);
     }

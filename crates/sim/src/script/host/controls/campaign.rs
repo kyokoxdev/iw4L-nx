@@ -63,7 +63,12 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let start = crate::frame::FrameWorld::from_world(world)
             .player(crate::world::ClientId(client))
             .map(|ps| (ps.origin, ps.viewangles));
-        let result = link_to(world, receiver, &args[..args.len().min(2)], LinkView::Absolute)?;
+        let result = link_to(
+            world,
+            receiver,
+            &args[..args.len().min(2)],
+            LinkView::Absolute,
+        )?;
         let now = crate::script::host::players::now_ms(world);
         let blends = &mut world.resource_mut::<RoundScript>().campaign.link_blends;
         match start {
@@ -78,6 +83,34 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     });
     // `lerpviewangleclamp(time, accel, decel, right, left, top, bottom)`:
     // the linked view's limits change at once.
+    // Links onto the tag itself, not at the current offset.
+    // ponytail: snaps; retail eases the offset to the tag (angles too unless false).
+    registry.register(Method, "linktoblendtotag", |world, receiver, args| {
+        use crate::script::host::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        let parent = entity_id(world, crate::script::host::args::arg(args, 0)?)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        if runtime.player_client(id).is_some() {
+            return Err("linktoblendtotag does not take a player".into());
+        }
+        if parent == id {
+            return Err("cannot link an entity to itself".into());
+        }
+        let tag = optional(args, 1, string)?
+            .filter(|tag| !tag.is_empty() && !tag.eq_ignore_ascii_case("tag_origin"))
+            .map(Arc::<str>::from);
+        let tag_offset = tag.is_none().then_some([0.0; 3]);
+        if let Some(entity) = runtime.entities.get_mut(&id) {
+            entity.linked_to = Some(crate::script::host::entities::Link {
+                parent,
+                origin: [0.0; 3],
+                angles: [0.0; 3],
+                tag,
+                tag_offset,
+            });
+        }
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "lerpviewangleclamp", |world, receiver, args| {
         let client = player(world, receiver)?;
         let arc = |index| -> Result<f32, String> { Ok(float(args, index)?.clamp(0.0, 180.0)) };

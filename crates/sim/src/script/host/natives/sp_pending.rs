@@ -97,7 +97,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getwheelsurface" => Dirt;
         Method "hidepart_allinstances" => Undefined;
         Method "joltbody" => Undefined;
-        Method "linktoblendtotag" => Undefined;
         Function "physicsjitter" => Undefined;
         Method "playrumblelooponentity" => Undefined;
         Method "restoredefaultdroppitch" => Undefined;
@@ -131,7 +130,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "setdebugorigin" => Undefined;
         Function "setsunlight" => Undefined;
         Function "settimescale" => Undefined;
-        Function "target_set" => Undefined;
         Function "target_setjavelinonly" => Undefined;
         Function "updategamerprofile" => Undefined;
         Function "updategamerprofileall" => Undefined;
@@ -190,7 +188,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "sethalfresparticles" => Undefined;
         Function "soundsettimescalefactor" => Undefined;
         Function "target_hidefromplayer" => Undefined;
-        Function "target_isinrect" => Zero;
         Function "target_setattackmode" => Undefined;
         Function "target_setoffscreenshader" => Undefined;
         Function "target_setshader" => Undefined;

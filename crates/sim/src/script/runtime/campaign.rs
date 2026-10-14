@@ -92,6 +92,8 @@ pub(crate) struct CampaignState {
     pub(crate) turret_gunners: BTreeMap<u64, (u64, i64)>,
     /// Turrets players man (`useby`): the client and its next shot time (ms).
     pub(crate) turret_users: BTreeMap<u64, (u32, i64)>,
+    /// Turrets `startfiring` keeps firing: the next shot time (ms).
+    pub(crate) turret_firing: BTreeMap<u64, i64>,
     /// `playerlinktoblend` in progress, by client: (origin, view) at the
     /// link, level time it started and its length (ms).
     pub(crate) link_blends: BTreeMap<u32, ([f32; 3], [f32; 3], i64, i64)>,
@@ -116,6 +118,8 @@ pub(crate) struct CampaignState {
     pub(crate) node_links: Vec<Vec<u16>>,
     /// `makeentitysentient`: non-AI entities actors fight, with their team.
     pub(crate) sentients: BTreeMap<u64, Value>,
+    /// `target_set`: lock-on targets and their offsets, oldest first.
+    pub(crate) targets: Vec<(u64, [f32; 3])>,
     /// Where each player holds its aim (`actors::PlayerLos`), by client.
     pub(crate) player_los: BTreeMap<u32, super::super::host::actors::PlayerLos>,
     /// Nodes in a steady player's line of fire: the level time (ms) it lapses.
