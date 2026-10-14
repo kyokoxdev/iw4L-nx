@@ -125,17 +125,18 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
     }
     let mut wgpu = WgpuSettings::default();
     wgpu.features |= WgpuFeatures::TEXTURE_COMPRESSION_BC | WgpuFeatures::POLYGON_MODE_LINE;
-    // GL (Switch, or desktop under `IW4L_BOUND_SLOTS=1`) has no norm16 or
-    // binding arrays; the bound-slot render path (M3) replaces bindless there.
-    let bound_slots =
-        cfg!(target_os = "horizon") || std::env::var("IW4L_BOUND_SLOTS").is_ok_and(|v| v == "1");
-    if !bound_slots {
+    // Switch GL (Mesa nouveau) has no norm16 or binding arrays; the bound-slot
+    // render path (M3) replaces bindless there.
+    #[cfg(not(target_os = "horizon"))]
+    {
         wgpu.features |= WgpuFeatures::TEXTURE_FORMAT_16BIT_NORM
             | WgpuFeatures::TEXTURE_BINDING_ARRAY
             | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
             | WgpuFeatures::PARTIALLY_BOUND_BINDING_ARRAY;
-    } else {
-        // For `unclipped_depth` on the exact colour pipelines (GL depth clamp).
+    }
+    // For `unclipped_depth` on the exact colour pipelines (GL depth clamp).
+    #[cfg(target_os = "horizon")]
+    {
         wgpu.features |= WgpuFeatures::DEPTH_CLIP_CONTROL;
     }
     let plugins = DefaultPlugins
@@ -162,9 +163,9 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
                         .with_ansi(false)
                         .without_time()
                         .with_writer(|| platform_nx::BootLog)
-                        .with_filter(bevy::log::tracing_subscriber::filter::filter_fn(|meta| {
-                            meta.is_event()
-                        })),
+                        .with_filter(bevy::log::tracing_subscriber::filter::filter_fn(
+                            |meta| meta.is_event(),
+                        )),
                 ))
             },
             ..default()

@@ -2235,7 +2235,6 @@ dependencies = [
  "sim",
  "theater",
  "ui",
- "wgpu",
 ]
 
 [[package]]
