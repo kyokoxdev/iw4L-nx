@@ -59,19 +59,39 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    Level flow (`host/mission.rs`): `missionsuccess`/`changelevel` load the
    named level (empty = menu) through `CampaignLevelCalled` → session
    `request_zone`; `missionfailed` and the player's death reload the level
-   after 4 s. No death screen, retry prompt or weapon carry-over yet.
+   after 3 s of real time (retail `g_deathDelay`), resumed from the last checkpoint: `savegame` (or
+   `savegamenocommit` + `commitsave`) copies the world at the end of the tick,
+   and the restart swaps the fresh level's content into that copy (the
+   authority clock continues from its tick). Checkpoints live in the process
+   and drop on any other load. Until the restart loads, MISSION FAILED and the
+   `ui_deadquote` line (set by scripts, `@` stripped, localized) show, sound fades
+   out, the screen blurs to 32 and time slows from 1 to 0.1 over the 3 s, as retail
+   does (no retry prompt). SP `setblur` blurs every player's screen. A level change carries the
+   `game` array into the next level, as retail does; `_loadout` uses it
+   (`game["weaponstates"]`) only for dcemp → dc_whitehouse and af_caves →
+   af_chase, every other mission takes its own loadout. A menu start of
+   another level drops it.
    The bootstrap kind is still `FreeForAll` internally (campaign is
    `MatchBootstrap::campaign`).
-3. Frontend — done. The Campaign tile opens `iw4l_campaign`: `list_sp_maps`
-   without `so_*`, in story order (`console::campaign_menu`), 20 rows; a row
-   requests the level like `map <level>`. Names are stems (`AF CAVES`).
+3. Frontend — done. `iw4l_select` tints its tiles (Special Ops blue,
+   Campaign green, Multiplayer yellow) and shows the focused mode's soldier
+   art (`mw2_main_{co,sp,mp}_image`) behind them (`ui_iw4l_focus`). The
+   Campaign tile opens `iw4l_campaign`, the retail-style SP main menu: the
+   last campaign level started (`campaign.txt` beside `settings.cfg`, written
+   on start and on `missionsuccess`/`changelevel`) as its title, Resume Game,
+   New Game (first level in story order), Mission Select
+   (`iw4l_campaign_levels`: `list_sp_maps` without `so_*`, in story order
+   (`console::campaign_menu`), 20 rows, mission names), Options, Main Menu,
+   Quit; Stats and Credits are disabled.
 4. Level GSC — in progress. Campaign runs `maps/<level>::main` plus
    `codescripts/{delete,struct}` against `iw4_sp()`, started once the local
    player begins (SP scripts expect the player before `main`). Builtins not
    built yet are stubs (`natives/sp_pending.rs`, typed defaults, first call
    logged as `campaign builtin X not built yet`). Campaign weapon script names
    are bare (`m4_grunt`); level-zone world gun models join the catalog.
-   SP `playsound` notifies after a fixed 2 s; SP profile fields last one
+   SP `playsound` notifies after the alias's length (first variant: loaded PCM
+   size, streamed WAV header read from the IWDs on first use; mp3 or unknown
+   waits 2 s); SP profile fields last one
    session. Trainer runs; its faults left need actors, anim trees, vehicles.
    In-world video (`CINEMATIC_*` textures) once a mission needs it.
 5. Script anim trees — in progress. `host/script_anim.rs`: `useanimtree`,
@@ -96,13 +116,19 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    route with the bots' A\* (`bots::nav::campaign`); node objects take the keys of
    the map's `node_*` entity at their origin (`script_linkto`, ...). A route crossing a
    `Begin` node (`target` = an `End` node's `targetname`) runs `animscripts/traverse/<animscript>::main`
-   (`getnegotiationstartnode`/`endnode`), then the actor stands at the end node; no such script = plain walk. `usecovernode` claims a `Cover *` node (`claimedby`, lapses when the claimer's `node` moves) and goes to it; `findbestcovernode`/`findshufflecovernode` pick free covers in the goal area, passing over covers facing the enemy. `setgoalvolume` clamps the goal into an `info_volume` box; `isingoal` tests the goal area. Sight picks the nearest
-   visible hostile (`enemy`) by distance minus threat bias; `createthreatbiasgroup`/`setthreatbiasgroup`/`setignoremegroup`/`setthreatbias` feed it (`ignoreme`/`ignoreall`/`favoriteenemy` too); `shoot` fires the actor's weapon through the turret
+   (`getnegotiationstartnode`/`endnode`), then the actor stands at the end node; no such script = plain walk. `usecovernode` claims a `Cover *` node (`claimedby`, lapses when the claimer's `node` moves) and goes to it; `findbestcovernode`/`findshufflecovernode` pick the free cover in the goal area with the best retail score (`ai_coverScore_*` weights: nearness to the actor, sight of the enemy, the enemy inside the node type's arc, toward or away from the enemy by engagement range, priority spawnflag 0x40, −32 for a dangerous node, +4 for each other remembered hostile past `engagemindist` inside the node's arc; no player line-of-sight term). Dangerous nodes follow retail: an actor's death marks the node nearest it (within 192) and that node's links for its team, pain marks its claimed node; a mark lasts 15 s and a node is dangerous only once marked again inside it (then for 60 s). `atdangerousnode`: at the claimed node and it is dangerous. `iscovervalidagainstenemy`: the enemy is inside the claimed node's arc (prone: not within 800). `setgoalvolume` clamps the goal into an `info_volume` box; `isingoal` tests the goal area. Sight picks the
+   `enemy` by the retail threat score (seen 1000 / remembered 500, current-enemy
+   bonus, `threatbias` and group bias, nearness within 2500, −150 per other
+   attacker, 100 × how much better the target shoots at that range (AI: weapon
+   graph; player: `ai_playerNear/FarAccuracy` × 5); memory 10 s); `createthreatbiasgroup`/`setthreatbiasgroup`/`setignoremegroup`/`setthreatbias` feed it (`ignoreme`/`ignoreall`/`favoriteenemy` too; `setentitytarget` overrides it until `clearentitytarget`); `shoot` rolls the retail `finalaccuracy` (`accuracy` × target
+   `attackeraccuracy` × the weapon's AI-vs-AI/AI-vs-player accuracy graph ×,
+   against players, stance and sideways speed), misses wide on purpose, and fires the actor's weapon through the turret
    bullet path, which raises `EV_FIRE_WEAPON` (fire sound, muzzle flash on the
    attached gun's `tag_flash`) for actors, turrets and vehicles alike. Tags of
    attached models answer on the sim side (`gettagorigin`, `muzzle`). Damage
    fills the `damage*` fields. Map `script_vehicle`s are live, spawners
-   `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths. Level
+   `vehicle_dospawn()`; ground vehicles roll `info_vehicle_node` paths
+   (`resumespeed` returns to the speed the path last set). Level
    `weapon_*` and actor drops are weapon items, level `misc_turret`s turrets of
    their `weaponinfo`; ownerless level rockets count as the player's. Trainer and favela run with no
    script faults. Most levels reach no combat without input; roadkill's opening
@@ -114,12 +140,100 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `weaponisboltaction` read the weapon's fire type; `lastknownpos`/`lastknowntime`
    answer for the last hostile seen (others: where they are now);
    `canattackenemynode` traces muzzle → the enemy's node (else eye);
-   `maymovetopoint` sweeps a body-sized box at step height. Hostile bullets that
-   hit something within 64 units of an actor's eye fill `suppressionmeter`
-   (drains over ~3 s); `issuppressed` reads it, `ignoresuppression` blocks it.
+   `maymovetopoint`/`maymovefrompointtopoint` need ground within 32 units under
+   the point and every 15 units of the way there (unless told not to check the drop) and sweep a body-sized box at
+   step height; `maymovetopoint` also refuses a move (30 units past the point)
+   across a friendly line of fire. Hostile bullets passing
+   within 128 units (a player's miss into the sky counts; an actor's does not) (`ai_eventDistBullet`) of an actor's eye add
+   0.15 to `suppressionmeter` (−0.01 per 50 ms) and notify `bulletwhizby`; at a
+   Cover Left/Right node a shot from its front starts `suppression`, which ends
+   (`suppression_end`) `suppressionduration` after the last one. `issuppressed`
+   reads both; `ignoresuppression` zeroes the meter. AI events:
+   `addaieventlistener` entities get `ai_event` (type, originator, position) for
+   gunshot/silenced_shot (other teams), gunshot_teammate and death (own team),
+   explode, bulletwhizby, projectile_impact (other teams; a projectile-type
+   weapon's impact, heard along the line from its owner to the impact, within
+   45 of the listener's eye height), player footsteps (other teams: sprint steps
+   `footstep_sprint`, walk steps `footstep_walk`, run steps/jumps/landings
+   `footstep`, or `footstep_walk` crouched or in ADS), within the `ai_eventDist*` dvars (an actor with an
+   enemy: `ai_busyEventDist*` for events its enemy did not raise; it also spots
+   others only within `fovcosinebusy`) (actors do not react to unheard
+   events on their own; no projectile ping: retail maps it to `grenade danger`,
+   which only battlechatter reads, for frags). An owned missile with explosion
+   damage notifies its owner `projectile_impact` (weapon, position, explosion
+   radius) when it explodes (AC-130, remote missile); stand-in-owned rockets
+   (vehicles, ownerless `magicbullet`) notify nobody.
+   Spawn fields take retail values (`fovcosine` 0.01, `suppressionwait`, `walkdist`, …); 5 corpses are kept.
+   `setengagementmin/maxdist` set the `engage*` fields (falloff out of order is a
+   script error; the cover score's toward/away term reads them). `updateplayersightaccuracy`
+   checks four points up a player enemy (eye 10, ¾ ½ ¼ height 30 each) for sight in
+   the actor's view; its shots then hit at 0.5 + score/200 of their accuracy (1
+   against other enemies). `getanglestolikelyenemypath` faces the first node the
+   actor sees on the route from its enemy's last known position (every 500 ms).
+   `getdoorpathnode`: the next `Door`/`Door Interior` node on the route;
+   `comparenodedirtopathdir`: the route reaches that node heading its way;
+   `isindoor`: the nearest node within 192 has spawnflag 0x2000.
    `nearclaimnode[andangle]`: at the claimed node (and within 45° of its yaw).
    `getvalidcoverpeekouts`: sides of a cover node with room to step out (32 units
-   sideways, then clear ahead). Not yet: `ismovesuppressed`, `setfixednodesafevolume`/
-   `clearfixednodesafevolume` (no consumer in the retail dump), `startcoverarrival`
-   (arrival motion). Then saves.
-7. Switch: SP zones' memory budget.
+   sideways, then clear ahead). `startcoverarrival` walks the actor to the
+   arrival start, then runs `cover_arrival` on root motion; a new route notifies
+   `cover_approach` when `requestarrivalnotify` is set. `disconnectpaths` keeps
+   routes out of the entity's box until `connectpaths`; `badplace_cylinder`/
+   `badplace_brush` keep boxes out of the routes of actors on their teams
+   until they lapse or `badplace_delete` (actors already inside stay). Stances: `allowstand`
+   and friends gate players (command buttons) and actors (`isstanceallowed`).
+   `enableinvulnerability`/`enabledeathshield` gate damage. Path node objects are
+   GC roots, and take their map entity's keys (plan position, nearest height)
+   typed by `radiant/keys.txt`. Actors read a player's origin from its player
+   state (goals, facing, cover choice, `getshootatpos`).
+   A teammate's bullet as near leaves a line of fire for 2 s
+   (`ai_friendlyFireBlockDuration`, `ismovesuppressed`): a player's always (and
+   `bulletwhizby`; one ahead of a moving actor drops its route until the line
+   lapses), an AI's only within 128 units of a standing actor.
+   Not yet: `setfixednodesafevolume`/`clearfixednodesafevolume`
+   (no consumer in the retail dump). AI grenades: `checkgrenadethrow[pos]` plans
+   an arc at the enemy or a point, `isgrenadepossafe` keeps allies out of the
+   blast, `throwgrenade` explodes the grenade there after its fuse (both need and spend `grenadeammo`); its
+   world model flies there on a gravity arc (no bounce). Actors notice live grenades
+   (players' and AI ones) within `ai_eventDistGrenadePing` every 250 ms — with
+   an enemy only at `grenadeawareness` odds — set `grenade`, get `grenade danger`
+   from a hostile's, and inside the blast + 128: from 64 units run
+   `grenade_return_throw` (`pickupgrenade` takes it, `throwgrenade` throws it at
+   the enemy with the fuse it had, stretched 1 s if under 3 s), else run out of
+   the blast on a route (their goal comes back after), else `grenade_cower`. `reacquirestep(dist)` steps `dist` to a random side of the line to the enemy, to a spot inside the goal that sees it, and walks there; `flagenemyunattackable` makes any other enemy win the threat pick for 5 s. `setproneanimnodes`/`enterprone`/`exitprone`/`updateprone` blend the prone nodes in and out (the body does not pitch to the ground slope). `bulletspread` picks a point in a cone 8192 out. `setruntopos` walks the actor to a spot inside its goal and notifies `runto_arrived` within 16 units (`goal_changed` on a new spot); `findreacquiredirectpath`/`reacquiremove` walk the route toward the enemy, cut at the goal radius; `checkcoverexitposwithpath` refuses a cover exit that points against the next waypoints. Actors remember where they last saw each hostile for 10 s; remembered hostiles stay in the threat pick, `lastknownpos` answers from it, and `getenemyinfo` writes into it as if the actor just saw the target. `isknownenemyinradius`/`isknownenemyinvolume` (the color system's fixed-node safety) ask that memory. `melee` strikes 64 units from the eye toward the enemy (or the given direction) for the weapon's melee damage and returns what it hit. An actor stops when a friendly player's box 0.1 s ahead blocks its next step; `pushplayer(true)` walks on through (the player is not shoved). `getdroptofloorposition` drops an AI-sized box up to 1024 units; `isinscriptedstate` is true under `animscripted`/`animcustom`; `iswaitingonsound` while a `playsound` notify is pending. `useturret` mans a turret that aims at hostiles it acquires; a
+   turret weapon with an `aiScript` (`saw/stand`) runs
+   `animscripts/<aiScript>::main` on the gunner, which fires it
+   (`shootturret`); one without fires on its own. The gunner is not placed on
+   the turret's tag.
+7. Player: `notifyoncommand` binds console commands (campaign set in
+   `controls/campaign.rs`). Use triggers reach 72 units (retail SP `player_useRadius`). Tagged links ride the tag in campaign, so rig scenes
+   place the player; `playerlinktoblend` eases onto the tag over its blend time, `lerpviewangleclamp`
+   sets the linked view limits at once. `turret useby(player)` mans a turret
+   (aims with the view, fires on attack). `mountvehicle` drives with arcade
+   handling over the ground. `magicgrenade[manual]` and AI grenades fly
+   under the weapon's projectile bounce physics (`predict_projectile_state`, ownerless: no player is
+   credited) and explode wherever they are when the timer runs out; AI flee from the predicted resting spot. `allowfire`/`allowmelee`
+   refuse those buttons. Objectives follow retail (`objectives/campaign.rs`): text, up to eight
+   positions (`objective_additionalposition`), pointer text and entity offset per
+   objective; `objective_current` makes the listed ones current (others active).
+   Only current objectives show on the compass and as on-screen markers
+   (`objective_onscreen`, label = pointer text, "Follow" on an entity, else
+   metres). Adding, updating, completing or failing one prints the retail game
+   message; the pause menu lists the objectives (`ui_campaign_objectives`).
+   Not drawn: the edge arrow and look-at fades. Esc in a campaign level
+   (no `g_gametype`) opens `iw4l_campaign_pause`: Resume, Restart Mission (the
+   level from its start), Options, Quit to Main Menu (`disconnect`, back to
+   `iw4l_campaign` via `ui_iw4l_mode sp`). While it is open `frame::GamePaused`
+   stops virtual time (authority fixed steps and client prediction both run on
+   it) and holds match-scope sounds; menu sounds still play.
+8. Switch: SP zones' memory budget.
+9. Campaign runtime cost. Campaign is local-only, so multiplayer-only work is
+   cut while `asset_transport::campaign_zone_set()`: the listen loopback hands
+   the local client its snapshot and frame in memory (no delta encode, wire
+   serialize, parse and decode per tick; `loopback_live.rs`), and the killcam
+   `FrameArchive` is not filled (up to 32 MB of snapshots;
+   `authority_bookkeeping`). Already idle in campaign: bot think (no bots),
+   UDP hub and master bridge (online lobbies only), the clip ring (off on
+   Switch). Left running: MP HUD systems (they hide themselves only while they
+   run; gate once a profile shows a cost), player collision history (AI bullets
+   trace the player against it). Next: a span-profile run on a heavy scene.

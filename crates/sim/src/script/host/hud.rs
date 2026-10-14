@@ -369,13 +369,26 @@ fn print_text(world: &mut World, value: &Value) -> String {
     }
 }
 
-fn print(
+pub(crate) fn print(
     world: &mut World,
     recipient: Option<u32>,
     bold: bool,
     args: &[Value],
 ) -> Result<Value, String> {
-    let (template, arg) = match arg(args, 0)? {
+    let (template, arg) = print_parts(world, args)?;
+    FrameWorld::from_world(world).push_print(crate::PendingPrint {
+        recipient: recipient.map(crate::ClientId),
+        bold,
+        chat: false,
+        template,
+        arg,
+    });
+    Ok(Value::Undefined)
+}
+
+/// A print's template and its joined arguments, as `PendingPrint` carries them.
+pub(crate) fn print_parts(world: &mut World, args: &[Value]) -> Result<(String, String), String> {
+    Ok(match arg(args, 0)? {
         Value::LocalizedString(key) => (
             key.to_string(),
             args[1..]
@@ -394,15 +407,7 @@ fn print(
             }
             (text, String::new())
         }
-    };
-    FrameWorld::from_world(world).push_print(crate::PendingPrint {
-        recipient: recipient.map(crate::ClientId),
-        bold,
-        chat: false,
-        template,
-        arg,
-    });
-    Ok(Value::Undefined)
+    })
 }
 
 pub(crate) fn chat(

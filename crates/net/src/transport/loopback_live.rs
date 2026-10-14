@@ -20,6 +20,9 @@ pub struct ListenLoopback {
     pub last_backlog: usize,
 
     pub peak_backlog: usize,
+
+    /// Campaign ticks handed to the local client as they are: no delta, no wire.
+    direct: std::collections::VecDeque<ReceivedTick>,
 }
 
 impl ListenLoopback {
@@ -28,7 +31,7 @@ impl ListenLoopback {
     }
 
     pub fn pending(&self) -> usize {
-        self.transport.pending()
+        self.transport.pending() + self.direct.len()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -44,6 +47,30 @@ impl ListenLoopback {
         svc_game_notifies: Vec<crate::SvcGameNotify>,
         reliable: crate::ReliablePayload,
     ) -> Result<(), TransportError> {
+        // Campaign is local-only: its one client takes the snapshot itself
+        // instead of a delta serialized and parsed back each tick.
+        if asset_transport::campaign_zone_set() {
+            self.direct.push_back(ReceivedTick {
+                snapshot: snapshot.clone(),
+                frame: Frame {
+                    tick: snapshot.tick,
+                    state_hash: 0,
+                    acks,
+                    snapshot_delta: crate::transport::delta::SnapshotDelta::empty(snapshot.tick),
+                    snapshot_meta: Default::default(),
+                    world_objects_wire: Vec::new(),
+                    reliable,
+                    svc_sounds,
+                    svc_scores,
+                    svc_card_slots,
+                    svc_open_menus,
+                    svc_hud_splashes,
+                    svc_game_notifies,
+                },
+            });
+            self.sent = self.sent.saturating_add(1);
+            return Ok(());
+        }
         // Meta goes on the wire from `snapshot`, not a per-tick clone of it.
         let mut frame = frame_without_meta(
             &mut self.encoder,
@@ -65,6 +92,10 @@ impl ListenLoopback {
     }
 
     pub fn recv_tick(&mut self) -> Result<Option<ReceivedTick>, TransportError> {
+        if let Some(tick) = self.direct.pop_front() {
+            self.received = self.received.saturating_add(1);
+            return Ok(Some(tick));
+        }
         let Some(mut frame) = self.transport.recv()? else {
             return Ok(None);
         };
@@ -76,7 +107,7 @@ impl ListenLoopback {
     }
 
     pub fn recv_all(&mut self, out: &mut Vec<ReceivedTick>) -> Result<(), TransportError> {
-        self.last_backlog = self.transport.pending();
+        self.last_backlog = self.transport.pending() + self.direct.len();
         self.peak_backlog = self.peak_backlog.max(self.last_backlog);
         loop {
             match self.recv_tick() {

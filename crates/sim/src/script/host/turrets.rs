@@ -10,7 +10,7 @@ use crate::world::ClientId;
 use bevy_ecs::prelude::World;
 use glam::Vec3;
 
-pub(super) mod campaign;
+pub(crate) mod campaign;
 
 const TURN_RATE_DEG_PER_S: f32 = 360.0;
 const SCAN_RATE_DEG_PER_S: f32 = 30.0;
@@ -410,6 +410,8 @@ fn acquire(world: &mut World, object: u64, turret: &Turret, from: [f32; 3]) -> O
 }
 
 pub(crate) fn advance(world: &mut World) {
+    campaign::player_turrets(world);
+    campaign::gunner_turrets(world);
     let objects: Vec<u64> = world
         .resource::<RoundScript>()
         .engine

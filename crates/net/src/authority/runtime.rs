@@ -591,6 +591,7 @@ fn advance_authority_clock(
     mut server_tick: ResMut<ServerTick>,
     mut pending_step: ResMut<PendingStepResult>,
     mut trace: Option<ResMut<AuthorityPhaseTrace>>,
+    world: Option<Res<AuthorityWorld>>,
 ) {
     if let Some(t) = trace.as_deref_mut() {
         t.0.clear();
@@ -598,6 +599,13 @@ fn advance_authority_clock(
     push_phase(trace, "Advance");
     server_tick.0 = None;
     pending_step.0 = None;
+    // A restored campaign checkpoint carries its own clock; time only moves on.
+    if clock.tick == 0
+        && let Some(tick) = world.and_then(|world| world.lock().take_resume_tick())
+    {
+        clock.tick = tick.0;
+        clock.time_ms = (tick.0 as i32).wrapping_mul(crate::AUTHORITY_MS);
+    }
     clock.advance();
 }
 
@@ -1235,7 +1243,10 @@ pub fn authority_bookkeeping(
     if let Some(tick) = server_tick.0.as_mut() {
         let at = tick.snapshot.tick;
         let snapshot = std::mem::replace(&mut tick.snapshot, sim::Snapshot::unpublished(at));
-        archive.push_snapshot_owned(snapshot, &seats.viewers());
+        // Only killcams read the archive; campaign has none.
+        if !asset_transport::campaign_zone_set() {
+            archive.push_snapshot_owned(snapshot, &seats.viewers());
+        }
     }
 }
 pub fn register_listen_runtime(app: &mut App) {

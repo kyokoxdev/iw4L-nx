@@ -22,6 +22,8 @@ pub struct ObjectiveMatch {
     pub missile_vision: Option<crate::VisionChange>,
     pub night_vision: Option<crate::VisionChange>,
     pub pain_vision: Option<crate::VisionChange>,
+    /// SP objectives screen; empty outside the campaign.
+    pub list: Vec<ObjectiveListRow>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -94,6 +96,21 @@ pub struct CompassObjective {
     pub team: Team,
     pub icon: String,
     pub viewer: Option<u32>,
+    /// SP on-screen marker label (`objective_setpointertextoverride`), as a
+    /// print template; empty = distance, or "Follow" when `follows`.
+    pub label: String,
+    /// SP: the objective rides an entity (`objective_onentity`).
+    pub follows: bool,
+}
+
+/// An SP objectives-screen row: its text as a print template and arguments
+/// (see `PendingPrint`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectiveListRow {
+    pub index: u8,
+    pub state: ObjectiveState,
+    pub template: String,
+    pub arg: String,
 }
 
 impl ObjectiveMatch {

@@ -101,6 +101,9 @@ pub(crate) fn compile(
             equipment: weapons
                 .equipment_facts_of(id)
                 .unwrap_or(sim::EquipmentRuntimeFacts::default()),
+            ai_accuracy: weapons.ai_accuracy_of(id).copied().unwrap_or_default(),
+            silenced: weapons.silenced_of(id),
+            thermal_scope: weapons.thermal_scope_of(id),
         }
     });
     let ranks = if campaign {

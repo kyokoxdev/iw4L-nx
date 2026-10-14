@@ -1117,6 +1117,32 @@ fn register_player(registry: &mut NativeRegistry) {
         let start = (facts.start_ammo + facts.clip_size).max(1);
         Ok(Value::Float(held as f32 / start as f32))
     });
+    // Stock over max ammo; clip over clip size for clip-only weapons; 1 for a
+    // weapon not held.
+    // ponytail: no clipOnly flag in combat facts, so max ammo ≤ 0 counts as
+    // clip-only.
+    registry.register(Method, "getfractionmaxammo", |world, receiver, args| {
+        let id = ClientId(player_id(world, receiver)?);
+        let name = string(args, 0)?;
+        let facts = weapon_facts(world, &name)?;
+        let frame = FrameWorld::from_world(world);
+        let Ok(weapon) = script_player::weapon_named(&frame, &name) else {
+            return Ok(Value::Float(1.0));
+        };
+        if !script_player::has_weapon(&frame, id, weapon) {
+            return Ok(Value::Float(1.0));
+        }
+        let (held, max) = if facts.max_ammo > 0 {
+            (script_player::ammo_stock(&frame, id, weapon), facts.max_ammo)
+        } else {
+            (script_player::ammo_clip(&frame, id, weapon), facts.clip_size)
+        };
+        Ok(Value::Float(if max > 0 {
+            held.max(0) as f32 / max as f32
+        } else {
+            1.0
+        }))
+    });
     registry.register(Method, "getmovespeedscale", |world, receiver, _| {
         let id = ClientId(player_id(world, receiver)?);
         Ok(Value::Float(

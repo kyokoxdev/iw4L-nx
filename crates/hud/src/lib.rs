@@ -14,6 +14,7 @@ mod font_overlay;
 mod gaps;
 mod gpu_list;
 mod hud_elems;
+mod objective_markers;
 mod hudelem;
 mod images;
 mod iris;

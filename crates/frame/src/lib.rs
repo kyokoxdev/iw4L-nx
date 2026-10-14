@@ -34,7 +34,7 @@ pub use session::{
     AdmissionKey, AppScreen, BotNavigationReady, CacWeaponOffer, ClassSelectHandoff,
     DisplayEncodedCamera, FrontendPending, Headless, HostClassLoadouts, HostClassSlot, HudDraw,
     HudInputView, InstalledMatch, IntroPlaying, LaunchIdentity, LaunchReport, LifeEndCause,
-    LifeEnded, LifeStartReason, LifeStarted, LoadCinematicPlaying, LocalLoadKey, LocalSpawnArmed,
+    GamePaused, LifeEnded, LifeStartReason, LifeStarted, LoadCinematicPlaying, LocalLoadKey, LocalSpawnArmed,
     MapLoadApproved, MapLoadFailed, MatchKey, ReadinessState, RuntimeRole, TeardownReason,
     UiCamera, UiDraw, UiOverlayInput, UiPointerFree, ViewSubject, WorldGeneration, WorldProducts,
     WorldReadiness, WorldStamp,

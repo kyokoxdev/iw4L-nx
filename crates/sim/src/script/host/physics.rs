@@ -6,6 +6,8 @@ use crate::world::ClientId;
 use bevy_ecs::prelude::World;
 
 const USE_RADIUS: f32 = 128.0;
+/// SP `player_useRadius`.
+const CAMPAIGN_USE_RADIUS: f32 = 72.0;
 const HINTS: [&str; 5] = [
     "HINT_NONE",
     "HINT_NOICON",
@@ -167,6 +169,11 @@ pub(crate) fn select_usables(world: &mut World) {
         .keys()
         .copied()
         .collect();
+    let radius = if world.resource::<RoundScript>().campaign.active {
+        CAMPAIGN_USE_RADIUS
+    } else {
+        USE_RADIUS
+    };
     let mut selected = std::collections::BTreeMap::new();
     let mut frame = FrameWorld::from_world(world);
     for client in clients {
@@ -193,7 +200,7 @@ pub(crate) fn select_usables(world: &mut World) {
                 let d2: f32 = (0..3).map(|i| (at[i] - eye[i]).powi(2)).sum();
                 (d2, *object, usable)
             })
-            .filter(|(d2, _, _)| *d2 <= USE_RADIUS * USE_RADIUS)
+            .filter(|(d2, _, _)| *d2 <= radius * radius)
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let Some((_, object, usable)) = nearest else {
             continue;

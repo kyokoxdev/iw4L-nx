@@ -7,10 +7,12 @@ use std::sync::Arc;
 use super::LaunchIdentity;
 
 /// A campaign level runs its own `maps/<level>::main` with the aitypes its
-/// spawners use; SP has no code callbacks.
+/// spawners use and the animscripts of turrets actors man; SP has no code
+/// callbacks.
 pub(super) fn startup(
     sources: &assets::ScriptSources,
-    level_data: &sim::script::LevelData,
+    level_data: &mut sim::script::LevelData,
+    weapons: &asset_game::WeaponRegistry,
     zone: &str,
 ) -> sim::script::Iw4Startup {
     let level = format!("maps/{zone}");
@@ -31,6 +33,16 @@ pub(super) fn startup(
         .filter(|module| sources.read(module).is_ok())
         .collect();
     roots.extend(aitypes);
+    for (weapon, script) in weapons.ai_scripts() {
+        let script = script.replace('\\', "/").to_ascii_lowercase();
+        let module = format!("animscripts/{script}");
+        if sources.read(&module).is_ok() {
+            level_data.turret_ai_scripts.insert(weapon, script);
+            if !roots.contains(&module) {
+                roots.push(module);
+            }
+        }
+    }
     sim::script::Iw4Startup {
         entries: vec![format!("{level}::main")],
         roots,

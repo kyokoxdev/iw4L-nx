@@ -1781,6 +1781,7 @@ impl RoundScript {
                 .flat_map(|(_, _, args)| args.iter().cloned()),
         );
         self.t5.roots(pending);
+        self.campaign.roots(pending);
     }
 }
 

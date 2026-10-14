@@ -155,6 +155,8 @@ pub(crate) struct RenderShared {
     state: UnsafeCell<RenderState>,
     pub frame: AtomicU64,
     pub match_epoch: AtomicU64,
+    /// The game is paused: match sounds hold where they are.
+    pub match_paused: AtomicBool,
     pub master: AtomicU32,
     pub busy_blocks: AtomicU64,
     pub device_active: AtomicBool,
@@ -196,6 +198,7 @@ impl RenderShared {
             }),
             frame: AtomicU64::new(0),
             match_epoch: AtomicU64::new(0),
+            match_paused: AtomicBool::new(false),
             master: AtomicU32::new(1.0f32.to_bits()),
             busy_blocks: AtomicU64::new(0),
             device_active: AtomicBool::new(false),
@@ -233,6 +236,7 @@ impl RenderShared {
         let frame = self.frame.load(Ordering::Relaxed);
         let epoch = self.match_epoch.load(Ordering::Acquire);
         let cancelled = self.cancelled.load(Ordering::Acquire);
+        let match_paused = self.match_paused.load(Ordering::Acquire);
         let hold_one_shots = device == Some(false) && self.device_required.load(Ordering::Relaxed);
         for (index, slot) in self.slots.iter().enumerate() {
             if slot.phase.load(Ordering::Acquire) != PUBLISHED {
@@ -248,6 +252,7 @@ impl RenderShared {
                     epoch,
                     cancelled,
                     hold_one_shots,
+                    match_paused,
                     state.buses.bus(assignment.media.bus),
                 );
                 match device {
@@ -349,6 +354,7 @@ fn render_assignment(
     epoch: u64,
     cancelled: bool,
     hold_one_shots: bool,
+    match_paused: bool,
     output: &mut [[f32; 2]; QUANTUM],
 ) -> (bool, usize) {
     let instance = &assignment.instance;
@@ -363,7 +369,9 @@ fn render_assignment(
         instance.set_status(InstanceStatus::Finished);
         return (true, 0);
     }
-    if hold_one_shots && !assignment.looping {
+    if hold_one_shots && !assignment.looping
+        || match_paused && instance.scope == AudioScope::Match
+    {
         return (false, 0);
     }
     let rate = f32::from_bits(instance.rate.load(Ordering::Relaxed));

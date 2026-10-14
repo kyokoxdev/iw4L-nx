@@ -256,6 +256,7 @@ pub fn apply_prepared_match(
             script_dvars,
             account_defaults,
             script_sound_aliases,
+            script_sound_length,
             objective_weapons,
             kind,
             gametype,
@@ -399,6 +400,7 @@ pub fn apply_prepared_match(
             .set_map(Arc::clone(&prepared_map.content))
             .map_err(|error| InstallRefusal::new(format!("Invalid map content: {error}")))?;
         content.set_script_sound_aliases(script_sound_aliases);
+        content.set_script_sound_length(script_sound_length);
         let mut sim = sim::SimWorld::new();
         if role.runs_authority()
             && let Some(previous) = previous.as_ref()
@@ -661,6 +663,11 @@ pub fn apply_prepared_match(
             "match preparation: {:.1}ms on the main thread (scene handoff, sim boot, catalogs)",
             install_started.elapsed().as_secs_f32() * 1000.0
         );
+        if let Some(resumed) = sim.restore_campaign_checkpoint(&zone) {
+            sim = resumed;
+            sim.world_objects_mut()
+                .set_map_round_epoch(load_key.match_key.match_epoch);
+        }
         if role.runs_client() {
             let client = local.as_ref().map_or(sim::ClientId(0), |local| local.0);
             let mut state = net::ClientPrediction::new(client);
@@ -789,6 +796,7 @@ struct MatchInstallPlan {
     script_dvars: Vec<(String, String)>,
     account_defaults: Option<sim::PlayerDataDefaults>,
     script_sound_aliases: Option<std::collections::BTreeMap<String, Option<bool>>>,
+    script_sound_length: Option<asset_audio::ScriptSoundLength>,
     objective_weapons: Vec<(String, u32)>,
     kind: gamemode_iw4::GameModeKind,
     gametype: &'static str,
@@ -1125,6 +1133,7 @@ fn preflight_match_install(
     let mut script_level = sim::script::LevelData {
         absent_effects,
         videos: Default::default(),
+        turret_ai_scripts: Default::default(),
         player_data_defaults: account_defaults.clone(),
         schemas: sources.0.schemas().clone(),
         entities: sim::script::parse_entity_string(sources.0.entities().unwrap_or("")),
@@ -1147,7 +1156,7 @@ fn preflight_match_install(
     };
     // A campaign level runs its own `maps/<level>::main`; SP has no code callbacks.
     let (startup, catalog_builtins) = if asset_transport::campaign_zone_set() {
-        let startup = campaign::startup(&sources.0, &script_level, zone);
+        let startup = campaign::startup(&sources.0, &mut script_level, weapons.registry(), zone);
         (startup, sim::script::Catalog::iw4_sp())
     } else {
         let startup = sim::script::Iw4Startup::new(&sources, gametype, zone);
@@ -1271,6 +1280,7 @@ fn preflight_match_install(
     Ok(MatchInstallPlan {
         ui_images: prepared.ui_images,
         script_sound_aliases: prepared.script_sound_aliases,
+        script_sound_length: prepared.script_sound_length,
         scripts,
         script_level,
         script_entries,

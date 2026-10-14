@@ -139,6 +139,9 @@ pub struct SimState {
 
     old_buttons: Vec<(ClientId, u32)>,
 
+    /// This tick's player footsteps, jumps and landings as SP AI event names.
+    player_noise: Vec<(ClientId, &'static str)>,
+
     old_cmd_angles: Vec<(ClientId, [i32; 3])>,
 
     player_bodies: PlayerBodyRuntime,
@@ -251,6 +254,7 @@ impl Default for SimState {
             entity_collision_capabilities: Vec::new(),
             model_library: Arc::default(),
             old_buttons: Vec::new(),
+            player_noise: Vec::new(),
             old_cmd_angles: Vec::new(),
             player_bodies: PlayerBodyRuntime::default(),
             g_hudelems: Vec::new(),
@@ -429,6 +433,11 @@ impl SimState {
             .script_sound_aliases()
             .as_ref()
             .map(|names| names.contains_key(&name.to_ascii_lowercase()))
+    }
+
+    /// Play length of a sound alias in ms, when its media is known.
+    pub fn script_sound_length_ms(&self, name: &str) -> Option<u32> {
+        self.content.script_sound_length(name)
     }
 
     pub fn script_sound_is_looping(&self, name: &str) -> Result<bool, &'static str> {
@@ -947,6 +956,26 @@ impl SimState {
             .weapon_combat
             .get(weapon as usize)
             .copied()
+    }
+
+    pub fn weapon_ai_accuracy(&self, weapon: u32) -> Option<&weapon_iw4::AiAccuracyGraphs> {
+        self.content.weapons().ai_accuracy.get(weapon as usize)
+    }
+
+    pub fn weapon_silenced(&self, weapon: u32) -> bool {
+        self.content
+            .weapons()
+            .weapon_silenced
+            .get(weapon as usize)
+            .is_some_and(|silenced| *silenced)
+    }
+
+    pub fn weapon_thermal_scope(&self, weapon: u32) -> bool {
+        self.content
+            .weapons()
+            .weapon_thermal_scope
+            .get(weapon as usize)
+            .is_some_and(|thermal| *thermal)
     }
 
     pub fn content_digest(&self) -> u64 {
@@ -2723,6 +2752,9 @@ impl SimState {
     pub fn pellet_fx(&self) -> &[crate::PelletFxRecord] {
         self.events.pellet_fx()
     }
+    pub(crate) fn last_pellet_fx(&self) -> &[crate::PelletFxRecord] {
+        self.events.last_pellet_fx()
+    }
     pub(crate) fn push_pellet_fx(&mut self, record: crate::PelletFxRecord) {
         self.events.push_pellet_fx(record);
     }
@@ -2740,7 +2772,7 @@ impl SimState {
         Arc::clone(&self.content)
     }
 
-    fn replace_content(&mut self, content: Arc<SimContent>) {
+    pub(crate) fn replace_content(&mut self, content: Arc<SimContent>) {
         if !Arc::ptr_eq(&self.content, &content) {
             self.player_bodies.reset();
             self.collision_runtime.reset();
@@ -2768,6 +2800,14 @@ impl SimState {
 
     pub(crate) fn old_buttons_mut(&mut self) -> &mut Vec<(ClientId, u32)> {
         &mut self.old_buttons
+    }
+
+    pub(crate) fn player_noise(&self) -> &[(ClientId, &'static str)] {
+        &self.player_noise
+    }
+
+    pub(crate) fn set_player_noise(&mut self, noise: Vec<(ClientId, &'static str)>) {
+        self.player_noise = noise;
     }
 
     pub(crate) fn old_cmd_angles_mut(&mut self) -> &mut Vec<(ClientId, [i32; 3])> {

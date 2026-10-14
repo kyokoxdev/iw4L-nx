@@ -63,6 +63,8 @@ pub(crate) struct Heli {
     /// SP ground vehicle on an `info_vehicle_node` path: rolls through nodes,
     /// takes their `speed`, keeps level.
     ground: bool,
+    /// The speed its path last set, for `resumespeed`.
+    path_speed: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +142,7 @@ impl Default for Heli {
             gunner: None,
             next_fire_ms: 0,
             ground: false,
+            path_speed: 0.0,
         }
     }
 }
@@ -236,12 +239,17 @@ fn fire_weapon(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Va
         super::turrets::fire_bullet(world, id, from, dir, weapon, owner.map(crate::ClientId));
         return Ok(Value::Undefined);
     }
-    let owner = owner
-        .filter(|client| world.resource::<RoundScript>().players.contains_key(client))
+    let player =
+        owner.filter(|client| world.resource::<RoundScript>().players.contains_key(client));
+    let owner = player
         .or_else(|| super::weapons::campaign::owner(world).map(|client| client.0))
         .ok_or("vehicle owner is not connected")?;
     let end = std::array::from_fn(|i| from[i] + dir[i] * 1000.0);
-    super::weapons::launch(world, crate::ClientId(owner), weapon, from, end)
+    let missile = super::weapons::launch(world, crate::ClientId(owner), weapon, from, end)?;
+    if player.is_none() {
+        super::weapons::campaign::mark_ownerless(world, &missile);
+    }
+    Ok(missile)
 }
 
 fn vec_field(runtime: &mut RoundScript, object: u64, name: &str) -> [f32; 3] {
@@ -1213,6 +1221,7 @@ pub(crate) fn advance(world: &mut World) {
             raise(world, Value::Object(id), note, Vec::new());
         }
     }
+    campaign::drive(world);
 }
 
 pub(crate) fn compass_rows(world: &mut World) -> Vec<crate::CompassVehicle> {

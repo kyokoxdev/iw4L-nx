@@ -2,7 +2,7 @@
 //! ground paths over `info_vehicle_node`s. Fork-only; kept out of the parent
 //! file so upstream merges touch it as little as possible.
 
-use super::super::args::string;
+use super::super::args::{float, string};
 use super::super::entities::EntityKind;
 use super::{Heli, MPH, heli, spawn_vehicle, vec_field};
 use crate::script::Namespace::Method;
@@ -28,6 +28,7 @@ pub(super) fn node_speed(runtime: &mut RoundScript, node: u64) -> Option<f32> {
 // speed itself as accel); node `lookahead` and spline paths are not read.
 pub(super) fn take_speed(vehicle: &mut Heli, mph: f32) {
     vehicle.max_speed = mph.max(0.0) * MPH;
+    vehicle.path_speed = vehicle.max_speed;
     if vehicle.accel <= 0.0 {
         vehicle.accel = vehicle.max_speed.max(MPH);
     }
@@ -122,8 +123,186 @@ pub(super) fn spawn_from_spawner(world: &mut World, spawner: u64) -> Result<Valu
     Ok(vehicle)
 }
 
+/// Top speed a player drives at (mph) and how fast it is reached (mph/s).
+const DRIVE_MPH: f32 = 60.0;
+const DRIVE_ACCEL_MPH: f32 = 25.0;
+/// Coasting loss (mph/s) and steering rate at full lock (degrees/s).
+const DRIVE_DRAG_MPH: f32 = 10.0;
+const DRIVE_TURN: f32 = 90.0;
+/// Ground is searched this far above and below the vehicle.
+const GROUND_PROBE: f32 = 128.0;
+
+/// Player-driven vehicles (`mountvehicle`): the stick sets throttle and
+/// steering; the vehicle follows the ground and stops at walls.
+// ponytail: arcade handling, one tune for snowmobile and boat; read the
+// vehicle's physics def if a level needs real handling.
+pub(super) fn drive(world: &mut World) {
+    let drivers: Vec<(u32, u64)> = world
+        .resource::<RoundScript>()
+        .campaign
+        .drivers
+        .iter()
+        .map(|(client, vehicle)| (*client, *vehicle))
+        .collect();
+    for (client, id) in drivers {
+        let (forward, right) = {
+            let input = &world.resource::<crate::step::StepRequest>().input;
+            input
+                .cmds
+                .iter()
+                .rev()
+                .find(|command| command.client.0 == client)
+                .map_or((0.0, 0.0), |command| {
+                    (
+                        f32::from(command.command.forwardmove) / 127.0,
+                        f32::from(command.command.rightmove) / 127.0,
+                    )
+                })
+        };
+        let dt = crate::MATCH_TICK_MS as f32 / 1000.0;
+        let (origin, mut angles, speed) = {
+            let mut runtime = world.resource_mut::<RoundScript>();
+            if !runtime.entities.contains_key(&id) || !runtime.vehicles.contains_key(&id) {
+                runtime.campaign.drivers.remove(&client);
+                continue;
+            }
+            let origin = vec_field(&mut runtime, id, "origin");
+            let angles = vec_field(&mut runtime, id, "angles");
+            let vehicle = runtime.vehicles.get_mut(&id).unwrap();
+            vehicle.goal = None;
+            vehicle.path_running = false;
+            let mut speed = vehicle.speed + forward * DRIVE_ACCEL_MPH * MPH * dt;
+            if forward.abs() < 0.1 {
+                speed -= speed.signum() * (DRIVE_DRAG_MPH * MPH * dt).min(speed.abs());
+            }
+            let speed = speed.clamp(-DRIVE_MPH * MPH * 0.25, DRIVE_MPH * MPH);
+            (origin, angles, speed)
+        };
+        angles[1] = math_iw4::angle_normalize_360(
+            angles[1]
+                - right * DRIVE_TURN * dt * (speed / (DRIVE_MPH * MPH)).clamp(-1.0, 1.0).signum(),
+        );
+        let yaw = angles[1].to_radians();
+        let step = [yaw.cos() * speed * dt, yaw.sin() * speed * dt];
+        let lift = [origin[0], origin[1], origin[2] + 32.0];
+        let to = [lift[0] + step[0], lift[1] + step[1], lift[2]];
+        let settled = super::super::presence::settled(world);
+        let blocked = settled.trace_world(
+            lift,
+            to,
+            [-24.0, -24.0, 0.0],
+            [24.0, 24.0, 32.0],
+            crate::bullet_collision::MASK_PLAYER_SOLID,
+        );
+        let (next, speed) = if blocked.fraction < 1.0 {
+            (origin, 0.0)
+        } else {
+            let top = [to[0], to[1], origin[2] + GROUND_PROBE];
+            let floor = settled.trace_world(
+                top,
+                [to[0], to[1], origin[2] - GROUND_PROBE],
+                [0.0; 3],
+                [0.0; 3],
+                crate::bullet_collision::MASK_PLAYER_SOLID,
+            );
+            let z = if floor.fraction < 1.0 {
+                top[2] + (origin[2] - GROUND_PROBE - top[2]) * floor.fraction
+            } else {
+                origin[2]
+            };
+            ([to[0], to[1], z], speed)
+        };
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "origin", Value::Vector(next));
+        runtime.set_object_field(id, "angles", Value::Vector(angles));
+        if let Some(vehicle) = runtime.vehicles.get_mut(&id) {
+            vehicle.speed = speed;
+        }
+    }
+}
+
+/// The driver's stick on `vehicle`: (throttle, steering), each in -1..1.
+fn driver_stick(world: &mut World, receiver: &Value) -> Result<(f32, f32), String> {
+    let id = super::super::natives::engine::entity_id(world, receiver)?;
+    let Some(client) = world
+        .resource::<RoundScript>()
+        .campaign
+        .drivers
+        .iter()
+        .find(|(_, vehicle)| **vehicle == id)
+        .map(|(client, _)| *client)
+    else {
+        return Ok((0.0, 0.0));
+    };
+    let input = &world.resource::<crate::step::StepRequest>().input;
+    Ok(input
+        .cmds
+        .iter()
+        .rev()
+        .find(|command| command.client.0 == client)
+        .map_or((0.0, 0.0), |command| {
+            (
+                f32::from(command.command.forwardmove) / 127.0,
+                -f32::from(command.command.rightmove) / 127.0,
+            )
+        }))
+}
+
+/// `mountvehicle(vehicle)`: the player drives it from its `tag_player`.
+fn mount(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
+    let client = super::super::natives::player::player(world, receiver)?;
+    let vehicle = super::super::args::arg(args, 0)?.clone();
+    heli(world, &vehicle)?;
+    let id = super::super::natives::engine::entity_id(world, &vehicle)?;
+    super::super::natives::player::link_to(
+        world,
+        receiver,
+        &[vehicle.clone(), Value::string("tag_player")],
+        super::super::players::LinkView::Delta,
+    )?;
+    let mut runtime = world.resource_mut::<RoundScript>();
+    runtime.campaign.drivers.insert(client, id);
+    if let Some(slot) = runtime.players.get(&client).map(|slot| slot.object) {
+        runtime.set_object_field(slot, "vehicle", vehicle);
+    }
+    Ok(Value::Undefined)
+}
+
+fn dismount(world: &mut World, receiver: &Value) -> Result<Value, String> {
+    let client = super::super::natives::player::player(world, receiver)?;
+    super::super::players::unlink_player(world, client);
+    let mut runtime = world.resource_mut::<RoundScript>();
+    if let Some(id) = runtime.campaign.drivers.remove(&client)
+        && let Some(vehicle) = runtime.vehicles.get_mut(&id)
+    {
+        vehicle.speed = 0.0;
+    }
+    if let Some(slot) = runtime.players.get(&client).map(|slot| slot.object) {
+        runtime.set_object_field(slot, "vehicle", Value::Undefined);
+    }
+    Ok(Value::Undefined)
+}
+
 /// Names the T5 refusals also claim; registered after them.
 pub(crate) fn register_sp(registry: &mut NativeRegistry) {
+    registry.register(Method, "mountvehicle", mount);
+    registry.register(Method, "vehicle_getthrottle", |world, receiver, _| {
+        Ok(Value::Float(driver_stick(world, receiver)?.0.max(0.0)))
+    });
+    registry.register(Method, "vehicle_getsteering", |world, receiver, _| {
+        Ok(Value::Float(driver_stick(world, receiver)?.1))
+    });
+    registry.register(Method, "dismountvehicle", |world, receiver, _| {
+        dismount(world, receiver)
+    });
+    // `resumespeed(accel)`: back to the speed its path set, after a `vehicle_setspeed`.
+    registry.register(Method, "resumespeed", |world, receiver, args| {
+        let accel = float(args, 0)?.max(1.0) * MPH;
+        let vehicle = heli(world, receiver)?;
+        vehicle.max_speed = vehicle.path_speed;
+        vehicle.accel = accel;
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "setvehicleteam", |world, receiver, args| {
         heli(world, receiver)?;
         let team = string(args, 0)?;

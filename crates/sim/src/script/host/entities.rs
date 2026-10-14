@@ -28,6 +28,8 @@ pub struct LevelData {
     /// `video/<name>.bik` lengths in ms by lowercase stem, for the cinematic
     /// builtins.
     pub videos: BTreeMap<String, i32>,
+    /// Weapon script name → the animscript an actor manning it runs (`saw/stand`).
+    pub turret_ai_scripts: BTreeMap<String, String>,
     /// Script animation trees and their clips (campaign levels).
     pub anim: super::script_anim::AnimLibrary,
     /// SP AI path nodes (`getnode*`, actor routes).
@@ -291,8 +293,13 @@ impl RoundScript {
                 return Err("exceeded maximum number of script hud elements".into());
             }
             -1
-        } else if classname.starts_with("info_vehicle_node") {
-            // A vehicle node is its own script class, not a gentity.
+        } else if classname.starts_with("info_vehicle_node")
+            || (self.campaign.active
+                && (classname.starts_with("trigger_") || classname == "info_volume"))
+        {
+            // A vehicle node is its own script class, not a gentity. Campaign
+            // triggers and volumes stay on the server: SP levels place more
+            // entities than there are numbers.
             -1
         } else {
             if self
@@ -304,9 +311,18 @@ impl RoundScript {
             {
                 return Err("no free entities".into());
             }
-            let number = self.next_entity_number;
-            self.next_entity_number += 1;
-            number
+            if self.next_entity_number < i32::from(trace_iw4::ENTITYNUM_WORLD) {
+                let number = self.next_entity_number;
+                self.next_entity_number += 1;
+                number
+            } else {
+                // Numbers run out in long levels: take the lowest one freed.
+                let used: std::collections::HashSet<i32> =
+                    self.entities.values().map(|e| e.number).collect();
+                (playerstate_iw4::GENTITY_SPAWN_BASE..i32::from(trace_iw4::ENTITYNUM_WORLD))
+                    .find(|n| !used.contains(n))
+                    .ok_or("no free entities")?
+            }
         };
         let id = self.new_object()?;
         self.entities.insert(

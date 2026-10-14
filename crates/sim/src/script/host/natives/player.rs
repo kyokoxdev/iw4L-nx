@@ -928,7 +928,10 @@ pub(crate) fn link_to(
         .player(ClientId(client))
         .map_or(base, |ps| ps.origin);
     let delta: [f32; 3] = std::array::from_fn(|i| origin[i] - base[i]);
-    let local = if view == LinkView::WeaponDelta {
+    // Campaign scenes link the player to a rig before animating it into place:
+    // the player rides the tag itself.
+    let snap = tag.is_some() && FrameWorld::from_world(world).bootstrap_ref().campaign;
+    let local = if view == LinkView::WeaponDelta || snap {
         [0.0; 3]
     } else {
         std::array::from_fn(|i| (0..3).map(|j| delta[j] * axis[i][j]).sum())
@@ -1149,6 +1152,14 @@ fn register_body(registry: &mut NativeRegistry) {
         let angles = vector(args, 0)?;
         FrameWorld::from_world(world).set_viewangles(id, angles);
         Ok(Value::Undefined)
+    });
+    registry.register(Method, "getplayerviewheight", |world, receiver, _| {
+        let id = client_of(world, receiver)?;
+        Ok(Value::Float(
+            FrameWorld::from_world(world)
+                .player(id)
+                .map_or(0.0, |ps| ps.view_height_current),
+        ))
     });
     registry.register(Method, "getstance", |world, receiver, _| {
         let id = client_of(world, receiver)?;

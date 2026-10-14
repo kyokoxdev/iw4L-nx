@@ -611,6 +611,8 @@ struct CatalogWeapon {
 
     pub rocket_model: Option<String>,
 
+    pub ai_script: Option<String>,
+
     pub knife_xmodel: Option<String>,
 
     pub sz_xanims: [Option<String>; WEAPON_ANIM_SLOTS],
@@ -622,6 +624,8 @@ struct CatalogWeapon {
     pub hide_tags: Vec<String>,
 
     pub sounds: WeaponSoundAliases,
+
+    pub ai_accuracy: weapon_iw4::AiAccuracyGraphs,
 
     pub combat_fx: WeaponCombatFx,
 
@@ -1388,6 +1392,8 @@ struct WeaponRow {
 
     rocket_model: Option<String>,
 
+    ai_script: Option<String>,
+
     knife_xmodel: Option<String>,
 
     sz_xanims: [Option<String>; WEAPON_ANIM_SLOTS],
@@ -1425,6 +1431,7 @@ struct WeaponRow {
     iw5_notetrack_overrides: Vec<Iw5NotetrackOverride>,
 
     sounds: WeaponSoundAliases,
+    ai_accuracy: weapon_iw4::AiAccuracyGraphs,
 
     combat_fx: WeaponCombatFx,
 
@@ -1508,6 +1515,7 @@ impl Default for WeaponRow {
             projectile_model: None,
             projectile_model_edge: AssetEdge::Absent,
             rocket_model: None,
+            ai_script: None,
             knife_xmodel: None,
             sz_xanims: [const { None }; WEAPON_ANIM_SLOTS],
             sz_xanim_edges: [AssetEdge::Absent; WEAPON_ANIM_SLOTS],
@@ -1532,6 +1540,7 @@ impl Default for WeaponRow {
             iw5_fx_overrides: Vec::new(),
             iw5_notetrack_overrides: Vec::new(),
             sounds: WeaponSoundAliases::default(),
+            ai_accuracy: Default::default(),
             combat_fx: WeaponCombatFx::empty(crate::AssetNamespace::Iw4),
             reticle: WeaponReticleAssets::default(),
             hud_material_edges: WeaponHudMaterialEdges::default(),

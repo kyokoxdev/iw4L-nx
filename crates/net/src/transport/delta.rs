@@ -20,6 +20,14 @@ pub struct SnapshotDelta {
 }
 
 impl SnapshotDelta {
+    /// No payload: a campaign loopback tick carries its snapshot whole.
+    pub(crate) fn empty(tick: Tick) -> Self {
+        Self {
+            tick,
+            bytes: Vec::new(),
+        }
+    }
+
     pub fn encode(&self, out: &mut WireWriter) {
         out.put_u32(self.tick.0);
         out.put_u32(self.bytes.len() as u32);

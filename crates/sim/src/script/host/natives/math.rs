@@ -54,6 +54,17 @@ pub(crate) fn random_unit(world: &mut World) -> f32 {
     (random(world) >> 8) as f32 / (1u32 << 24) as f32
 }
 
+/// `bulletspread`'s point for two unit draws (radius, angle).
+fn spread_end(start: [f32; 3], end: [f32; 3], spread: f32, (r, t): (f32, f32)) -> [f32; 3] {
+    const RANGE: f32 = 8192.0;
+    let angles = math_iw4::vect_to_angles(std::array::from_fn(|k| end[k] - start[k]));
+    let (forward, right, up) = math_iw4::angle_vectors(angles);
+    let radius = r.sqrt() * spread.to_radians().tan() * RANGE;
+    let theta = t * std::f32::consts::TAU;
+    let (x, y) = (radius * theta.cos(), radius * theta.sin());
+    std::array::from_fn(|k| start[k] + forward[k] * RANGE + right[k] * x + up[k] * y)
+}
+
 pub(crate) fn register(registry: &mut NativeRegistry) {
     use Namespace::Function;
     macro_rules! unary {
@@ -234,6 +245,13 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let max = float(args, 0)?;
         Ok(Value::Float(random_unit(world) * max))
     });
+    // `bulletspread(start, end, degrees)`: a point 8192 out from `start`,
+    // anywhere in a `degrees` cone around the way to `end`.
+    registry.register(Function, "bulletspread", |world, _, args| {
+        let (start, end, spread) = (vector(args, 0)?, vector(args, 1)?, float(args, 2)?);
+        let draws = (random_unit(world), random_unit(world));
+        Ok(Value::Vector(spread_end(start, end, spread, draws)))
+    });
     registry.register(Function, "randomfloatrange", |world, _, args| {
         let (min, max) = (float(args, 0)?, float(args, 1)?);
         Ok(Value::Float(min + random_unit(world) * (max - min)))
@@ -342,4 +360,17 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Function, "getbuildversion", |_, _, _| {
         Ok(Value::string(env!("CARGO_PKG_VERSION")))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bullet_spread_stays_in_cone() {
+        let (start, end) = ([10.0, 20.0, 30.0], [110.0, 20.0, 30.0]);
+        assert_eq!(super::spread_end(start, end, 4.0, (0.0, 0.3)), [8202.0, 20.0, 30.0]);
+        let at = super::spread_end(start, end, 4.0, (1.0, 0.3));
+        let off = (at[1] - 20.0).hypot(at[2] - 30.0);
+        assert!((off - 8192.0 * 4f32.to_radians().tan()).abs() < 0.5, "{at:?}");
+        assert!((at[0] - 8202.0).abs() < 0.01);
+    }
 }

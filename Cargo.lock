@@ -933,7 +933,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror 2.0.19",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -966,7 +966,7 @@ dependencies = [
  "encase",
  "serde",
  "thiserror 2.0.19",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1243,7 +1243,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.19",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1359,7 +1359,7 @@ dependencies = [
  "half",
  "smallvec",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1414,7 +1414,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "variadics_please",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1471,7 +1471,7 @@ dependencies = [
  "hexasphere",
  "thiserror 2.0.19",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1521,7 +1521,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.19",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1628,7 +1628,7 @@ dependencies = [
  "thiserror 2.0.19",
  "uuid",
  "variadics_please",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1700,8 +1700,8 @@ dependencies = [
  "wasm-bindgen",
  "weak-table",
  "web-sys",
- "wgpu 30.0.1",
- "wgpu-types 30.0.1",
+ "wgpu",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1731,7 +1731,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "wesl",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1772,7 +1772,7 @@ dependencies = [
  "bevy_window",
  "radsort",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1884,7 +1884,7 @@ dependencies = [
  "sys-locale",
  "thiserror 2.0.19",
  "tracing",
- "wgpu-types 30.0.1",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -4681,6 +4681,7 @@ name = "net"
 version = "0.1.0"
 dependencies = [
  "anim_iw4",
+ "asset_transport",
  "bevy",
  "diag",
  "ed25519-dalek",
@@ -5421,7 +5422,7 @@ dependencies = [
  "bevy",
  "getrandom 0.4.3",
  "raw-window-handle",
- "wgpu 29.0.4",
+ "wgpu",
 ]
 
 [[package]]
@@ -7874,30 +7875,6 @@ dependencies = [
 
 [[package]]
 name = "wgpu"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76e8840e1ba2881d4cbb18d2147627a56af426ff064c0401eb0c8410c6325d07"
-dependencies = [
- "arrayvec",
- "bitflags 2.13.1",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.16.1",
- "log",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "smallvec",
- "static_assertions",
- "wgpu-core 29.0.4",
- "wgpu-hal 29.0.4",
- "wgpu-types 29.0.4",
-]
-
-[[package]]
-name = "wgpu"
 version = "30.0.1"
 source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
 dependencies = [
@@ -7914,41 +7891,9 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "static_assertions",
- "wgpu-core 30.0.1",
- "wgpu-hal 30.0.1",
- "wgpu-types 30.0.1",
-]
-
-[[package]]
-name = "wgpu-core"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f519832254e56965a9940c4af57dcb75f702b6f6fa4a0b172f685395843a4d7"
-dependencies = [
- "arrayvec",
- "bit-set 0.9.1",
- "bit-vec",
- "bitflags 2.13.1",
- "bytemuck",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.16.1",
- "indexmap",
- "log",
- "naga 29.0.4",
- "once_cell",
- "parking_lot",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "rustc-hash 1.1.0",
- "smallvec",
- "thiserror 2.0.19",
- "wgpu-core-deps-emscripten",
- "wgpu-core-deps-windows-linux-android 29.0.4",
- "wgpu-hal 29.0.4",
- "wgpu-naga-bridge 29.0.4",
- "wgpu-types 29.0.4",
+ "wgpu-core",
+ "wgpu-hal",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7977,10 +7922,11 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
  "wgpu-core-deps-apple",
- "wgpu-core-deps-windows-linux-android 30.0.1",
- "wgpu-hal 30.0.1",
- "wgpu-naga-bridge 30.0.1",
- "wgpu-types 30.0.1",
+ "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-windows-linux-android",
+ "wgpu-hal",
+ "wgpu-naga-bridge",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7988,25 +7934,15 @@ name = "wgpu-core-deps-apple"
 version = "30.0.1"
 source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
 dependencies = [
- "wgpu-hal 30.0.1",
+ "wgpu-hal",
 ]
 
 [[package]]
 name = "wgpu-core-deps-emscripten"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"
+version = "30.0.1"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
 dependencies = [
- "wgpu-hal 29.0.4",
-]
-
-[[package]]
-name = "wgpu-core-deps-windows-linux-android"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e592c1bbef6ad047647ae6e666ebd8cee7a32bb4544d9700ec96cbf73230257"
-dependencies = [
- "wgpu-hal 29.0.4",
+ "wgpu-hal",
 ]
 
 [[package]]
@@ -8014,44 +7950,7 @@ name = "wgpu-core-deps-windows-linux-android"
 version = "30.0.1"
 source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
 dependencies = [
- "wgpu-hal 30.0.1",
-]
-
-[[package]]
-name = "wgpu-hal"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97ace1c17727311c22a46e4e3faf56ea6de81af99dcc839bdfb54857b94d448d"
-dependencies = [
- "arrayvec",
- "bitflags 2.13.1",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "glow",
- "glutin_wgl_sys",
- "hashbrown 0.16.1",
- "js-sys",
- "khronos-egl",
- "libloading",
- "log",
- "naga 29.0.4",
- "ndk-sys",
- "objc2 0.6.4",
- "parking_lot",
- "portable-atomic",
- "portable-atomic-util",
- "profiling",
- "raw-window-handle",
- "renderdoc-sys",
- "thiserror 2.0.19",
- "wasm-bindgen",
- "wayland-sys",
- "web-sys",
- "wgpu-naga-bridge 29.0.4",
- "wgpu-types 29.0.4",
- "windows",
- "windows-result",
+ "wgpu-hal",
 ]
 
 [[package]]
@@ -8068,13 +7967,18 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "cfg_aliases",
+ "glow",
+ "glutin_wgl_sys",
  "gpu-allocator",
  "hashbrown 0.17.1",
+ "js-sys",
+ "khronos-egl",
  "libc",
  "libloading",
  "log",
  "naga 30.0.1",
  "naga-types",
+ "ndk-sys",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -8094,20 +7998,14 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "thiserror 2.0.19",
- "wgpu-naga-bridge 30.0.1",
- "wgpu-types 30.0.1",
+ "wasm-bindgen",
+ "wayland-sys",
+ "web-sys",
+ "wgpu-naga-bridge",
+ "wgpu-types",
  "windows",
  "windows-core",
-]
-
-[[package]]
-name = "wgpu-naga-bridge"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95226013f547544b223281cd16a4fb549aa9dcb562adbda0faae4c73ffbbc161"
-dependencies = [
- "naga 29.0.4",
- "wgpu-types 29.0.4",
+ "windows-result",
 ]
 
 [[package]]
@@ -8116,21 +8014,7 @@ version = "30.0.1"
 source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
 dependencies = [
  "naga 30.0.1",
- "wgpu-types 30.0.1",
-]
-
-[[package]]
-name = "wgpu-types"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84bf84cd9ca8ca45e2b223a3868f1adf9bfc0c66aeac212e76ee7e40fdadf8f5"
-dependencies = [
- "bitflags 2.13.1",
- "bytemuck",
- "js-sys",
- "log",
- "raw-window-handle",
- "web-sys",
+ "wgpu-types",
 ]
 
 [[package]]

@@ -1,0 +1,258 @@
+//! SP AI events: weapon fire, explosions and near
+//! misses are heard within a per-type distance (the `ai_eventDist*` dvars,
+//! which stealth scripts retune). An entity that `addaieventlistener`s a type
+//! gets `ai_event` (type, originator, position) for it. Fork-only; hooks in
+//! `actors.rs`.
+
+use bevy_ecs::prelude::World;
+use std::sync::Arc;
+
+use super::super::args::string;
+use super::super::entities::EntityKind;
+use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
+
+/// Script name, distance dvar and its default, then the same while busy: an
+/// actor with an enemy hears events its enemy did not raise only this far.
+const KINDS: [(&str, (&str, f32), (&str, f32)); 11] = [
+    ("footstep", ("ai_eventdistfootstep", 256.0), ("ai_busyeventdistfootstep", 256.0)),
+    ("footstep_walk", ("ai_eventdistfootstepwalk", 128.0), ("ai_busyeventdistfootstepwalk", 128.0)),
+    ("footstep_sprint", ("ai_eventdistfootstepsprint", 400.0), ("ai_busyeventdistfootstepsprint", 256.0)),
+    ("death", ("ai_eventdistdeath", 1024.0), ("ai_busyeventdistdeath", 256.0)),
+    ("explode", ("ai_eventdistexplosion", 1024.0), ("ai_busyeventdistexplosion", 1024.0)),
+    ("grenade danger", ("ai_eventdistgrenadeping", 512.0), ("ai_busyeventdistgrenadeping", 256.0)),
+    ("gunshot", ("ai_eventdistgunshot", 2048.0), ("ai_busyeventdistgunshot", 400.0)),
+    ("gunshot_teammate", ("ai_eventdistgunshotteam", 2048.0), ("ai_busyeventdistgunshotteam", 256.0)),
+    ("silenced_shot", ("ai_eventdistsilencedshot", 128.0), ("ai_busyeventdistsilencedshot", 128.0)),
+    ("bulletwhizby", ("ai_eventdistbullet", 128.0), ("ai_busyeventdistbullet", 128.0)),
+    ("projectile_impact", ("ai_eventdistprojimpact", 256.0), ("ai_busyeventdistprojimpact", 256.0)),
+];
+
+/// Listening entities kept at most.
+const MAX_LISTENERS: usize = 34;
+
+/// Which teams hear an event.
+#[derive(Clone, Copy)]
+pub(super) enum Hearers<'a> {
+    All,
+    /// Teams other than this one (and entities with no team).
+    Others(&'a Value),
+    /// Only this team (and entities with no team).
+    Team(&'a Value),
+}
+
+pub(super) fn register(registry: &mut NativeRegistry) {
+    use Namespace::Method;
+    registry.register(Method, "addaieventlistener", |world, receiver, args| {
+        let id = super::super::natives::engine::entity_id(world, receiver)?;
+        let kind = string(args, 0)?;
+        if !KINDS.iter().any(|(name, _, _)| *name == kind) {
+            return Err(format!("Unable to find AI event for [{kind}]"));
+        }
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let runtime = &mut *runtime;
+        let listeners = &mut runtime.campaign.ai_listeners;
+        // A listener drops with its entity.
+        listeners.retain(|id, _| runtime.entities.contains_key(id));
+        if !listeners.contains_key(&id) && listeners.len() >= MAX_LISTENERS {
+            return Err(format!("Max listeners exceeded; entity id: {id}"));
+        }
+        listeners.entry(id).or_default().insert(Arc::from(kind));
+        Ok(Value::Undefined)
+    });
+}
+
+/// Hearing distance of `kind` (busy: [`KINDS`]): its dvar if a script set
+/// it, else the default.
+pub(super) fn reach(world: &World, kind: &str, busy: bool) -> f32 {
+    let Some((_, idle, busy_reach)) = KINDS.iter().find(|(name, _, _)| *name == kind) else {
+        return 0.0;
+    };
+    let (dvar, default) = if busy { busy_reach } else { idle };
+    world
+        .resource::<crate::script::MatchScript>()
+        .dvars
+        .get(*dvar)
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(*default)
+}
+
+/// `kind` happened at `at`: listeners in reach on a hearing team, other than
+/// the originator, get `ai_event`.
+pub(super) fn broadcast(
+    world: &mut World,
+    kind: &str,
+    originator: Option<u64>,
+    at: [f32; 3],
+    hearers: Hearers,
+) {
+    deliver(world, kind, originator, at, hearers, |origin, reach| {
+        super::distance(origin, at) <= reach
+    });
+}
+
+/// Vertical reach of a line event around a listener's eye.
+const LINE_HALF_HEIGHT: f32 = 45.0;
+const LINE_EYE_HEIGHT: f32 = 36.0;
+
+/// A projectile from `owner` hit `at` (`projectile_impact`, other teams):
+/// heard along the line from the owner to the impact, like other line
+/// events: listeners not behind the owner whose nearest point on the line is
+/// in reach across and within `LINE_HALF_HEIGHT` of their eye.
+pub(crate) fn projectile_impact(world: &mut World, owner: u64, at: [f32; 3]) {
+    if world
+        .resource::<RoundScript>()
+        .campaign
+        .ai_listeners
+        .is_empty()
+    {
+        return;
+    }
+    let Value::Vector(from) = super::super::players::entity_field(world, owner, "origin") else {
+        return;
+    };
+    let team = world
+        .resource_mut::<RoundScript>()
+        .object_field(owner, "team");
+    let line = glam::Vec3::from_array(at) - glam::Vec3::from_array(from);
+    deliver(
+        world,
+        "projectile_impact",
+        Some(owner),
+        at,
+        Hearers::Others(&team),
+        |origin, reach| {
+            let along = line.dot(glam::Vec3::from_array(origin) - glam::Vec3::from_array(from));
+            if along < 0.0 {
+                return false;
+            }
+            let near = if along < line.length_squared() {
+                glam::Vec3::from_array(from) + line * (along / line.length_squared())
+            } else {
+                glam::Vec3::from_array(at)
+            };
+            let across = glam::Vec2::new(origin[0] - near.x, origin[1] - near.y).length();
+            across <= reach && (origin[2] + LINE_EYE_HEIGHT - near.z).abs() < LINE_HALF_HEIGHT
+        },
+    );
+}
+
+fn deliver(
+    world: &mut World,
+    kind: &str,
+    originator: Option<u64>,
+    at: [f32; 3],
+    hearers: Hearers,
+    near: impl Fn([f32; 3], f32) -> bool,
+) {
+    let (idle, busy) = (reach(world, kind, false), reach(world, kind, true));
+    let listeners: Vec<u64> = world
+        .resource::<RoundScript>()
+        .campaign
+        .ai_listeners
+        .iter()
+        .filter(|(id, kinds)| Some(**id) != originator && kinds.contains(kind))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in listeners {
+        let (team, enemy) = {
+            let mut runtime = world.resource_mut::<RoundScript>();
+            let enemy = match runtime.object_field(id, "enemy") {
+                Value::Object(enemy)
+                    if runtime
+                        .entities
+                        .get(&id)
+                        .is_some_and(|entity| entity.kind == EntityKind::Actor) =>
+                {
+                    Some(enemy)
+                }
+                _ => None,
+            };
+            (runtime.object_field(id, "team"), enemy)
+        };
+        let reach = if enemy.is_some_and(|enemy| Some(enemy) != originator) {
+            busy
+        } else {
+            idle
+        };
+        let hears = matches!(team, Value::Undefined)
+            || match hearers {
+                Hearers::All => true,
+                Hearers::Others(from) => team != *from,
+                Hearers::Team(from) => team == *from,
+            };
+        let origin = super::super::players::entity_field(world, id, "origin");
+        let Value::Vector(origin) = origin else {
+            continue;
+        };
+        if hears && near(origin, reach) {
+            let args = vec![
+                Value::string(kind),
+                originator.map_or(Value::Undefined, Value::Object),
+                Value::Vector(at),
+            ];
+            crate::script::runtime::raise(world, Value::Object(id), "ai_event", args);
+        }
+    }
+}
+
+/// Last tick's weapon fire (`gunshot`, `silenced_shot` to the other teams),
+/// explosions (`explode`, every team) and player footsteps (`footstep*` to
+/// the other teams, from the player's origin).
+pub(super) fn raise_tick_events(world: &mut World) {
+    if world
+        .resource::<RoundScript>()
+        .campaign
+        .ai_listeners
+        .is_empty()
+    {
+        return;
+    }
+    let tick = world.resource::<crate::step::StepRequest>().tick.0;
+    let frame = crate::frame::FrameWorld::from_world(world);
+    let events: Vec<(&'static str, i32, [f32; 3])> = frame
+        .entity_events()
+        .iter()
+        .filter(|record| record.tick.0 + 1 == tick)
+        .filter_map(|record| {
+            let payload = &record.payload;
+            match entity_iw4::entity_event_action(record.event).ok()? {
+                entity_iw4::EntityEventAction::WeaponFire => Some((
+                    if frame.weapon_silenced(payload.weapon) {
+                        "silenced_shot"
+                    } else {
+                        "gunshot"
+                    },
+                    payload.number,
+                    payload.origin,
+                )),
+                entity_iw4::EntityEventAction::Explosion => {
+                    Some(("explode", payload.attacker_entity_num, payload.origin))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    let noise: Vec<(&'static str, i32, [f32; 3])> = frame
+        .player_noise()
+        .iter()
+        .map(|(client, kind)| (*kind, client.0 as i32, [0.0; 3]))
+        .collect();
+    for (kind, number, at) in events.into_iter().chain(noise) {
+        let originator = super::shooter(world, number);
+        if kind == "explode" {
+            broadcast(world, kind, originator, at, Hearers::All);
+            continue;
+        }
+        let team = originator.map_or(Value::Undefined, |id| {
+            world.resource_mut::<RoundScript>().object_field(id, "team")
+        });
+        let at = match originator {
+            Some(id) => match super::super::players::entity_field(world, id, "origin") {
+                Value::Vector(origin) => origin,
+                _ => at,
+            },
+            None => at,
+        };
+        broadcast(world, kind, originator, at, Hearers::Others(&team));
+    }
+}

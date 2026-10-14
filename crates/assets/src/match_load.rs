@@ -176,6 +176,8 @@ fn start_match_load(
                         );
                         prepared.sound_gaps = bank.gaps.len();
                         prepared.script_sound_aliases = Some(bank.catalog.script_alias_looping());
+                        prepared.script_sound_length =
+                            Some(bank.catalog.script_alias_length(games));
                         Ok(bank.catalog)
                     }
                     _ => Err("no launch identity or map path to compose the sound bank".into()),

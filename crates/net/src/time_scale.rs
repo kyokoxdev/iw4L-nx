@@ -20,7 +20,15 @@ pub(crate) fn apply_time_scale(
     fixed: Res<Time<Fixed>>,
     mut time: ResMut<Time<Virtual>>,
     mut authority_plan: Local<Option<sim::ScriptSlowMotion>>,
+    paused: Option<Res<frame::GamePaused>>,
 ) {
+    // The campaign pause menu stops game time: the authority's fixed steps and
+    // the client's prediction both run on virtual time.
+    match (paused.is_some(), time.is_paused()) {
+        (true, false) => time.pause(),
+        (false, true) => time.unpause(),
+        _ => {}
+    }
     let TimeScaleInputs {
         authority,
         authority_clock,

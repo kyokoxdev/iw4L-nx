@@ -71,6 +71,9 @@ impl Default for NativeRegistry {
         super::vehicles::campaign::register_sp(&mut registry);
         super::weapons::campaign::register_sp(&mut registry);
         super::mission::register(&mut registry);
+        super::controls::campaign::register(&mut registry);
+        super::entity_damage::campaign::register(&mut registry);
+        super::turrets::campaign::register(&mut registry);
         registry
     }
 }

@@ -626,6 +626,24 @@ fn set_anim(
     })
 }
 
+/// `setanim(anim, weight, blend, rate)` from native code.
+pub(crate) fn set_weight(
+    world: &mut World,
+    receiver: &Value,
+    anim: &Value,
+    weight: f32,
+    blend: f32,
+    rate: f32,
+) -> Result<(), String> {
+    let args = [
+        anim.clone(),
+        Value::Float(weight),
+        Value::Float(blend),
+        Value::Float(rate),
+    ];
+    set_anim(world, receiver, &args, false, SetMode::default(), false).map(drop)
+}
+
 /// `animscripted` / `startscriptedanim`: knob the clip in under `root`,
 /// restart it and follow its root motion from `origin`/`angles`.
 pub(crate) fn start_scripted(
@@ -807,6 +825,13 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             .is_some_and(|anim| Arc::ptr_eq(&anim.tree, &loaded))
         {
             entity.anim = Some(Box::new(EntityAnim::new(tree, loaded)));
+        }
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "stopuseanimtree", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        if let Some(entity) = world.resource_mut::<RoundScript>().entities.get_mut(&id) {
+            entity.anim = None;
         }
         Ok(Value::Undefined)
     });

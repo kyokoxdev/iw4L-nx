@@ -940,6 +940,10 @@ pub struct WeaponIdleCapture {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WeaponGeometry {
     pub name: Option<Ptr>,
+    /// AI accuracy graph knots (`vec2` x = distance / 4000, y = accuracy),
+    /// against AI and against players: (array, knot count).
+    pub ai_vs_ai_knots: Option<(Ptr, usize)>,
+    pub ai_vs_player_knots: Option<(Ptr, usize)>,
     pub alternate_weapon_name: Option<Ptr>,
     pub alternate_raise_time_ms: i32,
     pub alternate_drop_time_ms: i32,
@@ -962,6 +966,9 @@ pub struct WeaponGeometry {
     pub projectile_model_name: Option<Ptr>,
 
     pub rocket_model_name: Option<Ptr>,
+
+    /// The animscript an actor manning this turret runs (`saw/stand`, ...).
+    pub ai_script_name: Option<Ptr>,
 
     pub sz_xanims: Option<Ptr>,
 

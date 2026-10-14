@@ -9,8 +9,13 @@ use super::entities::EntityKind;
 use super::natives::engine::entity_id;
 use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
+mod awareness;
 mod campaign;
-pub(crate) use campaign::ThreatBias;
+mod events;
+pub(crate) use events::projectile_impact;
+mod grenades;
+mod prone;
+pub(crate) use campaign::{BadPlace, ThreatBias};
 
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
@@ -20,10 +25,14 @@ pub(crate) const VEHICLE_SPAWNER: i32 = 2;
 /// Routes over the level's path nodes, built by the bot brain.
 pub trait ActorNav: Send + Sync {
     /// Waypoints from `from` to `to`, `to` last; `None` when no route joins them.
-    fn route(&self, from: [f32; 3], to: [f32; 3]) -> Option<Vec<[f32; 3]>>;
+    /// Links crossing a `blocked` box (`disconnectpaths`) are not walked.
+    fn route(&self, from: [f32; 3], to: [f32; 3], blocked: &[Bounds]) -> Option<Vec<[f32; 3]>>;
     /// The traverse (negotiation begin, end) node indices whose begin node is at `at`.
     fn traversal_at(&self, at: [f32; 3]) -> Option<(usize, usize)>;
 }
+
+/// World-space (mins, maxs).
+pub type Bounds = ([f32; 3], [f32; 3]);
 
 #[derive(Clone)]
 pub(crate) struct NavHandle(pub Arc<dyn ActorNav>);
@@ -49,6 +58,8 @@ pub(crate) struct ActorGoal {
     routed_to: Option<[f32; 3]>,
     /// `goal` or `bad_path` was sent for `routed_to`.
     settled: bool,
+    /// `reacquirestep`: walks its route though already inside the goal.
+    stepping: bool,
 }
 
 /// A state the engine holds the actor in until it ends, instead of choosing
@@ -65,6 +76,8 @@ enum Hold {
     },
     Pain,
     Death,
+    /// `startcoverarrival`: the `cover_arrival` animscript, until it returns.
+    Arrival,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -91,16 +104,58 @@ pub(crate) struct ActorBrain {
     orient: Orient,
     /// Level time the enemy was last seen.
     enemy_seen_ms: i64,
+    /// Level time of the last suppressor's shot while suppression lasts.
+    suppressed: Option<i64>,
     /// The hostile seen last: who, its origin then, level time.
     last_seen: Option<(u64, [f32; 3], i64)>,
     /// Negotiation (start, end) nodes while the actor crosses a traverse.
     traverse: Option<(u64, u64)>,
+    /// `startcoverarrival`: where the arrival animation starts, facing which yaw.
+    arrival: Option<([f32; 3], f32)>,
+    /// Stances refused by `allowedstances`/`allowstand`/... (`stance_bit`).
+    denied: u8,
+    /// Where the last `checkgrenadethrow[pos]` aimed: `throwgrenade` uses it.
+    grenade_target: Option<[f32; 3]>,
+    /// `setentitytarget`: the entity it fights in place of what it sees.
+    entity_target: Option<u64>,
+    /// Friendly shots that block movement across them: (level time, from, to)
+    /// on the ground plane, live `FRIENDLY_BLOCK_MS` (`ismovesuppressed`).
+    fire_lines: Vec<(i64, [f32; 2], [f32; 2])>,
+    /// Level time a friendly shot ahead dropped its route: it routes again
+    /// `FRIENDLY_BLOCK_MS` later.
+    move_blocked: Option<i64>,
+    /// Running from its `grenade`: where to, and the goal to hand back.
+    grenade_flight: Option<([f32; 3], Option<ActorGoal>)>,
+    /// A grenade picked up to throw back: weapon and fuse left (ms).
+    held_grenade: Option<(u32, i64)>,
+    /// `updateplayersightaccuracy`: the share of its accuracy its sight of a
+    /// player enemy allows; none = 1.
+    sight_accuracy: Option<f32>,
+    /// `getanglestolikelyenemypath`: level time to work it out again, and the node.
+    likely_enemy: Option<(i64, Option<[f32; 3]>)>,
+    /// `setproneanimnodes`: legs-down, aim and legs-up nodes.
+    prone_nodes: Option<[Value; 3]>,
+    /// Between `enterprone` and `exitprone`.
+    prone: bool,
+    /// `flagenemyunattackable`: enemies it gives up on until a level time.
+    unattackable: Vec<(u64, i64)>,
+    /// `setruntopos`: where it runs to before `runto_arrived`.
+    run_to: Option<[f32; 3]>,
+    /// `findreacquiredirectpath`: the route toward its enemy `reacquiremove` walks.
+    reacquire_path: Option<Vec<[f32; 3]>>,
+    /// Hostiles it has seen, with the level time last seen and their origin
+    /// then; known for `ENEMY_MEMORY_MS`.
+    known: Vec<(u64, i64, [f32; 3])>,
+    /// `pushplayer(true)`: walks on through a friendly player in its way.
+    push_player: bool,
 }
 
 /// Movement without an animation tree (an aitype with no animscripts).
 const RUN_SPEED: f32 = 170.0;
 // ponytail: one turn rate for every orient mode; per-anim turn rates if turns look wrong.
 const TURN_RATE: f32 = 360.0;
+/// How far short of its start point an arrival may begin (walk steps overshoot).
+const ARRIVAL_ERROR: f32 = 8.0;
 /// `nearnode`: how close counts as at the node.
 const NEAR_NODE: f32 = 32.0;
 /// A goal entity that strays this far from the routed spot gets a new route.
@@ -127,16 +182,24 @@ pub(crate) fn spawn_path_nodes(
     world: &mut World,
     nodes: &[asset_core::PathNode],
     entities: &[Vec<(String, String)>],
+    keys: &std::collections::BTreeMap<String, super::entities::KeyType>,
 ) -> Result<(), String> {
-    let at = |origin: [f32; 3]| origin.map(|v| v.round() as i32);
-    let mut extra = std::collections::HashMap::new();
+    // Nodes sit on the floor while their entity keeps its placed height:
+    // match on the plan position, then the nearest height.
+    let at = |origin: [f32; 3]| [origin[0].round() as i32, origin[1].round() as i32];
+    let mut extra: std::collections::HashMap<[i32; 2], Vec<(f32, &Vec<(String, String)>)>> =
+        std::collections::HashMap::new();
     for pairs in entities {
         let field = |name: &str| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name));
         let Some((_, origin)) = field("origin") else {
             continue;
         };
         if field("classname").is_some_and(|(_, c)| c.starts_with("node_")) {
-            extra.insert(at(super::entities::vector(origin)), pairs);
+            let origin = super::entities::vector(origin);
+            extra
+                .entry(at(origin))
+                .or_default()
+                .push((origin[2], pairs));
         }
     }
     let mut runtime = world.resource_mut::<RoundScript>();
@@ -150,21 +213,40 @@ pub(crate) fn spawn_path_nodes(
         for (key, value) in &node.keys {
             runtime.set_object_field(id, key, Value::string(value));
         }
-        for (key, value) in extra
-            .get(&at(node.origin))
-            .into_iter()
-            .flat_map(|p| p.iter())
-        {
+        let placed = extra.get(&at(node.origin)).and_then(|found| {
+            found
+                .iter()
+                .min_by(|a, b| {
+                    (a.0 - node.origin[2])
+                        .abs()
+                        .total_cmp(&(b.0 - node.origin[2]).abs())
+                })
+                .map(|(_, pairs)| *pairs)
+        });
+        for (key, value) in placed.into_iter().flat_map(|p| p.iter()) {
             let key = key.to_ascii_lowercase();
             if !matches!(
                 key.as_str(),
                 "classname" | "origin" | "angles" | "angle" | "spawnflags"
             ) && runtime.object_field(id, &key) == Value::Undefined
             {
-                runtime.set_object_field(id, &key, Value::string(value));
+                use super::entities::KeyType;
+                use super::natives::iw4::{atof, atoi};
+                let value = match keys.get(&key) {
+                    Some(KeyType::Int) => Value::Int(atoi(value)),
+                    Some(KeyType::Float) => Value::Float(atof(value) as f32),
+                    Some(KeyType::Vector) => Value::Vector(super::entities::vector(value)),
+                    Some(KeyType::String) | None => Value::string(value),
+                };
+                runtime.set_object_field(id, &key, value);
             }
         }
         runtime.campaign.nodes.push(id);
+        runtime.campaign.node_origins.push(node.origin);
+        runtime
+            .campaign
+            .node_links
+            .push(node.links.iter().map(|(k, _)| *k).collect());
     }
     Ok(())
 }
@@ -193,6 +275,10 @@ fn set_goal(
     let mut runtime = world.resource_mut::<RoundScript>();
     runtime.set_object_field(id, "goalpos", Value::Vector(at));
     runtime.set_object_field(id, "node", node.map_or(Value::Undefined, Value::Object));
+    if let Some(brain) = runtime.campaign.actor_brains.get_mut(&id) {
+        brain.arrival = None;
+        brain.run_to = None;
+    }
     runtime.campaign.actor_goals.insert(
         id,
         ActorGoal {
@@ -200,6 +286,7 @@ fn set_goal(
             route: Vec::new(),
             routed_to: None,
             settled: false,
+            stepping: false,
         },
     );
     Ok(Value::Undefined)
@@ -241,19 +328,24 @@ fn yaw_to(from: [f32; 3], to: [f32; 3]) -> f32 {
 
 /// Once per tick, before threads run: picks each actor's animscript, then moves it.
 pub(crate) fn advance(world: &mut World) {
+    events::raise_tick_events(world);
     suppress(world);
+    grenades::advance(world);
     look(world);
     run_scripts(world);
     move_actors(world);
+    awareness::run_to_arrivals(world);
 }
 
 /// Each actor looks around every `SIGHT_PERIOD` ticks (staggered by id).
 const SIGHT_PERIOD: u64 = 4;
-/// An enemy out of sight stays the enemy this long.
-const ENEMY_MEMORY_MS: i64 = 5_000;
+/// An enemy out of sight stays known this long.
+const ENEMY_MEMORY_MS: i64 = 10_000;
 const DEFAULT_SIGHT_DIST: f32 = 8192.0;
-// ponytail: one forward half-angle (90 degrees) unless `fovcosine` is set.
-const DEFAULT_FOV_COS: f32 = 0.0;
+/// Spawn `fovcosine`: just under a 180 degree field of view.
+const DEFAULT_FOV_COS: f32 = 0.01;
+/// Spawn `fovcosinebusy`: about 110 degrees while it has an enemy.
+const DEFAULT_FOV_COS_BUSY: f32 = 0.574;
 /// Nearest hostiles traced per look.
 const SIGHT_TRACES: usize = 3;
 
@@ -305,8 +397,9 @@ fn combatants(world: &mut World) -> Vec<(u64, Value)> {
     found
 }
 
-/// Picks each actor's `enemy`: the nearest hostile it can see, kept while seen
-/// or remembered; notifies `enemy` when it changes.
+/// Picks each actor's `enemy`: the hostile it sees (or still remembers) with
+/// the highest threat score ([`threat_score`]); notifies `enemy` when
+/// it changes.
 fn look(world: &mut World) {
     let tick = u64::from(world.resource::<crate::step::StepRequest>().tick.0);
     let now = super::players::now_ms(world);
@@ -326,14 +419,19 @@ fn look(world: &mut World) {
             let mut runtime = world.resource_mut::<RoundScript>();
             let sight_sq = number(runtime.object_field(id, "maxsightdistsqrd"))
                 .unwrap_or(DEFAULT_SIGHT_DIST * DEFAULT_SIGHT_DIST);
-            let fov = number(runtime.object_field(id, "fovcosine")).unwrap_or(DEFAULT_FOV_COS);
-            let angles = match runtime.object_field(id, "angles") {
-                Value::Vector(angles) => angles,
-                _ => [0.0; 3],
-            };
             let current = match runtime.object_field(id, "enemy") {
                 Value::Object(enemy) => Some(enemy),
                 _ => None,
+            };
+            // An actor busy with an enemy spots others in `fovcosinebusy`.
+            let fov = if current.is_some() {
+                number(runtime.object_field(id, "fovcosinebusy")).unwrap_or(DEFAULT_FOV_COS_BUSY)
+            } else {
+                number(runtime.object_field(id, "fovcosine")).unwrap_or(DEFAULT_FOV_COS)
+            };
+            let angles = match runtime.object_field(id, "angles") {
+                Value::Vector(angles) => angles,
+                _ => [0.0; 3],
             };
             let favorite = match runtime.object_field(id, "favoriteenemy") {
                 Value::Object(enemy) => Some(enemy),
@@ -355,7 +453,15 @@ fn look(world: &mut World) {
             continue;
         };
         let forward = [angles[1].to_radians().cos(), angles[1].to_radians().sin()];
-        let mut candidates: Vec<(f32, u64, [f32; 3])> = Vec::new();
+        // Hostiles it still remembers (seen, or told of by `getenemyinfo`): when.
+        let memory = brain(world, id).known;
+        let known = |e: u64| {
+            memory
+                .iter()
+                .find(|k| k.0 == e && now - k.1 < ENEMY_MEMORY_MS)
+                .map(|k| k.1)
+        };
+        let mut candidates: Vec<(f32, u64, [f32; 3], i32)> = Vec::new();
         if !ignore_all {
             for (other, other_team) in &all {
                 if *other == id || !hostile(&team, other_team) {
@@ -372,26 +478,85 @@ fn look(world: &mut World) {
                 let dist_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
                 let planar = d[0].hypot(d[1]).max(f32::EPSILON);
                 let in_view = (d[0] * forward[0] + d[1] * forward[1]) / planar >= fov;
-                if dist_sq <= sight_sq && (in_view || current == Some(*other)) {
-                    let score = dist_sq.sqrt() - threat.bias(&group, &target);
-                    candidates.push((score, *other, at));
+                let followed = current == Some(*other) || known(*other).is_some();
+                if dist_sq <= sight_sq && (in_view || followed) {
+                    let bias = threat.bias(&group, &target) as i32;
+                    candidates.push((dist_sq.sqrt(), *other, at, bias));
                 }
             }
         }
-        candidates.sort_by(|a, b| {
-            (Some(a.1) != favorite)
-                .cmp(&(Some(b.1) != favorite))
-                .then(a.0.total_cmp(&b.0))
-        });
-        let seen = candidates
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // ponytail: traces only the nearest few (and the current enemy); keep
+        // per-pair sight caches if sight costs show.
+        let visible: Vec<(f32, u64, [f32; 3], i32)> = candidates
             .iter()
-            .take(SIGHT_TRACES)
-            .find(|(_, _, at)| clear_sight(world, from, *at))
-            .map(|(_, other, at)| (*other, *at));
+            .enumerate()
+            .filter(|(k, c)| *k < SIGHT_TRACES || current == Some(c.1))
+            .map(|(_, c)| *c)
+            .filter(|c| clear_sight(world, from, c.2))
+            .collect();
+        let remembered = brain(world, id).enemy_seen_ms;
+        let mut scored = Vec::new();
+        for c in &visible {
+            scored.push((
+                threat_score(world, id, c, true, current, remembered, now),
+                *c,
+                true,
+            ));
+        }
+        for c in &candidates {
+            if visible.iter().any(|v| v.1 == c.1) {
+                continue;
+            }
+            let seen = match known(c.1) {
+                Some(at) if current == Some(c.1) => Some(at.max(remembered)),
+                Some(at) => Some(at),
+                None if current == Some(c.1) => Some(remembered),
+                None => None,
+            };
+            if let Some(seen) = seen.filter(|seen| now - seen < ENEMY_MEMORY_MS) {
+                scored.push((
+                    threat_score(world, id, c, false, current, seen, now),
+                    *c,
+                    false,
+                ));
+            }
+        }
+        let seen = scored
+            .into_iter()
+            .max_by(|a, b| {
+                (Some(a.1.1) == favorite)
+                    .cmp(&(Some(b.1.1) == favorite))
+                    .then(a.0.cmp(&b.0))
+            })
+            .map(|(_, c, visible)| (c.1, c.2, visible));
         let mut brain = brain(world, id);
+        brain.known.retain(|&(e, seen, _)| {
+            now - seen < ENEMY_MEMORY_MS && !visible.iter().any(|c| c.1 == e)
+        });
+        brain.known.extend(
+            visible
+                .iter()
+                .map(|c| (c.1, now, [c.2[0], c.2[1], c.2[2] - EYE_HEIGHT])),
+        );
+        if let Some(target) = brain.entity_target {
+            if world.resource::<RoundScript>().live(&target) {
+                store(world, id, brain);
+                if current != Some(target) {
+                    world.resource_mut::<RoundScript>().set_object_field(
+                        id,
+                        "enemy",
+                        Value::Object(target),
+                    );
+                    crate::script::runtime::raise(world, Value::Object(id), "enemy", Vec::new());
+                }
+                continue;
+            }
+            brain.entity_target = None;
+        }
         let still_live = current.is_some_and(|enemy| all.iter().any(|(other, _)| *other == enemy));
         let enemy = match seen {
-            Some((other, at)) => {
+            Some((other, at, true)) => {
                 brain.enemy_seen_ms = now;
                 brain.last_seen = Some((other, [at[0], at[1], at[2] - EYE_HEIGHT], now));
                 world.resource_mut::<RoundScript>().set_object_field(
@@ -399,18 +564,9 @@ fn look(world: &mut World) {
                     "lastenemysightpos",
                     Value::Vector(at),
                 );
-                // A remembered enemy is not dropped for a nearer one seen once.
-                match current {
-                    Some(enemy)
-                        if enemy != other
-                            && still_live
-                            && candidates.iter().any(|c| c.1 == enemy) =>
-                    {
-                        Some(enemy)
-                    }
-                    _ => Some(other),
-                }
+                Some(other)
             }
+            Some((other, _, false)) => Some(other),
             None if !ignore_all && still_live && now - brain.enemy_seen_ms < ENEMY_MEMORY_MS => {
                 current
             }
@@ -428,14 +584,154 @@ fn look(world: &mut World) {
     }
 }
 
-/// A hostile bullet passing this close to an actor's eye suppresses it.
-const SUPPRESS_RADIUS: f32 = 64.0;
-/// `suppressionmeter` gained per near miss.
-const SUPPRESS_STEP: f32 = 0.25;
-/// `suppressionmeter` lost per second.
-const SUPPRESS_DECAY: f32 = 0.33;
+/// Threat score of a candidate `(distance, who, eye, group bias)`:
+/// its own `threatbias` plus the group bias; 1000 while seen (500 while only
+/// remembered); for the current enemy +500 (+1000 for a player below 80%
+/// health) while seen, else +100 (+200 seen in the last 10 s); up to +5000
+/// within 2500 units; -150 per other actor already fighting it (to -1000).
+fn threat_score(
+    world: &mut World,
+    id: u64,
+    candidate: &(f32, u64, [f32; 3], i32),
+    visible: bool,
+    current: Option<u64>,
+    remembered: i64,
+    now: i64,
+) -> i32 {
+    let (dist, other, _, bias) = *candidate;
+    let recent = now - remembered < ENEMY_MEMORY_MS;
+    // A target that outshoots the actor at this range scores higher.
+    let duel = if visible || (current == Some(other) && recent) {
+        let gap = threat_accuracy(world, other, id, dist) - threat_accuracy(world, id, other, dist);
+        ((gap * 100.0).round() as i32).clamp(-500, 1000)
+    } else {
+        0
+    };
+    let wounded = world
+        .resource::<RoundScript>()
+        .player_client(other)
+        .is_some()
+        && match (
+            super::players::entity_field(world, other, "health"),
+            super::players::entity_field(world, other, "maxhealth"),
+        ) {
+            (Value::Int(health), Value::Int(max)) => (health as f32) < max as f32 * 0.8,
+            _ => false,
+        };
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let own = match runtime.object_field(other, "threatbias") {
+        Value::Int(n) => n,
+        Value::Float(n) => n as i32,
+        _ => 0,
+    };
+    let sight = if visible {
+        1000
+    } else if recent {
+        500
+    } else {
+        0
+    };
+    let engaged = if current != Some(other) {
+        0
+    } else if visible || recent {
+        if wounded { 1000 } else { 500 }
+    } else if recent {
+        200
+    } else {
+        100
+    };
+    let near = if dist < 2500.0 {
+        ((2500.0 - dist).powi(2) * 0.0008).round() as i32
+    } else {
+        0
+    };
+    // `flagenemyunattackable`: given up on for a while.
+    let given_up = runtime.campaign.actor_brains.get(&id).is_some_and(|b| {
+        b.unattackable
+            .iter()
+            .any(|&(e, until)| e == other && now < until)
+    });
+    let attackers = live_actors(&runtime)
+        .into_iter()
+        .filter(|a| *a != id && runtime.object_field(*a, "enemy") == Value::Object(other))
+        .count() as i32;
+    own + bias + sight + engaged + duel + near + (attackers * -150).max(-1000)
+        - if given_up { UNATTACKABLE_PENALTY } else { 0 }
+}
 
-fn segment_distance(point: [f32; 3], from: [f32; 3], to: [f32; 3]) -> f32 {
+// ponytail: a penalty as big as the synced-melee one makes any other enemy
+// win; weigh it finer if actors drop enemies they should keep.
+const UNATTACKABLE_PENALTY: i32 = 10000;
+
+/// `ai_playerNearAccuracy`/`ai_playerNearRange` and the far pair.
+const PLAYER_NEAR_ACCURACY: f32 = 0.5;
+const PLAYER_NEAR_RANGE: f32 = 800.0;
+const PLAYER_FAR_ACCURACY: f32 = 0.1;
+const PLAYER_FAR_RANGE: f32 = 2000.0;
+
+/// How well `shooter` hits `target` at `dist`, for the threat score: an
+/// actor's weapon graph (against AI or players), for a player the
+/// near/far player accuracy blended by range, × 5.
+fn threat_accuracy(world: &mut World, shooter: u64, target: u64, dist: f32) -> f32 {
+    let (shooter_client, vs_player) = {
+        let runtime = world.resource::<RoundScript>();
+        (
+            runtime.player_client(shooter).is_some(),
+            runtime.player_client(target).is_some(),
+        )
+    };
+    if shooter_client {
+        let t =
+            ((dist - PLAYER_NEAR_RANGE) / (PLAYER_FAR_RANGE - PLAYER_NEAR_RANGE)).clamp(0.0, 1.0);
+        return (PLAYER_NEAR_ACCURACY + (PLAYER_FAR_ACCURACY - PLAYER_NEAR_ACCURACY) * t) * 5.0;
+    }
+    let Value::String(name) = world
+        .resource_mut::<RoundScript>()
+        .object_field(shooter, "weapon")
+    else {
+        return 0.0;
+    };
+    let frame = crate::frame::FrameWorld::from_world(world);
+    let Ok(weapon) = crate::script_player::weapon_named(&frame, &name) else {
+        return 0.0;
+    };
+    frame.weapon_ai_accuracy(weapon).map_or(1.0, |graphs| {
+        let graph = if vs_player {
+            graphs.vs_player
+        } else {
+            graphs.vs_ai
+        };
+        if graph.is_empty() {
+            1.0
+        } else {
+            graph.accuracy(dist)
+        }
+    })
+}
+
+/// A hostile bullet passing this close to an actor's eye suppresses it
+/// (`ai_eventDistBullet`).
+const SUPPRESS_RADIUS: f32 = 128.0;
+/// `suppressionmeter` gained per near miss.
+const SUPPRESS_STEP: f32 = 0.15;
+/// `suppressionmeter` lost per 50 ms AI frame.
+const SUPPRESS_DECAY: f32 = 0.01;
+/// Spawn `suppressionduration`: a suppressor lapses this long after its last shot.
+const SUPPRESSION_DURATION_MS: i32 = 5_000;
+/// Suppressors count only while the actor is this close to its cover node.
+const SUPPRESS_NODE_DIST: f32 = 64.0;
+/// `ai_friendlyFireBlockDuration`: a friendly shot blocks movement
+/// across its line this long.
+const FRIENDLY_BLOCK_MS: i64 = 2_000;
+/// `ai_friendlySuppressionDist`: an AI teammate's shot blocks a
+/// standing actor only from this close.
+const FRIENDLY_SUPPRESS_DIST: f32 = 128.0;
+/// Friendly lines of fire an actor keeps.
+const FIRE_LINES: usize = 4;
+/// `maymovetopoint` tests friendly lines this far past the point.
+const FIRE_LINE_OVERSHOOT: f32 = 30.0;
+
+fn closest_on_segment(point: [f32; 3], from: [f32; 3], to: [f32; 3]) -> [f32; 3] {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     let p = [point[0] - from[0], point[1] - from[1], point[2] - from[2]];
     let len_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
@@ -444,79 +740,336 @@ fn segment_distance(point: [f32; 3], from: [f32; 3], to: [f32; 3]) -> f32 {
     } else {
         0.0
     };
-    distance(
-        point,
-        [from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t],
-    )
+    [from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t]
 }
 
-fn shooter_team(world: &mut World, number: i32) -> Value {
-    let object =
-        match u32::try_from(number).map(|client| super::players::player_object(world, client)) {
-            Ok(Value::Object(id)) => Some(id),
-            _ => world
-                .resource::<RoundScript>()
-                .entities
-                .iter()
-                .find(|(_, entity)| entity.number == number)
-                .map(|(id, _)| *id),
-        };
-    object.map_or(Value::Undefined, |id| {
-        world.resource_mut::<RoundScript>().object_field(id, "team")
+fn segment_distance(point: [f32; 3], from: [f32; 3], to: [f32; 3]) -> f32 {
+    distance(point, closest_on_segment(point, from, to))
+}
+
+/// A player blocks an actor's step when its 30x30x70 box (0.1 s
+/// ahead) overlaps the actor's body at the end of the step.
+const PLAYER_BLOCK_HALF_WIDTH: f32 = 15.0;
+const PLAYER_BLOCK_HEIGHT: f32 = 70.0;
+
+/// A friendly player stands where the actor's next step (`left` toward
+/// `next`) would put it.
+fn player_in_the_way(
+    team: &Value,
+    origin: [f32; 3],
+    next: [f32; 3],
+    left: f32,
+    players: &[(Value, [f32; 3])],
+) -> bool {
+    players.iter().any(|(player_team, at)| {
+        !hostile(team, player_team) && blocks_step(origin, next, left, *at)
     })
 }
 
-/// Last tick's hostile bullets that passed near an actor fill its
-/// `suppressionmeter`, which drains over time.
-// ponytail: only shots that hit something raise a hit event, so a bullet into
-// the sky does not suppress; record shot segments if AI ignores skyward fire.
+/// A player box at `at` overlaps the actor's body after stepping `left` from
+/// `origin` toward `next`.
+fn blocks_step(origin: [f32; 3], next: [f32; 3], left: f32, at: [f32; 3]) -> bool {
+    let d = glam::Vec2::new(next[0] - origin[0], next[1] - origin[1]);
+    let step = d.normalize_or_zero() * left.min(d.length());
+    let to = [origin[0] + step.x, origin[1] + step.y, origin[2]];
+    let reach = PLAYER_BLOCK_HALF_WIDTH + ACTOR_RADIUS;
+    (at[0] - to[0]).abs() < reach
+        && (at[1] - to[1]).abs() < reach
+        && at[2] < to[2] + ACTOR_HEIGHT
+        && to[2] < at[2] + PLAYER_BLOCK_HEIGHT
+}
+
+/// Ground under a `maymovetopoint` target is searched this far above and below it.
+const DROP_PROBE: f32 = 72.0;
+/// The most a `maymovetopoint` target may sit above the ground under it.
+const MAX_DROP: f32 = 32.0;
+
+/// `maymove*`: ground within `MAX_DROP` under `to`, and with
+/// `check_drop` under every point of the way (one probe per `ACTOR_RADIUS`),
+/// then a body-sized sweep at step height from `from`.
+// ponytail: probes follow the straight line from `from` to `to`; walk the nav
+// mesh if AI still finds ledges the line misses.
+fn may_move(world: &mut World, from: [f32; 3], to: [f32; 3], check_drop: bool) -> bool {
+    let settled = super::presence::settled(world);
+    let drop_at = |at: [f32; 3]| {
+        let ground = settled.trace_world(
+            [at[0], at[1], at[2] + DROP_PROBE],
+            [at[0], at[1], at[2] - DROP_PROBE],
+            [0.0; 3],
+            [0.0; 3],
+            crate::bullet_collision::MASK_PLAYER_SOLID,
+        );
+        (ground.startsolid != 0, at[2] - ground.endpos[2])
+    };
+    let (solid, drop) = drop_at(to);
+    if solid || (check_drop && drop > MAX_DROP) {
+        return false;
+    }
+    if check_drop {
+        let probes = (distance(from, to) / ACTOR_RADIUS).floor() as usize;
+        for k in 1..probes {
+            let t = k as f32 / probes as f32;
+            let at = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t);
+            if drop_at(at).1 > MAX_DROP {
+                return false;
+            }
+        }
+    }
+    let lift = |[x, y, z]: [f32; 3]| [x, y, z + STEP_HEIGHT];
+    let trace = settled.trace_world(
+        lift(from),
+        lift(to),
+        [-ACTOR_RADIUS, -ACTOR_RADIUS, 0.0],
+        [ACTOR_RADIUS, ACTOR_RADIUS, ACTOR_HEIGHT - STEP_HEIGHT],
+        crate::bullet_collision::MASK_PLAYER_SOLID,
+    );
+    trace.fraction >= 1.0 && trace.startsolid == 0
+}
+
+/// The move `from` → `to`, carried `FIRE_LINE_OVERSHOOT` on, crosses one of
+/// `lines` (friendly lines of fire, as infinite lines on the ground plane).
+fn crosses_fire_line(lines: &[(i64, [f32; 2], [f32; 2])], from: [f32; 3], to: [f32; 3]) -> bool {
+    let start = glam::Vec2::new(from[0], from[1]);
+    let dir = glam::Vec2::new(to[0], to[1]) - start;
+    let end = start + dir + dir.normalize_or_zero() * FIRE_LINE_OVERSHOOT;
+    lines.iter().any(|(_, a, b)| {
+        let (a, b) = (glam::Vec2::from(*a), glam::Vec2::from(*b));
+        let side = |p: glam::Vec2| (b - a).perp_dot(p - a);
+        side(start) * side(end) < 0.0
+    })
+}
+
+fn shooter(world: &mut World, number: i32) -> Option<u64> {
+    match u32::try_from(number).map(|client| super::players::player_object(world, client)) {
+        Ok(Value::Object(id)) => Some(id),
+        _ => world
+            .resource::<RoundScript>()
+            .entities
+            .iter()
+            .find(|(_, entity)| entity.number == number)
+            .map(|(id, _)| *id),
+    }
+}
+
+/// Last tick's hostile bullets that passed near an actor: each fills its
+/// `suppressionmeter` (which drains every frame) and notifies `bulletwhizby`.
+/// At a Cover Left/Right node, a shot from the node's front makes its shooter
+/// a suppressor: the first notifies `suppression`, `suppression_end` follows
+/// once `suppressionduration` passes without one.
+/// A teammate's shot as near leaves a line of fire the actor will not walk
+/// across for `FRIENDLY_BLOCK_MS` (`ismovesuppressed`); a player's also
+/// notifies `bulletwhizby`, and one ahead of a moving actor drops its route.
+/// An AI teammate's counts only within `FRIENDLY_SUPPRESS_DIST` of a standing
+/// actor that does not `ignoresuppression`.
+// ponytail: an actor's own miss into the sky leaves no record, so only players'
+// sky shots suppress; record actor shot segments if AI-vs-AI fire looks too calm.
 fn suppress(world: &mut World) {
     let tick = world.resource::<crate::step::StepRequest>().tick.0;
-    let shots: Vec<(i32, [f32; 3], [f32; 3])> = crate::frame::FrameWorld::from_world(world)
-        .entity_events()
-        .iter()
-        .filter(|record| {
-            record.tick.0 + 1 == tick
-                && matches!(
-                    entity_iw4::entity_event_action(record.event),
-                    Ok(entity_iw4::EntityEventAction::BulletHit)
+    let shots: Vec<(i32, [f32; 3], [f32; 3])> = {
+        let frame = crate::frame::FrameWorld::from_world(world);
+        let mut shots: Vec<(i32, [f32; 3], [f32; 3])> = frame
+            .entity_events()
+            .iter()
+            .filter(|record| {
+                record.tick.0 + 1 == tick
+                    && matches!(
+                        entity_iw4::entity_event_action(record.event),
+                        Ok(entity_iw4::EntityEventAction::BulletHit)
+                    )
+            })
+            .map(|record| {
+                (
+                    record.payload.number,
+                    record.payload.origin2,
+                    record.payload.origin,
                 )
-        })
-        .map(|record| {
-            (
-                record.payload.number,
-                record.payload.origin2,
-                record.payload.origin,
-            )
-        })
-        .collect();
-    let shots: Vec<(Value, [f32; 3], [f32; 3])> = shots
-        .into_iter()
-        .map(|(number, from, to)| (shooter_team(world, number), from, to))
-        .collect();
-    let decay = SUPPRESS_DECAY * crate::MATCH_TICK_MS as f32 / 1000.0;
-    let mut runtime = world.resource_mut::<RoundScript>();
-    for id in live_actors(&runtime) {
-        let meter = number(runtime.object_field(id, "suppressionmeter")).unwrap_or(0.0);
-        let mut next = meter - decay;
-        if !truthy(&runtime.object_field(id, "ignoresuppression"))
-            && let Value::Vector([x, y, z]) = runtime.object_field(id, "origin")
-        {
-            let team = runtime.object_field(id, "team");
-            let near = shots
+            })
+            .collect();
+        // Shots that raised no hit event: misses into the sky, and impacts that
+        // only leave pellet effects.
+        shots.extend(
+            frame
+                .last_pellet_fx()
                 .iter()
-                .filter(|(shooter, from, to)| {
-                    hostile(&team, shooter)
-                        && segment_distance([x, y, z + EYE_HEIGHT], *from, *to) < SUPPRESS_RADIUS
-                })
-                .count();
-            next += SUPPRESS_STEP * near as f32;
+                .map(|record| (record.attacker, record.start, record.end)),
+        );
+        shots
+    };
+    let shots: Vec<(Option<u64>, Value, [f32; 3], [f32; 3])> = shots
+        .into_iter()
+        .map(|(number, from, to)| {
+            let shooter = shooter(world, number);
+            let team = shooter.map_or(Value::Undefined, |id| {
+                world.resource_mut::<RoundScript>().object_field(id, "team")
+            });
+            (shooter, team, from, to)
+        })
+        .collect();
+    let now = super::players::now_ms(world);
+    let mut notifies = Vec::new();
+    for id in live_actors(&world.resource::<RoundScript>()) {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let ignore = truthy(&runtime.object_field(id, "ignoresuppression"));
+        let meter = number(runtime.object_field(id, "suppressionmeter")).unwrap_or(0.0);
+        let mut next = if ignore { 0.0 } else { meter - SUPPRESS_DECAY };
+        let mut suppressor = None;
+        let mut fire_lines = Vec::new();
+        let mut drop_route = false;
+        if let Value::Vector(origin) = runtime.object_field(id, "origin") {
+            let team = runtime.object_field(id, "team");
+            let eye = [origin[0], origin[1], origin[2] + EYE_HEIGHT];
+            let front = cover_front(&mut runtime, id, origin);
+            for (shooter, _, from, to) in shots
+                .iter()
+                .filter(|(_, shooter_team, _, _)| hostile(&team, shooter_team))
+            {
+                if segment_distance(eye, *from, *to) >= SUPPRESS_RADIUS {
+                    continue;
+                }
+                next += SUPPRESS_STEP;
+                let attacker = shooter.map_or(Value::Undefined, Value::Object);
+                let dist = segment_distance(origin, *from, *to);
+                notifies.push((
+                    id,
+                    "bulletwhizby",
+                    vec![attacker.clone(), Value::Float(dist)],
+                ));
+                if runtime
+                    .campaign
+                    .ai_listeners
+                    .get(&id)
+                    .is_some_and(|kinds| kinds.contains("bulletwhizby"))
+                {
+                    let args = vec![
+                        Value::string("bulletwhizby"),
+                        attacker.clone(),
+                        Value::Vector(*to),
+                    ];
+                    notifies.push((id, "ai_event", args));
+                }
+                let toward =
+                    glam::Vec2::new(from[0] - origin[0], from[1] - origin[1]).normalize_or_zero();
+                if front.is_some_and(|front| front.dot(toward) >= 0.5) {
+                    suppressor = Some(attacker);
+                }
+            }
+            let next = runtime
+                .campaign
+                .actor_goals
+                .get(&id)
+                .and_then(|goal| goal.route.first().copied());
+            for (shooter, _, from, to) in shots.iter().filter(|(shooter, shooter_team, _, _)| {
+                *shooter != Some(id)
+                    && matches!((&team, shooter_team), (Value::String(a), Value::String(b)) if a == b)
+            }) {
+                if segment_distance(eye, *from, *to) >= SUPPRESS_RADIUS {
+                    continue;
+                }
+                let ai = shooter.filter(|shooter| {
+                    runtime
+                        .entities
+                        .get(shooter)
+                        .is_some_and(|entity| entity.kind == EntityKind::Actor)
+                });
+                match ai {
+                    Some(ai) => {
+                        let near = matches!(runtime.object_field(ai, "origin"),
+                            Value::Vector(at) if distance(origin, at) <= FRIENDLY_SUPPRESS_DIST);
+                        if ignore || next.is_some() || !near {
+                            continue;
+                        }
+                    }
+                    None => {
+                        let attacker = shooter.map_or(Value::Undefined, Value::Object);
+                        let dist = segment_distance(origin, *from, *to);
+                        notifies.push((id, "bulletwhizby", vec![attacker, Value::Float(dist)]));
+                    }
+                }
+                fire_lines.push((now, [from[0], from[1]], [to[0], to[1]]));
+                if let Some(next) = next {
+                    let closest = closest_on_segment(origin, *from, *to);
+                    let ahead = (next[0] - origin[0]) * (closest[0] - origin[0])
+                        + (next[1] - origin[1]) * (closest[1] - origin[1]);
+                    drop_route |= ahead > 0.0;
+                }
+            }
         }
         let next = next.clamp(0.0, 1.0);
         if next != meter {
             runtime.set_object_field(id, "suppressionmeter", Value::Float(next));
         }
+        let duration = number(runtime.object_field(id, "suppressionduration"))
+            .map_or(SUPPRESSION_DURATION_MS as i64, |ms| ms as i64);
+        if drop_route && let Some(goal) = runtime.campaign.actor_goals.get_mut(&id) {
+            goal.route.clear();
+            goal.routed_to = None;
+        }
+        drop(runtime);
+        let mut brain = brain(world, id);
+        let before = brain.clone();
+        let was = brain.suppressed;
+        brain
+            .fire_lines
+            .retain(|(at, _, _)| now - at < FRIENDLY_BLOCK_MS);
+        for line in fire_lines {
+            if brain.fire_lines.len() == FIRE_LINES {
+                brain.fire_lines.remove(0);
+            }
+            brain.fire_lines.push(line);
+        }
+        if drop_route {
+            brain.move_blocked = Some(now);
+        } else if brain
+            .move_blocked
+            .is_some_and(|at| now - at >= FRIENDLY_BLOCK_MS)
+        {
+            brain.move_blocked = None;
+        }
+        match suppressor {
+            Some(attacker) if !ignore => {
+                if was.is_none() {
+                    notifies.push((id, "suppression", vec![attacker]));
+                }
+                brain.suppressed = Some(now);
+            }
+            _ => {
+                if was.is_some_and(|last| now - last >= duration) {
+                    brain.suppressed = None;
+                    notifies.push((id, "suppression_end", Vec::new()));
+                }
+            }
+        }
+        if brain != before {
+            store(world, id, brain);
+        }
     }
+    for (id, name, args) in notifies {
+        crate::script::runtime::raise(world, Value::Object(id), name, args);
+    }
+}
+
+/// The 2D facing of the Cover Left/Right node the actor stands at, if any.
+fn cover_front(runtime: &mut RoundScript, id: u64, origin: [f32; 3]) -> Option<glam::Vec2> {
+    let Value::Object(node) = runtime.object_field(id, "node") else {
+        return None;
+    };
+    let Value::String(kind) = runtime.object_field(node, "type") else {
+        return None;
+    };
+    if !matches!(&*kind, "Cover Left" | "Cover Right") {
+        return None;
+    }
+    let (Value::Vector(at), Value::Vector(angles)) = (
+        runtime.object_field(node, "origin"),
+        runtime.object_field(node, "angles"),
+    ) else {
+        return None;
+    };
+    if distance(origin, at) > SUPPRESS_NODE_DIST {
+        return None;
+    }
+    let yaw = angles[1].to_radians();
+    Some(glam::Vec2::new(yaw.cos(), yaw.sin()))
 }
 
 /// At the claimed node (`node`) and, with `facing`, turned its way.
@@ -546,22 +1099,173 @@ fn near_claim_node(world: &mut World, receiver: &Value, facing: bool) -> Result<
     Ok(Value::Int((near(origin, at) && aligned).into()))
 }
 
+use crate::script_player::campaign::{CROUCH, FIRE, MELEE, PRONE, STAND};
+
+/// A throw is planned only while the actor has `grenadeammo` left.
+fn has_grenades(world: &mut World, id: u64) -> bool {
+    number(
+        world
+            .resource_mut::<RoundScript>()
+            .object_field(id, "grenadeammo"),
+    )
+    .is_some_and(|ammo| ammo > 0.0)
+}
+
+/// An actor does not throw where an ally stands this close.
+const GRENADE_SAFE_RADIUS: f32 = 256.0;
+/// Gravity a thrown grenade arcs under (units/s²).
+const GRENADE_GRAVITY: f32 = 800.0;
+
+/// `checkgrenadethrow[pos](arm offset, ...)`: the launch velocity of an arcing
+/// throw from the actor's hand to `target`, undefined when the arc is blocked.
+// ponytail: one flight time per distance, the arc's apex and the hand checked
+// for clearance only; bounces are not planned.
+fn grenade_throw(
+    world: &mut World,
+    id: u64,
+    args: &[Value],
+    target: [f32; 3],
+) -> Result<Value, String> {
+    let offset = match args.first() {
+        Some(Value::Vector(offset)) => *offset,
+        _ => [0.0, 0.0, 64.0],
+    };
+    let (origin, yaw) = {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let origin = match runtime.object_field(id, "origin") {
+            Value::Vector(at) => at,
+            _ => return Ok(Value::Undefined),
+        };
+        let yaw = match runtime.object_field(id, "angles") {
+            Value::Vector(angles) => angles[1].to_radians(),
+            _ => 0.0,
+        };
+        (origin, yaw)
+    };
+    let from = [
+        origin[0] + offset[0] * yaw.cos() - offset[1] * yaw.sin(),
+        origin[1] + offset[0] * yaw.sin() + offset[1] * yaw.cos(),
+        origin[2] + offset[2],
+    ];
+    let planar = (target[0] - from[0]).hypot(target[1] - from[1]);
+    let t = (planar / 600.0).clamp(0.6, 2.0);
+    let velocity = [
+        (target[0] - from[0]) / t,
+        (target[1] - from[1]) / t,
+        (target[2] - from[2] + 0.5 * GRENADE_GRAVITY * t * t) / t,
+    ];
+    let half = t * 0.5;
+    let apex = [
+        from[0] + velocity[0] * half,
+        from[1] + velocity[1] * half,
+        from[2] + velocity[2] * half - 0.5 * GRENADE_GRAVITY * half * half,
+    ];
+    if !clear_sight(world, from, apex)
+        || !clear_sight(world, apex, [target[0], target[1], target[2] + 16.0])
+    {
+        return Ok(Value::Undefined);
+    }
+    let mut brain = brain(world, id);
+    brain.grenade_target = Some(target);
+    store(world, id, brain);
+    Ok(Value::Vector(velocity))
+}
+
+/// `disconnectpaths`: actor routes avoid the entity's box until `connectpaths`.
+fn block_paths(world: &mut World, receiver: &Value, block: bool) -> Result<Value, String> {
+    let id = entity_id(world, receiver)?;
+    let (lo, hi) = super::triggers::entity_bounds(world, id);
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let at = match runtime.object_field(id, "origin") {
+        Value::Vector(at) => at,
+        _ => [0.0; 3],
+    };
+    let bounds = (
+        std::array::from_fn(|k| at[k] + lo[k]),
+        std::array::from_fn(|k| at[k] + hi[k]),
+    );
+    if block {
+        runtime.campaign.blocked_paths.insert(id, bounds);
+    } else {
+        runtime.campaign.blocked_paths.remove(&id);
+    }
+    for goal in runtime.campaign.actor_goals.values_mut() {
+        goal.routed_to = None;
+    }
+    Ok(Value::Undefined)
+}
+
+fn stance_bit(name: &str) -> u8 {
+    match name {
+        "stand" => STAND,
+        "crouch" => CROUCH,
+        "prone" => PRONE,
+        _ => 0,
+    }
+}
+
+fn stances_denied(world: &mut World, receiver: &Value) -> Result<u8, String> {
+    let id = entity_id(world, receiver)?;
+    let client = world.resource::<RoundScript>().player_client(id);
+    Ok(match client {
+        Some(client) => crate::frame::FrameWorld::from_world(world)
+            .client_meta(crate::world::ClientId(client))
+            .map_or(0, |meta| meta.controls.denied),
+        None => brain(world, id).denied,
+    })
+}
+
+/// Players hold the refusal in their command controls, actors in their brain.
+fn set_stances_denied(world: &mut World, receiver: &Value, denied: u8) -> Result<Value, String> {
+    let id = entity_id(world, receiver)?;
+    let client = world.resource::<RoundScript>().player_client(id);
+    match client {
+        Some(client) => {
+            let mut frame = crate::frame::FrameWorld::from_world(world);
+            if frame.client_meta(crate::world::ClientId(client)).is_some() {
+                frame
+                    .client_meta_mut(crate::world::ClientId(client))
+                    .controls
+                    .denied = denied;
+            }
+        }
+        None => {
+            let mut brain = brain(world, id);
+            brain.denied = denied;
+            store(world, id, brain);
+        }
+    }
+    Ok(Value::Undefined)
+}
+
+fn allow_stance(
+    world: &mut World,
+    receiver: &Value,
+    args: &[Value],
+    bit: u8,
+) -> Result<Value, String> {
+    let allow = truthy(super::args::arg(args, 0)?);
+    let denied = stances_denied(world, receiver)?;
+    let denied = if allow { denied & !bit } else { denied | bit };
+    set_stances_denied(world, receiver, denied)
+}
+
 /// `shoot([accuracy scale], [point])`: one shot of the actor's weapon at the
-/// point or its enemy, missing by chance per `accuracy`.
+/// point or its enemy. Against an enemy it hits by chance per the
+/// accuracy model ([`final_accuracy`]), else it misses wide on purpose.
 fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
     let id = actor(world, receiver)?;
-    let (name, accuracy, enemy) = {
+    let (name, enemy) = {
         let mut runtime = world.resource_mut::<RoundScript>();
         let name = match runtime.object_field(id, "weapon") {
             Value::String(name) => name.to_string(),
             _ => return Ok(Value::Undefined),
         };
-        let accuracy = number(runtime.object_field(id, "accuracy")).unwrap_or(1.0);
         let enemy = match runtime.object_field(id, "enemy") {
             Value::Object(enemy) => Some(enemy),
             _ => None,
         };
-        (name, accuracy, enemy)
+        (name, enemy)
     };
     if name.is_empty() || name == "none" {
         return Ok(Value::Undefined);
@@ -573,10 +1277,6 @@ fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, S
         None => 1.0,
     };
     let from = super::turrets::muzzle(world, id);
-    let target = match args.get(1) {
-        Some(Value::Vector(at)) => Some(*at),
-        _ => enemy.and_then(|enemy| eye(world, enemy)),
-    };
     let forward = match world
         .resource_mut::<RoundScript>()
         .object_field(id, "angles")
@@ -584,35 +1284,256 @@ fn shoot(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, S
         Value::Vector(angles) => math_iw4::angle_vectors(angles).0,
         _ => [1.0, 0.0, 0.0],
     };
-    let point = match target {
-        Some(at) => {
-            let roll = super::natives::math::random_unit(world);
-            if roll < (accuracy * scale).clamp(0.0, 1.0) {
-                at
-            } else {
-                // ponytail: a miss passes 16-48 units off the target in a random
-                // direction; per-weapon AI spread graphs would replace this.
-                let angle = super::natives::math::random_unit(world) * std::f32::consts::TAU;
-                let off = 16.0 + super::natives::math::random_unit(world) * 32.0;
-                [
-                    at[0] + angle.cos() * off,
-                    at[1] + angle.sin() * off,
-                    at[2] + (roll - 0.5) * off,
-                ]
-            }
-        }
-        None => std::array::from_fn(|k| from[k] + forward[k] * 1000.0),
+    let point = match (args.get(1), enemy) {
+        (Some(Value::Vector(at)), _) => *at,
+        (_, Some(enemy)) => match aim_at_enemy(world, id, enemy, weapon, scale, from, forward) {
+            Some(point) => point,
+            None => return Ok(Value::Undefined),
+        },
+        _ => std::array::from_fn(|k| from[k] + forward[k] * 1000.0),
     };
     let dir = glam::Vec3::from_array(std::array::from_fn(|k| point[k] - from[k]))
         .try_normalize()
         .map_or(forward, |d| d.to_array());
     super::turrets::fire_bullet(world, id, from, dir, weapon, None);
+    let team = world.resource_mut::<RoundScript>().object_field(id, "team");
+    if let Value::Vector(at) = world
+        .resource_mut::<RoundScript>()
+        .object_field(id, "origin")
+    {
+        events::broadcast(
+            world,
+            "gunshot_teammate",
+            Some(id),
+            at,
+            events::Hearers::Team(&team),
+        );
+    }
     Ok(Value::Undefined)
+}
+
+/// Actor melee reach.
+const MELEE_RANGE: f32 = 64.0;
+
+/// `melee([dir])`: one strike from the eye, `MELEE_RANGE` toward the enemy (or
+/// `dir`, or ahead), for the weapon's melee damage; returns what it hit.
+fn melee(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Value, String> {
+    use crate::bullet_collision::{ColliderId, MASK_SHOT, TraceOutcome};
+    let id = actor(world, receiver)?;
+    let Some(from) = eye(world, id) else {
+        return Ok(Value::Undefined);
+    };
+    let (weapon, enemy, angles) = {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        (
+            runtime.object_field(id, "weapon"),
+            runtime.object_field(id, "enemy"),
+            runtime.object_field(id, "angles"),
+        )
+    };
+    let dir = match (args.first(), enemy) {
+        (Some(Value::Vector(dir)), _) => Some(*dir),
+        (_, Value::Object(enemy)) => {
+            eye(world, enemy).map(|at| std::array::from_fn(|k| at[k] - from[k]))
+        }
+        _ => None,
+    };
+    let dir = dir
+        .and_then(|d| glam::Vec3::from_array(d).try_normalize())
+        .map(|d| d.to_array())
+        .unwrap_or_else(|| match angles {
+            Value::Vector(angles) => math_iw4::angle_vectors(angles).0,
+            _ => [1.0, 0.0, 0.0],
+        });
+    let end = std::array::from_fn(|k| from[k] + dir[k] * MELEE_RANGE);
+    let ignore = super::turrets::ignore_self(world, id);
+    let TraceOutcome::Hit { collider, .. } =
+        super::natives::engine::entity_trace(world, from, end, MASK_SHOT, ignore)
+    else {
+        return Ok(Value::Undefined);
+    };
+    let hit = super::natives::engine::collider_entity(world, collider);
+    let frame = crate::frame::FrameWorld::from_world(world);
+    let weapon = match weapon {
+        Value::String(name) if !name.is_empty() && &*name != "none" => {
+            crate::script_player::weapon_named(&frame, &name).ok()
+        }
+        _ => None,
+    };
+    let amount = weapon
+        .and_then(|w| frame.combat_facts_for(w))
+        .map_or(0, |facts| facts.melee_damage);
+    let runtime = world.resource::<RoundScript>();
+    let target = match (collider, &hit) {
+        (ColliderId::Player { client, .. }, _) => Some(crate::script::HitTarget::Player(client)),
+        (_, Value::Object(object)) => runtime
+            .entities
+            .get(object)
+            .filter(|e| e.can_damage)
+            .and_then(|e| e.presence)
+            .map(crate::script::HitTarget::Entity),
+        _ => None,
+    };
+    if let Some(target) = target
+        && amount > 0
+    {
+        let inflictor = runtime.entities.get(&id).and_then(|e| e.presence);
+        world
+            .resource_mut::<RoundScript>()
+            .hits
+            .push(crate::script::ScriptHit {
+                piece: None,
+                target,
+                amount,
+                origin: from,
+                attacker: None,
+                inflictor,
+                means: "MOD_MELEE",
+                weapon: weapon.unwrap_or(0),
+                flags: 0,
+                hitloc: 0,
+            });
+    }
+    Ok(hit)
+}
+
+/// Where a shot at `enemy` goes: rolls `finalaccuracy`, then a point on the
+/// target (hit) or one passing it on a side (miss).
+fn aim_at_enemy(
+    world: &mut World,
+    id: u64,
+    enemy: u64,
+    weapon: u32,
+    scale: f32,
+    from: [f32; 3],
+    forward: [f32; 3],
+) -> Option<[f32; 3]> {
+    let client = world.resource::<RoundScript>().player_client(enemy);
+    let at = eye(world, enemy)?;
+    let accuracy = final_accuracy(world, id, enemy, client, weapon, scale)
+        * brain(world, id).sight_accuracy.unwrap_or(1.0);
+    world.resource_mut::<RoundScript>().set_object_field(
+        id,
+        "finalaccuracy",
+        Value::Float(accuracy),
+    );
+    let rand = |world: &mut World| super::natives::math::random_unit(world);
+    let crand = |world: &mut World| super::natives::math::random_unit(world) * 2.0 - 1.0;
+    let to = glam::Vec3::from_array(at) - glam::Vec3::from_array(from);
+    let dir = to.try_normalize().unwrap_or(glam::Vec3::X);
+    let side = glam::Vec3::new(dir.y, -dir.x, 0.0).normalize_or_zero();
+    let miss = 1.0 - accuracy;
+    if rand(world) < accuracy {
+        let (lateral, vertical) = match client {
+            // Anywhere from 10 above the aim point to 44 below it, not under the feet.
+            Some(_) => {
+                let feet = super::players::entity_field(world, enemy, "origin");
+                let span = match feet {
+                    Value::Vector(feet) => (feet[2] - (at[2] + 10.0)).max(-44.0),
+                    _ => -44.0,
+                };
+                (crand(world) * 8.0, rand(world) * span + 10.0)
+            }
+            None => (
+                crand(world) * miss * ACTOR_RADIUS,
+                rand(world) * miss * -44.0,
+            ),
+        };
+        let point = glam::Vec3::from_array(at) + side * lateral + glam::Vec3::Z * vertical;
+        return Some(point.to_array());
+    }
+    // A miss passes on the side the shooter already aims toward (either side
+    // when it aims within 10 degrees of the target), 16 units short of it.
+    let aim = glam::Vec3::from_array(forward);
+    let sign = if aim.dot(dir) >= 0.984_808 {
+        if rand(world) > 0.5 { 1.0 } else { -1.0 }
+    } else if aim.dot(side) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let (lateral, vertical) = match client {
+        Some(_) => (8.0 + rand(world) * 8.0, 10.0 - rand(world) * 44.0),
+        None => (
+            rand(world) * 10.0 * miss + 36.735,
+            crand(world) * -22.0 * miss,
+        ),
+    };
+    let point = glam::Vec3::from_array(at) - dir * 16.0
+        + side * (sign * lateral)
+        + glam::Vec3::Z * vertical;
+    Some(point.to_array())
+}
+
+/// `finalaccuracy`: the actor's `accuracy` × the target's
+/// `attackeraccuracy` × the shot's scale × the weapon's AI accuracy graph at
+/// this range, and against a player × its stance (prone 0.5, crouch 0.75) ×
+/// its sideways speed (1 at rest down to 0.3 at 250 units/s); 0..=1.
+fn final_accuracy(
+    world: &mut World,
+    id: u64,
+    enemy: u64,
+    client: Option<u32>,
+    weapon: u32,
+    scale: f32,
+) -> f32 {
+    let (accuracy, attacker_accuracy, from, to) = {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        (
+            number(runtime.object_field(id, "accuracy")).unwrap_or(1.0),
+            number(runtime.object_field(enemy, "attackeraccuracy")).unwrap_or(1.0),
+            runtime.object_field(id, "origin"),
+            runtime.object_field(enemy, "origin"),
+        )
+    };
+    let to = match client {
+        Some(_) => super::players::entity_field(world, enemy, "origin"),
+        None => to,
+    };
+    let (Value::Vector(from), Value::Vector(to)) = (from, to) else {
+        return 0.0;
+    };
+    let frame = crate::frame::FrameWorld::from_world(world);
+    let graph = frame.weapon_ai_accuracy(weapon).map_or(1.0, |graphs| {
+        let graph = if client.is_some() {
+            graphs.vs_player
+        } else {
+            graphs.vs_ai
+        };
+        // ponytail: a weapon without a graph shoots at full accuracy; report it
+        // as a content error if one turns up.
+        if graph.is_empty() {
+            1.0
+        } else {
+            graph.accuracy(distance(from, to))
+        }
+    });
+    let (stance, motion) = match client {
+        Some(client) => {
+            let client = crate::ClientId(client);
+            let stance = match crate::script_player::stance(&frame, client) {
+                "prone" => 0.5,
+                "crouch" => 0.75,
+                _ => 1.0,
+            };
+            let velocity = frame.player(client).map_or([0.0; 3], |ps| ps.velocity);
+            let dir = glam::Vec3::from_array(to) - glam::Vec3::from_array(from);
+            let dir = dir.try_normalize().unwrap_or(glam::Vec3::X);
+            let side = glam::Vec3::new(dir.y, -dir.x, 0.0);
+            let speed = side.dot(glam::Vec3::from_array(velocity)).abs().min(250.0);
+            (stance, (1.0 - speed / 250.0).max(0.3))
+        }
+        None => (1.0, 1.0),
+    };
+    (accuracy * attacker_accuracy * scale * graph * stance * motion).clamp(0.0, 1.0)
 }
 
 /// The animscript for the actor's situation: `move` on a route, its cover
 /// script at a claimed cover node, `combat` with an enemy, else `stop`.
 fn desired_script(world: &mut World, id: u64) -> String {
+    if let Some(script) = super::turrets::campaign::gunner_script(world, id) {
+        return script;
+    }
     let mut runtime = world.resource_mut::<RoundScript>();
     if runtime
         .campaign
@@ -757,6 +1678,15 @@ fn run_scripts(world: &mut World) {
         if health(&mut world.resource_mut::<RoundScript>(), id) <= 0 {
             if brain.hold != Some(Hold::Death) {
                 switch_to(world, id, "death", Some(Hold::Death));
+                retire_oldest_corpse(world, id);
+                campaign::mark_death_danger(world, id);
+                if let Value::Vector(at) = world
+                    .resource_mut::<RoundScript>()
+                    .object_field(id, "origin")
+                {
+                    let team = world.resource_mut::<RoundScript>().object_field(id, "team");
+                    events::broadcast(world, "death", Some(id), at, events::Hearers::Team(&team));
+                }
             }
             continue;
         }
@@ -782,6 +1712,18 @@ fn run_scripts(world: &mut World) {
                     None => Some(Hold::Scripted { started, ended }),
                 }
             }
+            Some(Hold::Arrival) if thread_done => {
+                // Arrival animations end near, not on, the goal: route the rest.
+                if let Some(goal) = world
+                    .resource_mut::<RoundScript>()
+                    .campaign
+                    .actor_goals
+                    .get_mut(&id)
+                {
+                    goal.routed_to = None;
+                }
+                None
+            }
             Some(Hold::Custom | Hold::Pain) if thread_done => None,
             Some(Hold::Death) => None,
             hold => hold,
@@ -798,6 +1740,24 @@ fn run_scripts(world: &mut World) {
     }
 }
 
+/// Dead actors kept in the world (`ai_corpseCount`); older bodies are removed.
+const MAX_CORPSES: usize = 5;
+
+fn retire_oldest_corpse(world: &mut World, dead: u64) {
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let corpses = &mut runtime.campaign.corpses;
+    corpses.retain(|id| *id != dead);
+    corpses.push_back(dead);
+    let old: Vec<u64> = corpses
+        .drain(..corpses.len().saturating_sub(MAX_CORPSES))
+        .collect();
+    for id in old {
+        if runtime.entities.contains_key(&id) {
+            runtime.request_delete(id);
+        }
+    }
+}
+
 fn approach_yaw(from: f32, to: f32, max: f32) -> f32 {
     let delta = math_iw4::angle_subtract(to, from).clamp(-max, max);
     math_iw4::angle_normalize_360(from + delta)
@@ -810,8 +1770,44 @@ fn approach_yaw(from: f32, to: f32, max: f32) -> f32 {
 fn move_actors(world: &mut World) {
     let dt = crate::MATCH_TICK_MS as f32 / 1000.0;
     let mut notes = Vec::new();
+    let mut approaches = Vec::new();
+    let mut arrivals = Vec::new();
+    // Player objects keep their origin in the player state, not as a field.
+    let (players, in_the_way): (
+        std::collections::HashMap<u64, [f32; 3]>,
+        Vec<(u64, [f32; 3])>,
+    ) = {
+        let slots: Vec<(u32, u64)> = world
+            .resource::<RoundScript>()
+            .players
+            .iter()
+            .map(|(client, slot)| (*client, slot.object))
+            .collect();
+        let frame = crate::frame::FrameWorld::from_world(world);
+        let states: Vec<(u64, [f32; 3], [f32; 3])> = slots
+            .into_iter()
+            .filter_map(|(client, object)| {
+                let ps = frame.player(crate::world::ClientId(client))?;
+                Some((object, ps.origin, ps.velocity))
+            })
+            .collect();
+        (
+            states.iter().map(|&(object, at, _)| (object, at)).collect(),
+            // Where each player will be 0.1 s on.
+            states
+                .iter()
+                .map(|&(object, at, v)| (object, std::array::from_fn(|k| at[k] + v[k] * 0.1)))
+                .collect(),
+        )
+    };
+    let now = super::players::now_ms(world);
     let mut runtime = world.resource_mut::<RoundScript>();
     let nav = runtime.campaign.actor_nav.clone();
+    let in_the_way: Vec<(Value, [f32; 3])> = in_the_way
+        .into_iter()
+        .map(|(object, at)| (runtime.object_field(object, "team"), at))
+        .collect();
+    let blocked: Vec<Bounds> = runtime.campaign.blocked_paths.values().copied().collect();
     let ids = live_actors(&runtime);
     let gone: Vec<u64> = runtime
         .campaign
@@ -850,9 +1846,11 @@ fn move_actors(world: &mut World) {
             continue;
         }
         let code_moves = matches!(&*brain.anim_mode, "" | "none" | "normal");
-        let walking = code_moves && (brain.script.is_empty() || &*brain.script == "move");
-        let root_motion = !code_moves || brain.traverse.is_some();
+        let mut walking = code_moves && (brain.script.is_empty() || &*brain.script == "move");
+        let root_motion =
+            !code_moves || brain.traverse.is_some() || brain.hold == Some(Hold::Arrival);
         let start = origin;
+        let start_yaw = angles[1];
         let mut heading = None;
         let mut path_goal = None;
         let mut traverse = None;
@@ -866,7 +1864,7 @@ fn move_actors(world: &mut World) {
                 GoalTarget::Pos(at) => Some(at),
                 GoalTarget::Entity(e) => match runtime.object_field(e, "origin") {
                     Value::Vector(at) if runtime.live(&e) => Some(at),
-                    _ => None,
+                    _ => players.get(&e).copied(),
                 },
             };
             let Some(goal_pos) = goal_pos else {
@@ -877,10 +1875,16 @@ fn move_actors(world: &mut World) {
                 number(runtime.object_field(id, "goalradius")).unwrap_or(DEFAULT_GOAL_RADIUS);
             let height =
                 number(runtime.object_field(id, "goalheight")).unwrap_or(DEFAULT_GOAL_HEIGHT);
+            let team = runtime.object_field(id, "team");
+            let avoid = campaign::badplaces_for(&runtime, &team, now);
             let goal = runtime.campaign.actor_goals.get_mut(&id).unwrap();
             let planar =
                 ((origin[0] - goal_pos[0]).powi(2) + (origin[1] - goal_pos[1]).powi(2)).sqrt();
-            if planar <= radius.max(4.0) && (origin[2] - goal_pos[2]).abs() <= height {
+            if planar <= radius.max(4.0)
+                && (origin[2] - goal_pos[2]).abs() <= height
+                && !(goal.stepping && !goal.route.is_empty())
+            {
+                goal.stepping = false;
                 goal.route.clear();
                 if !goal.settled {
                     goal.settled = true;
@@ -891,12 +1895,21 @@ fn move_actors(world: &mut World) {
                 if goal
                     .routed_to
                     .is_none_or(|at| distance(at, goal_pos) > REROUTE)
+                    && brain.move_blocked.is_none()
                     && let Some(nav) = &nav
                 {
                     goal.settled = false;
                     goal.routed_to = Some(goal_pos);
-                    match nav.0.route(origin, goal_pos) {
-                        Some(route) => goal.route = route,
+                    let mut blocked = blocked.clone();
+                    blocked.extend(avoid);
+                    match nav.0.route(origin, goal_pos, &blocked) {
+                        Some(route) => {
+                            let from = route.iter().rev().nth(1).copied().unwrap_or(origin);
+                            let (x, y) = (goal_pos[0] - from[0], goal_pos[1] - from[1]);
+                            let len = x.hypot(y).max(f32::EPSILON);
+                            approaches.push((id, [x / len, y / len, 0.0]));
+                            goal.route = route;
+                        }
                         None => {
                             goal.route.clear();
                             goal.settled = true;
@@ -904,11 +1917,22 @@ fn move_actors(world: &mut World) {
                         }
                     }
                 }
-                if !goal.route.is_empty() {
-                    path_goal = Some(goal_pos);
+                if let Some(&end) = goal.route.last() {
+                    path_goal = Some(if goal.stepping { end } else { goal_pos });
                 }
                 if let Some(&next) = goal.route.first() {
                     heading = Some([next[0] - origin[0], next[1] - origin[1]]);
+                }
+                let planar_to_goal =
+                    |at: [f32; 3]| (at[0] - goal_pos[0]).hypot(at[1] - goal_pos[1]);
+                if walking
+                    && let Some((at, yaw)) = brain.arrival
+                    && planar_to_goal(origin) <= planar_to_goal(at) + ARRIVAL_ERROR
+                {
+                    goal.route.clear();
+                    walking = false;
+                    angles[1] = yaw;
+                    arrivals.push(id);
                 }
                 if walking {
                     let mut left = if has_tree {
@@ -916,6 +1940,12 @@ fn move_actors(world: &mut World) {
                     } else {
                         RUN_SPEED * dt
                     };
+                    if !brain.push_player
+                        && let Some(&next) = goal.route.first()
+                        && player_in_the_way(&team, origin, next, left, &in_the_way)
+                    {
+                        left = 0.0;
+                    }
                     while left > 0.0
                         && let Some(&next) = goal.route.first()
                     {
@@ -954,7 +1984,7 @@ fn move_actors(world: &mut World) {
         let enemy = match runtime.object_field(id, "enemy") {
             Value::Object(enemy) => match runtime.object_field(enemy, "origin") {
                 Value::Vector(at) => Some(face(at)),
-                _ => None,
+                _ => players.get(&enemy).map(|at| face(*at)),
             },
             _ => None,
         };
@@ -970,7 +2000,7 @@ fn move_actors(world: &mut World) {
             None if root_motion => math_iw4::angle_normalize_360(angles[1] + turn),
             None => angles[1],
         };
-        let moved = origin != start || yaw != angles[1];
+        let moved = origin != start || yaw != start_yaw;
         angles[1] = yaw;
         if let Some([x, y]) = heading {
             let len = x.hypot(y).max(f32::EPSILON);
@@ -993,6 +2023,26 @@ fn move_actors(world: &mut World) {
     }
     for (id, note) in notes {
         crate::script::runtime::raise(world, Value::Object(id), note, Vec::new());
+    }
+    for (id, dir) in approaches {
+        if truthy(
+            &world
+                .resource_mut::<RoundScript>()
+                .object_field(id, "requestarrivalnotify"),
+        ) {
+            crate::script::runtime::raise(
+                world,
+                Value::Object(id),
+                "cover_approach",
+                vec![Value::Vector(dir)],
+            );
+        }
+    }
+    for id in arrivals {
+        let mut brain = brain(world, id);
+        brain.arrival = None;
+        store(world, id, brain);
+        switch_to(world, id, "cover_arrival", Some(Hold::Arrival));
     }
 }
 
@@ -1026,6 +2076,38 @@ fn init_fields(world: &mut World, id: u64) {
         ("damagetaken", Value::Int(0)),
         ("relativedir", Value::Int(0)),
         ("suppressionmeter", Value::Float(0.0)),
+        // Actor spawn values.
+        ("fovcosine", Value::Float(DEFAULT_FOV_COS)),
+        ("fovcosinebusy", Value::Float(DEFAULT_FOV_COS_BUSY)),
+        (
+            "maxsightdistsqrd",
+            Value::Float(DEFAULT_SIGHT_DIST * DEFAULT_SIGHT_DIST),
+        ),
+        ("sightlatency", Value::Int(100)),
+        ("interval", Value::Float(80.0)),
+        ("pacifistwait", Value::Float(20.0)),
+        ("walkdist", Value::Float(256.0)),
+        ("walkdistfacingmotion", Value::Float(64.0)),
+        ("suppressionwait", Value::Int(2_000)),
+        ("suppressionduration", Value::Int(SUPPRESSION_DURATION_MS)),
+        ("grenadeawareness", Value::Float(0.33)),
+        ("badplaceawareness", Value::Float(0.75)),
+        // Actors start zeroed: these flags read false, never undefined.
+        ("delayeddeath", Value::Int(0)),
+        ("diequietly", Value::Int(0)),
+        ("forceragdollimmediate", Value::Int(0)),
+        ("pacifist", Value::Int(0)),
+        ("ignoreexplosionevents", Value::Int(0)),
+        ("providecoveringfire", Value::Int(0)),
+        ("damageshield", Value::Int(0)),
+        ("nogrenadereturnthrow", Value::Int(0)),
+        ("noattackeraccuracymod", Value::Int(0)),
+        ("nododgemove", Value::Int(0)),
+        ("dontavoidplayer", Value::Int(0)),
+        ("ignoresuppression", Value::Int(0)),
+        ("keepclaimednode", Value::Int(0)),
+        ("keepclaimednodeifvalid", Value::Int(0)),
+        ("fixednode", Value::Int(0)),
         ("alertlevel", Value::string("noncombat")),
         ("alertlevelint", Value::Int(0)),
         ("velocity", Value::Vector([0.0; 3])),
@@ -1057,6 +2139,16 @@ fn default_aim_limits(runtime: &mut RoundScript, id: u64) {
 }
 
 const EYE_HEIGHT: f32 = 64.0;
+
+/// How far below the standing eye an actor's eye sits in a `self.a.pose`
+/// (crouch 40, prone 11 above the feet, the IW4 player view heights).
+fn pose_eye_drop(pose: &Value) -> f32 {
+    match pose {
+        Value::String(pose) if &**pose == "crouch" => EYE_HEIGHT - 40.0,
+        Value::String(pose) if &**pose == "prone" => EYE_HEIGHT - 11.0,
+        _ => 0.0,
+    }
+}
 const ACTOR_RADIUS: f32 = 15.0;
 const ACTOR_HEIGHT: f32 = 72.0;
 const STEP_HEIGHT: f32 = 18.0;
@@ -1162,6 +2254,7 @@ pub(crate) fn damaged(
         Value::Int(0)
     );
     if alive && pain_allowed && brain(world, id).hold.is_none() {
+        campaign::mark_pain_danger(world, id);
         switch_to(world, id, "pain", Some(Hold::Pain));
     }
 }
@@ -1175,6 +2268,11 @@ fn has_entry(world: &World, name: &str) -> bool {
 }
 
 fn spawners(world: &mut World) -> Vec<u64> {
+    map_actors(world, true)
+}
+
+/// Map `actor_*` entities that are spawners, or (`spawner` false) AI placed live.
+fn map_actors(world: &mut World, spawner: bool) -> Vec<u64> {
     let mut runtime = world.resource_mut::<RoundScript>();
     let ids: Vec<u64> = runtime
         .entities
@@ -1183,7 +2281,13 @@ fn spawners(world: &mut World) -> Vec<u64> {
         .map(|(id, _)| *id)
         .collect();
     ids.into_iter()
-        .filter(|id| matches!(runtime.object_field(*id, "spawnflags"), Value::Int(f) if f & SPAWNER != 0))
+        .filter(|id| {
+            let flags = match runtime.object_field(*id, "spawnflags") {
+                Value::Int(f) => f,
+                _ => 0,
+            };
+            (flags & SPAWNER != 0) == spawner
+        })
         .collect()
 }
 
@@ -1204,6 +2308,7 @@ pub(crate) fn start_deferred(world: &mut World) {
         return;
     }
     world.resource_mut::<RoundScript>().loading = true;
+    super::mission::restore_game(world);
     super::vehicles::campaign::init_map_vehicles(world);
     super::weapons::campaign::place_map_weapons(world);
     super::turrets::campaign::init_map_turrets(world);
@@ -1234,6 +2339,7 @@ pub(crate) fn init_spawners(world: &mut World) {
     let now = super::players::now_ms(world);
     let mut types: Vec<String> = spawners(world)
         .into_iter()
+        .chain(map_actors(world, false))
         .map(|id| aitype(&world.resource::<RoundScript>().entities[&id].classname))
         .collect();
     types.sort();
@@ -1244,6 +2350,7 @@ pub(crate) fn init_spawners(world: &mut World) {
             let _ = crate::script::runtime::run_now(world, &entry, Value::level(), Vec::new(), now);
         }
     }
+    spawn_placed_actors(world);
     for spawner in spawners(world) {
         let mut runtime = world.resource_mut::<RoundScript>();
         // A spawner without a `count` key spawns once.
@@ -1262,6 +2369,29 @@ pub(crate) fn init_spawners(world: &mut World) {
                 now,
             );
         }
+    }
+}
+
+/// AI placed live in the map: each becomes an actor where it stands, keeping
+/// its keys (`targetname` too), and the placeholder goes.
+fn spawn_placed_actors(world: &mut World) {
+    for placed in map_actors(world, false) {
+        let targetname = world
+            .resource_mut::<RoundScript>()
+            .object_field(placed, "targetname");
+        let Ok(id) = spawn_from(world, placed, true) else {
+            continue;
+        };
+        world
+            .resource_mut::<RoundScript>()
+            .set_object_field(id, "targetname", targetname);
+        const INIT: &str = "animscripts/init::main";
+        if has_entry(world, INIT) {
+            let now = super::players::now_ms(world);
+            let _ =
+                crate::script::runtime::run_now(world, INIT, Value::Object(id), Vec::new(), now);
+        }
+        world.resource_mut::<RoundScript>().delete_entity(placed);
     }
 }
 
@@ -1384,7 +2514,10 @@ fn spawn_script_model(world: &mut World, origin: [f32; 3]) -> Result<u64, String
 
 pub(crate) fn register(registry: &mut NativeRegistry) {
     use Namespace::{Function, Method};
+    awareness::register(registry);
     campaign::register(registry);
+    events::register(registry);
+    prone::register(registry);
     // SP aitype `spawner()`: the team `getspawnerteamarray` filters on.
     registry.register(Method, "setspawnerteam", |world, receiver, args| {
         let id = entity_id(world, receiver)?;
@@ -1394,12 +2527,24 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             .set_object_field(id, "team", Value::string(&team));
         Ok(Value::Undefined)
     });
+    // A `playsound` notify still to come for the entity.
+    registry.register(Method, "iswaitingonsound", |world, receiver, _| {
+        entity_id(world, receiver)?;
+        let waiting = world
+            .resource::<RoundScript>()
+            .campaign
+            .timed_notifies
+            .iter()
+            .any(|(_, entity, _)| entity == receiver);
+        Ok(Value::Int(waiting.into()))
+    });
     // SP `playsound(alias, notify, stop_on_death)`: the notify fires when the
     // sound ends. Replaces the MP one-argument form.
-    // ponytail: fixed length; use the alias's sound length once sim carries it.
+    // ponytail: first variant's length, no secondary/chain; unknown media
+    // (mp3 streams) waits 2 s.
     for name in ["playsound", "playsoundasmaster"] {
         registry.register(Method, name, |world, receiver, args| {
-            const SOUND_NOTIFY_MS: i64 = 2000;
+            const UNKNOWN_SOUND_MS: i64 = 2000;
             let id = entity_id(world, receiver)?;
             let alias = super::args::string(args, 0)?;
             if args.len() > 3 {
@@ -1418,11 +2563,14 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
                 let now = i64::from(crate::level_time_ms(
                     world.resource::<crate::step::StepRequest>().tick,
                 ));
+                let length = crate::frame::FrameWorld::from_world(world)
+                    .script_sound_length_ms(&alias)
+                    .map_or(UNKNOWN_SOUND_MS, i64::from);
                 world
                     .resource_mut::<RoundScript>()
                     .campaign
                     .timed_notifies
-                    .push((now + SOUND_NOTIFY_MS, receiver.clone(), name.into()));
+                    .push((now + length, receiver.clone(), name.into()));
             }
             Ok(Value::Undefined)
         });
@@ -1629,6 +2777,22 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "kill", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
         let mut runtime = world.resource_mut::<RoundScript>();
+        if let Some(client) = runtime.player_client(id) {
+            // The player dies of damage, so its death runs the usual path.
+            runtime.hits.push(crate::script::ScriptHit {
+                piece: None,
+                target: crate::script::HitTarget::Player(crate::world::ClientId(client)),
+                amount: 100_000,
+                origin: [0.0; 3],
+                attacker: None,
+                inflictor: None,
+                means: "MOD_SUICIDE",
+                weapon: 0,
+                flags: 0,
+                hitloc: 0,
+            });
+            return Ok(Value::Undefined);
+        }
         if health(&mut runtime, id) <= 0 {
             return Ok(Value::Undefined);
         }
@@ -1656,26 +2820,54 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let allowed = order(&wanted) <= order(highest_stance(world, receiver)?);
         Ok(Value::Int(allowed.into()))
     });
-    // ponytail: standing eye height for every pose; read `a.pose` if crouched AI aim high.
+    // `getshootatpos`: an actor's eye at its animscript pose (`self.a.pose`).
     registry.register(Method, "getshootatpos", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
-        Ok(
-            match world
-                .resource_mut::<RoundScript>()
-                .object_field(id, "origin")
-            {
-                Value::Vector([x, y, z]) => Value::Vector([x, y, z + EYE_HEIGHT]),
-                other => other,
-            },
-        )
+        let drop = {
+            let mut runtime = world.resource_mut::<RoundScript>();
+            let pose = match runtime.object_field(id, "a") {
+                Value::Object(a) => runtime.object_field(a, "pose"),
+                _ => Value::Undefined,
+            };
+            pose_eye_drop(&pose)
+        };
+        Ok(eye(world, id).map_or(Value::Undefined, |[x, y, z]| {
+            Value::Vector([x, y, z - drop])
+        }))
     });
-    for name in ["setflashbanged", "clearentitytarget", "traversemode"] {
+    registry.register(Method, "setentitytarget", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let target = entity_id(world, super::args::arg(args, 0)?)?;
+        let mut brain = brain(world, id);
+        brain.entity_target = Some(target);
+        store(world, id, brain);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "clearentitytarget", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let mut brain = brain(world, id);
+        brain.entity_target = None;
+        store(world, id, brain);
+        Ok(Value::Undefined)
+    });
+    for name in ["setflashbanged", "traversemode"] {
         registry.register(Method, name, |world, receiver, _| {
             actor(world, receiver)?;
             Ok(Value::Undefined)
         });
     }
     registry.register(Method, "shoot", shoot);
+    registry.register(Method, "melee", melee);
+    // `pushplayer(on)`: walk on through a friendly player in the way instead of
+    // stopping for it.
+    registry.register(Method, "pushplayer", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let on = truthy(super::args::arg(args, 0)?);
+        let mut state = brain(world, id);
+        state.push_player = on;
+        store(world, id, state);
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "setdefaultaimlimits", |world, receiver, _| {
         let id = actor(world, receiver)?;
         default_aim_limits(&mut world.resource_mut::<RoundScript>(), id);
@@ -1700,22 +2892,197 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         };
         Ok(Value::Int(clear_sight(world, from, to).into()))
     });
-    // ponytail: memory holds the last hostile seen only; anyone else answers with
-    // where it is now. Keep per-target memory if AI pre-aims at unseen players.
+    // `lastknownpos(ent)`: where the actor last saw it; one it never saw (or
+    // forgot) answers with where it is now.
     registry.register(Method, "lastknownpos", |world, receiver, args| {
         let id = actor(world, receiver)?;
         let target = entity_id(world, super::args::arg(args, 0)?)?;
-        match brain(world, id).last_seen {
-            Some((seen, at, _)) if seen == target => Ok(Value::Vector(at)),
-            _ => Ok(super::players::entity_field(world, target, "origin")),
+        let brain = brain(world, id);
+        let remembered = brain
+            .known
+            .iter()
+            .find(|k| k.0 == target)
+            .map(|k| k.2)
+            .or(brain.last_seen.filter(|s| s.0 == target).map(|s| s.1));
+        Ok(remembered.map_or_else(
+            || super::players::entity_field(world, target, "origin"),
+            Value::Vector,
+        ))
+    });
+    registry.register(Method, "allowstand", |world, receiver, args| {
+        allow_stance(world, receiver, args, STAND)
+    });
+    registry.register(Method, "allowcrouch", |world, receiver, args| {
+        allow_stance(world, receiver, args, CROUCH)
+    });
+    registry.register(Method, "allowprone", |world, receiver, args| {
+        allow_stance(world, receiver, args, PRONE)
+    });
+    registry.register(Method, "allowfire", |world, receiver, args| {
+        allow_stance(world, receiver, args, FIRE)
+    });
+    registry.register(Method, "allowmelee", |world, receiver, args| {
+        allow_stance(world, receiver, args, MELEE)
+    });
+    registry.register(Method, "allowedstances", |world, receiver, args| {
+        let mut allowed = 0;
+        for index in 0..args.len() {
+            allowed |= stance_bit(&super::args::string(args, index)?);
         }
+        let stances = STAND | CROUCH | PRONE;
+        let others = stances_denied(world, receiver)? & !stances;
+        set_stances_denied(world, receiver, others | (stances & !allowed))
+    });
+    registry.register(Method, "isstanceallowed", |world, receiver, args| {
+        let bit = stance_bit(&super::args::string(args, 0)?);
+        let denied = stances_denied(world, receiver)?;
+        Ok(Value::Int((denied & bit == 0).into()))
+    });
+    for namespace in [Method, Function] {
+        registry.register(namespace, "disconnectpaths", |world, receiver, _| {
+            block_paths(world, receiver, true)
+        });
+        registry.register(namespace, "connectpaths", |world, receiver, _| {
+            block_paths(world, receiver, false)
+        });
+    }
+    registry.register(Method, "shouldfacemotion", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let face = truthy(
+            &world
+                .resource_mut::<RoundScript>()
+                .object_field(id, "facemotion"),
+        );
+        let free = matches!(brain(world, id).orient, Orient::Default | Orient::Motion);
+        Ok(Value::Int((face && free).into()))
+    });
+    // `safeteleport(origin, [angles])`: the actor is placed there and routes anew.
+    registry.register(Method, "checkgrenadethrow", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        if !has_grenades(world, id) {
+            return Ok(Value::Undefined);
+        }
+        let Value::Object(enemy) = world
+            .resource_mut::<RoundScript>()
+            .object_field(id, "enemy")
+        else {
+            return Ok(Value::Undefined);
+        };
+        let Value::Vector(at) = super::players::entity_field(world, enemy, "origin") else {
+            return Ok(Value::Undefined);
+        };
+        let spread = number(super::args::arg(args, 1)?.clone()).unwrap_or(0.0);
+        let angle = (id as f32 * 2.399 + super::players::now_ms(world) as f32 * 0.001).sin()
+            * std::f32::consts::PI;
+        let target = [
+            at[0] + angle.cos() * spread * 0.5,
+            at[1] + angle.sin() * spread * 0.5,
+            at[2],
+        ];
+        grenade_throw(world, id, args, target)
+    });
+    registry.register(Method, "checkgrenadethrowpos", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        if !has_grenades(world, id) {
+            return Ok(Value::Undefined);
+        }
+        let target = super::args::vector(args, 1)?;
+        grenade_throw(world, id, args, target)
+    });
+    registry.register(Method, "throwgrenade", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let mut brain = brain(world, id);
+        let Some(target) = brain.grenade_target.take() else {
+            return Ok(Value::Undefined);
+        };
+        let held = brain.held_grenade.take();
+        store(world, id, brain);
+        let name = match held {
+            Some((weapon, _)) => crate::script_player::weapon_name(
+                &crate::frame::FrameWorld::from_world(world),
+                weapon,
+            )
+            .to_string(),
+            None => match world
+                .resource_mut::<RoundScript>()
+                .object_field(id, "grenadeweapon")
+            {
+                Value::String(name) => name.to_string(),
+                _ => "fraggrenade".to_owned(),
+            },
+        };
+        let from = eye(world, id).unwrap_or(target);
+        let team = world.resource_mut::<RoundScript>().object_field(id, "team");
+        let fuse = held.map(|(_, fuse)| fuse);
+        super::weapons::campaign::schedule_grenade(world, &name, from, target, team, fuse)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        if held.is_none()
+            && let Some(ammo) = number(runtime.object_field(id, "grenadeammo")).filter(|n| *n > 0.0)
+        {
+            runtime.set_object_field(id, "grenadeammo", Value::Int(ammo as i32 - 1));
+        }
+        drop(runtime);
+        crate::script::runtime::raise(world, Value::Object(id), "grenade_fire", Vec::new());
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "pickupgrenade", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        grenades::pick_up(world, id);
+        Ok(Value::Undefined)
+    });
+    // No ally of the thrower stands within the blast of `pos`.
+    registry.register(Method, "isgrenadepossafe", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let pos = super::args::vector(args, 1)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let team = runtime.object_field(id, "team");
+        let safe = live_actors(&runtime).into_iter().all(|other| {
+            other == id
+                || runtime.object_field(other, "team") != team
+                || !matches!(runtime.object_field(other, "origin"),
+                    Value::Vector(at) if distance(at, pos) < GRENADE_SAFE_RADIUS)
+        });
+        Ok(Value::Int(safe.into()))
+    });
+    registry.register(Method, "safeteleport", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let at = super::args::vector(args, 0)?;
+        let angles = super::args::optional(args, 1, super::args::vector)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "origin", Value::Vector(at));
+        if let Some(angles) = angles {
+            runtime.set_object_field(id, "angles", Value::Vector(angles));
+        }
+        if let Some(goal) = runtime.campaign.actor_goals.get_mut(&id) {
+            goal.routed_to = None;
+            goal.route.clear();
+        }
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "getentnum", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        let runtime = world.resource::<RoundScript>();
+        let number = match runtime.player_client(id) {
+            Some(client) => client as i32,
+            None => runtime.entities.get(&id).map_or(-1, |entity| entity.number),
+        };
+        Ok(Value::Int(number))
+    });
+    registry.register(Method, "startcoverarrival", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let at = super::args::vector(args, 0)?;
+        let yaw = number(super::args::arg(args, 1)?.clone()).unwrap_or(0.0);
+        let mut brain = brain(world, id);
+        brain.arrival = Some((at, yaw));
+        store(world, id, brain);
+        Ok(Value::Undefined)
     });
     registry.register(Method, "issuppressed", |world, receiver, _| {
         let id = actor(world, receiver)?;
+        let suppressed = brain(world, id).suppressed.is_some();
         let mut runtime = world.resource_mut::<RoundScript>();
         let meter = number(runtime.object_field(id, "suppressionmeter")).unwrap_or(0.0);
-        let ignore = truthy(&runtime.object_field(id, "ignoresuppression"));
-        Ok(Value::Int((meter > 0.0 && !ignore).into()))
+        Ok(Value::Int((meter > 0.0 || suppressed).into()))
     });
     registry.register(Method, "lastknowntime", |world, receiver, args| {
         let id = actor(world, receiver)?;
@@ -1753,28 +3120,39 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let from = super::turrets::muzzle(world, id);
         Ok(Value::Int(clear_sight(world, from, to).into()))
     });
-    // ponytail: a straight body-sized sweep at step height, no ground check;
-    // walk the nav mesh if AI steps off ledges.
+    // `maymovetopoint(point, [check drop], [allow actors])`: false while the
+    // move crosses a friendly line of fire.
     registry.register(Method, "maymovetopoint", |world, receiver, args| {
         let id = actor(world, receiver)?;
         let to = super::args::vector(args, 0)?;
+        let check_drop = super::args::optional(args, 1, super::args::int)?.is_none_or(|n| n != 0);
         let Value::Vector(from) = world
             .resource_mut::<RoundScript>()
             .object_field(id, "origin")
         else {
             return Ok(Value::Int(0));
         };
-        let lift = |[x, y, z]: [f32; 3]| [x, y, z + STEP_HEIGHT];
-        let trace = super::presence::settled(world).trace_world(
-            lift(from),
-            lift(to),
-            [-ACTOR_RADIUS, -ACTOR_RADIUS, 0.0],
-            [ACTOR_RADIUS, ACTOR_RADIUS, ACTOR_HEIGHT - STEP_HEIGHT],
-            crate::bullet_collision::MASK_PLAYER_SOLID,
-        );
+        let blocked = crosses_fire_line(&brain(world, id).fire_lines, from, to);
         Ok(Value::Int(
-            (trace.fraction >= 1.0 && trace.startsolid == 0).into(),
+            (!blocked && may_move(world, from, to, check_drop)).into(),
         ))
+    });
+    // `maymovefrompointtopoint(from, to, [check drop], [allow actors])`.
+    registry.register(
+        Method,
+        "maymovefrompointtopoint",
+        |world, receiver, args| {
+            actor(world, receiver)?;
+            let from = super::args::vector(args, 0)?;
+            let to = super::args::vector(args, 1)?;
+            let check_drop =
+                super::args::optional(args, 2, super::args::int)?.is_none_or(|n| n != 0);
+            Ok(Value::Int(may_move(world, from, to, check_drop).into()))
+        },
+    );
+    registry.register(Method, "ismovesuppressed", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        Ok(Value::Int((!brain(world, id).fire_lines.is_empty()).into()))
     });
     // `dropweapon(weapon, position, [velocity scale])`: the gun falls from its tag.
     registry.register(Method, "dropweapon", |world, receiver, args| {
@@ -1900,4 +3278,63 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             .is_some_and(|(_, e)| e.kind == EntityKind::Actor);
         Ok(Value::Int(actor.into()))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A move blocks only when it (or the overshoot past it) crosses a line of fire.
+    #[test]
+    fn fire_line_blocks_moves_across_it() {
+        let lines = [(0, [0.0, -100.0], [0.0, 100.0])];
+        assert!(crosses_fire_line(
+            &lines,
+            [-50.0, 0.0, 0.0],
+            [50.0, 0.0, 0.0]
+        ));
+        assert!(crosses_fire_line(
+            &lines,
+            [-50.0, 0.0, 0.0],
+            [-10.0, 0.0, 0.0]
+        ));
+        assert!(!crosses_fire_line(
+            &lines,
+            [-50.0, 0.0, 0.0],
+            [-40.0, 0.0, 0.0]
+        ));
+        assert!(!crosses_fire_line(
+            &lines,
+            [-50.0, 0.0, 0.0],
+            [-50.0, 80.0, 0.0]
+        ));
+        assert!(!crosses_fire_line(&[], [-50.0, 0.0, 0.0], [50.0, 0.0, 0.0]));
+    }
+
+    /// A player just ahead on the route blocks the step; one beside it, behind
+    /// the reach, or a floor up does not.
+    #[test]
+    fn player_box_blocks_the_next_step() {
+        let (origin, next) = ([0.0; 3], [100.0, 0.0, 0.0]);
+        let reach = PLAYER_BLOCK_HALF_WIDTH + ACTOR_RADIUS;
+        assert!(blocks_step(
+            origin,
+            next,
+            10.0,
+            [10.0 + reach - 1.0, 0.0, 0.0]
+        ));
+        assert!(!blocks_step(
+            origin,
+            next,
+            10.0,
+            [10.0 + reach + 1.0, 0.0, 0.0]
+        ));
+        assert!(!blocks_step(origin, next, 10.0, [10.0, reach + 1.0, 0.0]));
+        assert!(!blocks_step(
+            origin,
+            next,
+            10.0,
+            [10.0, 0.0, ACTOR_HEIGHT + 1.0]
+        ));
+    }
 }

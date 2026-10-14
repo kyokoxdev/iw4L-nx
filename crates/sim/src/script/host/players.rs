@@ -310,8 +310,9 @@ pub(crate) fn settle_deaths(world: &mut World) {
             continue;
         }
         if callback == KILLED {
-            let attacker = args.get(1).cloned().unwrap_or(Value::Undefined);
-            raise(world, victim.clone(), "death", vec![attacker]);
+            // `death` (attacker, means of death, weapon): SP scripts read all three.
+            let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Undefined);
+            raise(world, victim.clone(), "death", vec![arg(1), arg(3), arg(4)]);
         }
         if run_now(world, callback, victim, args, now).is_err() {
             return;
@@ -1673,6 +1674,12 @@ pub(crate) fn apply_player_links(world: &mut World) {
             .entities
             .get(&link.parent)
             .map_or(playerstate_iw4::ENTITYNUM_NONE, |entity| entity.number);
+        let (origin, blended_view) = super::controls::campaign::blend_link(
+            world,
+            client,
+            origin,
+            math_iw4::axis_to_angles(child_axis),
+        );
         let mut frame = FrameWorld::from_world(world);
         if link.view != LinkView::WeaponDelta {
             frame.set_origin(id, origin);
@@ -1699,7 +1706,7 @@ pub(crate) fn apply_player_links(world: &mut World) {
             };
         }
         match (link.view, link.clamp) {
-            (LinkView::Absolute, _) => view = math_iw4::axis_to_angles(child_axis),
+            (LinkView::Absolute, _) => view = blended_view,
             (_, Some([pitch_min, pitch_max, yaw_min, yaw_max])) => {
                 let pitch = angle_delta(view[0], parent[0]).clamp(pitch_min, pitch_max);
                 let yaw = angle_delta(view[1], parent[1]).clamp(yaw_min, yaw_max);

@@ -115,11 +115,21 @@ impl SimContent {
     }
 }
 
+#[derive(Clone, Default)]
+struct ScriptSoundLength(Option<Arc<dyn Fn(&str) -> Option<u32> + Send + Sync>>);
+
+impl std::fmt::Debug for ScriptSoundLength {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "ScriptSoundLength" } else { "None" })
+    }
+}
+
 #[derive(Debug)]
 struct ContentData {
     map: Arc<asset_core::MapContentDefinition>,
     weapons: Arc<crate::SimWeaponContent>,
     script_sound_aliases: Option<std::collections::BTreeMap<String, Option<bool>>>,
+    script_sound_length: ScriptSoundLength,
     clip_brushes: Vec<SimBrush>,
     clip_bsp: SimClipBsp,
     clip_mesh: SimClipMesh,
@@ -166,6 +176,7 @@ impl SimContentBuilder {
                 map: Default::default(),
                 weapons,
                 script_sound_aliases: Default::default(),
+                script_sound_length: Default::default(),
                 clip_brushes: Default::default(),
                 clip_bsp: Default::default(),
                 clip_mesh: Default::default(),
@@ -204,6 +215,15 @@ impl SimContentBuilder {
                 .map(|(name, looping)| (name.to_ascii_lowercase(), looping))
                 .collect()
         });
+    }
+
+    /// Alias name (lowercase) → play length in ms; see
+    /// `asset_audio::SoundCatalog::script_alias_length`.
+    pub fn set_script_sound_length(
+        &mut self,
+        length: Option<Arc<dyn Fn(&str) -> Option<u32> + Send + Sync>>,
+    ) {
+        self.data.script_sound_length = ScriptSoundLength(length);
     }
 
     pub fn finish(mut self) -> Arc<SimContent> {
@@ -320,6 +340,9 @@ impl SimContentBuilder {
 impl SimContent {
     pub(super) fn weapons(&self) -> &Arc<crate::SimWeaponContent> {
         &self.data.weapons
+    }
+    pub(super) fn script_sound_length(&self, name: &str) -> Option<u32> {
+        self.data.script_sound_length.0.as_ref()?(&name.to_ascii_lowercase())
     }
     pub(super) fn script_sound_aliases(
         &self,

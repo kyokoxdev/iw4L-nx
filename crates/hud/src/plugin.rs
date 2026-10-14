@@ -134,6 +134,7 @@ impl Plugin for HudPlugin {
                                 not(resource_exists::<frame::FrontendPending>)
                                     .and_then(not(resource_exists::<frame::IntroPlaying>)),
                             ),
+                            crate::menus::sync_campaign_pause,
                             crate::connection_notice::update.in_set(frame::InMatch),
                             hud_stage_close::<7>,
                         )

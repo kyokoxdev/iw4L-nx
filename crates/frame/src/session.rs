@@ -49,6 +49,11 @@ pub struct IntroPlaying;
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct LoadCinematicPlaying;
 
+/// The campaign pause menu is open: game time stops on both the server and
+/// client side, and world sound holds.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct GamePaused;
+
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiDraw(pub bool);
 

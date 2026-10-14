@@ -659,6 +659,12 @@ impl IwdSoundIndex {
         let (archive, entry) = self.sounds.get(&sound_key(relative))?;
         Some(read_pooled_entry(archive, entry, None))
     }
+
+    /// The first `limit` inflated bytes of a sound, for its header.
+    pub fn read_sound_header(&self, relative: &str, limit: usize) -> Option<Result<Vec<u8>, String>> {
+        let (archive, entry) = self.sounds.get(&sound_key(relative))?;
+        Some(read_pooled_entry(archive, entry, Some(limit)))
+    }
 }
 
 pub fn installation_revision(root: &Path) -> u64 {

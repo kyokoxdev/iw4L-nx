@@ -92,6 +92,29 @@ impl DerefMut for SimWorld {
 }
 
 impl SimWorld {
+    pub(crate) fn ecs(&self) -> &World {
+        &self.ecs
+    }
+
+    pub(crate) fn ecs_mut(&mut self) -> &mut World {
+        &mut self.ecs
+    }
+
+    /// The tick a restored campaign checkpoint continues from, once.
+    pub fn take_resume_tick(&mut self) -> Option<Tick> {
+        self.ecs
+            .resource_mut::<crate::script::RoundScript>()
+            .campaign
+            .resume_tick
+            .take()
+    }
+
+    /// This freshly loaded `level` resumed from its last checkpoint, when the
+    /// load is the restart after a campaign death or `missionfailed`.
+    pub fn restore_campaign_checkpoint(&self, level: &str) -> Option<SimWorld> {
+        crate::script::host::mission::restore_checkpoint(level, self)
+    }
+
     pub fn validate_entity_lifetimes(&self) -> Result<(), String> {
         crate::frame::validate_entity_payloads(&self.ecs)
     }
@@ -518,10 +541,12 @@ pub fn try_step(
 ) -> Result<crate::TickResult, crate::script::Fault> {
     // A refusal before the frame (no program, stale tick) is as terminal as a
     // script fault; keeping it on the runtime lets `take_script_fault` report it.
-    world.run(tick, input, msec, reason).inspect_err(|fault| {
+    let result = world.run(tick, input, msec, reason).inspect_err(|fault| {
         let mut runtime = world.ecs.resource_mut::<crate::script::RoundScript>();
         if runtime.fault.is_none() {
             runtime.fault = Some(fault.clone());
         }
-    })
+    });
+    crate::script::host::mission::take_save(world, tick);
+    result
 }

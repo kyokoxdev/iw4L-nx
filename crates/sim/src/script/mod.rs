@@ -21,7 +21,7 @@ pub(crate) use host::controls::{
 };
 pub use host::script_anim::{AnimLibrary, AnimTree, AnimTreeNode, ClipSource};
 pub use asset_core::PathNode;
-pub use host::actors::ActorNav;
+pub use host::actors::{ActorNav, Bounds};
 pub use host::entities::{
     KeyType, LevelData, StringTable, parse_entity_string, parse_radiant_keys,
 };

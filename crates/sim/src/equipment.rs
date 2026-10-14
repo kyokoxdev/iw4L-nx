@@ -88,6 +88,8 @@ pub(crate) enum WeaponNote {
     },
     Detonated {
         id: crate::ProjectileId,
+        owner: ClientId,
+        weapon: u32,
         origin: [f32; 3],
     },
     Stuck {
@@ -446,10 +448,21 @@ pub(crate) fn phase_offhand(
 
 pub(crate) fn predict_projectile(
     world: &FrameWorld,
-    mut projectile: ProjectileState,
+    projectile: ProjectileState,
     now: i32,
     duration_ms: i32,
 ) -> Option<[f32; 3]> {
+    predict_projectile_state(world, projectile, now, duration_ms).map(|p| p.origin)
+}
+
+/// [`predict_projectile`], keeping the whole state (velocity and trajectory
+/// after bounces) so a caller can step it on; a stick leaves it stationary.
+pub(crate) fn predict_projectile_state(
+    world: &FrameWorld,
+    mut projectile: ProjectileState,
+    now: i32,
+    duration_ms: i32,
+) -> Option<ProjectileState> {
     let facts = required_projectile_facts(world, projectile.weapon);
     let attached = world.missile_collision_models(projectile.id);
     let models: Vec<_> = world
@@ -478,7 +491,7 @@ pub(crate) fn predict_projectile(
     let mut time = now;
     while time < deadline {
         if projectile.pos.tr_type == TR_STATIONARY {
-            return Some(projectile.origin);
+            return Some(projectile);
         }
         let next = time
             .saturating_add(crate::MATCH_TICK_MS as i32)
@@ -516,7 +529,10 @@ pub(crate) fn predict_projectile(
                     || (facts.proj_impact_explode
                         && projectile.is_armed(facts.projectile_activate_dist))
                 {
-                    return Some(end);
+                    projectile.origin = end;
+                    projectile.pos.tr_type = TR_STATIONARY;
+                    projectile.pos.tr_base = end;
+                    return Some(projectile);
                 }
                 let surf_type = match collider {
                     ColliderId::World { surface_flags, .. }
@@ -543,7 +559,7 @@ pub(crate) fn predict_projectile(
         }
         time = next;
     }
-    Some(projectile.origin)
+    Some(projectile)
 }
 
 pub(crate) fn think_projectile(world: &mut FrameWorld, tick: Tick, entnum: i32) {
@@ -1313,6 +1329,8 @@ pub(crate) fn think_projectile(world: &mut FrameWorld, tick: Tick, entnum: i32) 
         );
         world.weapon_notes.push(WeaponNote::Detonated {
             id: info.projectile.id,
+            owner: info.projectile.owner,
+            weapon: info.projectile.weapon,
             origin: info.origin,
         });
         if !info.splash {

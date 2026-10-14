@@ -21,6 +21,7 @@ use crate::world::{
     inventory_add_weapon,
 };
 use crate::{ActionOutcome, ActionResult, TickEffects, TickResult};
+use entity_iw4::EntityEventKind;
 use playerstate_iw4::PlayerState;
 use playerstate_iw4::buttons;
 
@@ -875,11 +876,42 @@ fn emit_snapshot_events(world: &FrameWorld, snapshot: &Snapshot) {
 }
 
 fn harvest_predictable_events(world: &mut FrameWorld, _tick: Tick) {
-    world.for_each_player_mut(|_, ps| {
+    let held = world.old_buttons_mut().clone();
+    let mut noise = Vec::new();
+    world.for_each_player_mut(|client, ps| {
+        let quiet = ps.pm_flags & playerstate_iw4::pm_flags::CROUCH != 0
+            || held
+                .iter()
+                .any(|(id, cmd)| *id == client && cmd & buttons::ADS != 0);
         let mut cursor = ps.old_event_sequence;
-        consume_player_events(ps, &mut cursor, |_| {});
+        consume_player_events(ps, &mut cursor, |event| {
+            if let Some(kind) = ai_noise(EntityEventKind(event.event), quiet) {
+                noise.push((client, kind));
+            }
+        });
         ps.old_event_sequence = cursor;
     });
+    world.set_player_noise(noise);
+}
+
+/// SP AI event a player movement event raises: sprint steps
+/// `footstep_sprint`, walk steps `footstep_walk`; run steps, jumps and plain
+/// landings `footstep`, or `footstep_walk` while crouched or aiming down
+/// sights. Prone steps and pain landings raise none.
+fn ai_noise(event: EntityEventKind, quiet: bool) -> Option<&'static str> {
+    let loud = || if quiet { "footstep_walk" } else { "footstep" };
+    match event {
+        EntityEventKind::FOOTSTEP_SPRINT => Some("footstep_sprint"),
+        EntityEventKind::FOOTSTEP_WALK => Some("footstep_walk"),
+        EntityEventKind::FOOTSTEP_RUN | EntityEventKind::JUMP => Some(loud()),
+        EntityEventKind(kind)
+            if (EntityEventKind::LANDING_DEFAULT.0..=EntityEventKind::LANDING_SLUSH.0)
+                .contains(&kind) =>
+        {
+            Some(loud())
+        }
+        _ => None,
+    }
 }
 
 fn emit_attack_events(

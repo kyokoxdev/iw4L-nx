@@ -19,8 +19,30 @@ struct PathNav {
 }
 
 impl sim::script::ActorNav for PathNav {
-    fn route(&self, from: [f32; 3], to: [f32; 3]) -> Option<Vec<[f32; 3]>> {
-        let graph = &self.graph;
+    fn route(
+        &self,
+        from: [f32; 3],
+        to: [f32; 3],
+        blocked: &[sim::script::Bounds],
+    ) -> Option<Vec<[f32; 3]>> {
+        let pruned;
+        let graph = if blocked.is_empty() {
+            &self.graph
+        } else {
+            // ponytail: copies the graph per blocked route; keep a pruned copy
+            // per `disconnectpaths` change if routing shows in profiles.
+            let mut copy = self.graph.clone();
+            let nodes = &copy.nodes;
+            for (from, edges) in copy.adj.iter_mut().enumerate() {
+                edges.retain(|edge| {
+                    !blocked
+                        .iter()
+                        .any(|b| crosses(nodes[from], nodes[usize::from(edge.to)], b))
+                });
+            }
+            pruned = copy;
+            &pruned
+        };
         let start = nearest_within(graph, from, PATH_NODE_SNAP_IN)?;
         let goal = nearest_within(graph, to, PATH_NODE_SNAP_IN)?;
         let mut search = RouteSearch::begin(graph, &[(start, 0.0)], &[goal]);
@@ -41,6 +63,34 @@ impl sim::script::ActorNav for PathNav {
             .copied()
             .find(|&(start, _)| self.graph.nodes[start] == at)
     }
+}
+
+/// Height above the node floor a link is tested at (waist of a standing actor).
+const LINK_HEIGHT: f32 = 36.0;
+
+/// Whether the link from `a` to `b` passes through the box (slab test).
+fn crosses(a: [f32; 3], b: [f32; 3], (mins, maxs): &sim::script::Bounds) -> bool {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        let lift = if k == 2 { LINK_HEIGHT } else { 0.0 };
+        let (p, d) = (a[k] + lift, b[k] - a[k]);
+        if d.abs() < f32::EPSILON {
+            if p < mins[k] || p > maxs[k] {
+                return false;
+            }
+            continue;
+        }
+        let (mut near, mut far) = ((mins[k] - p) / d, (maxs[k] - p) / d);
+        if near > far {
+            std::mem::swap(&mut near, &mut far);
+        }
+        t0 = t0.max(near);
+        t1 = t1.min(far);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
 }
 
 fn key<'a>(node: &'a sim::script::PathNode, name: &str) -> Option<&'a str> {
@@ -148,6 +198,12 @@ mod tests {
         assert_eq!(traversals(&nodes), vec![(0, 1)]);
         let nav = path_nav(&nodes);
         assert_eq!(nav.traversal_at([0.0, 0.0, 0.0]), Some((0, 1)));
-        assert!(nav.route([0.0, 0.0, 0.0], [100.0, 0.0, 64.0]).is_some());
+        assert!(
+            nav.route([0.0, 0.0, 0.0], [100.0, 0.0, 64.0], &[])
+                .is_some()
+        );
+        let door = ([40.0, -10.0, 0.0], [60.0, 10.0, 128.0]);
+        assert!(crosses([0.0; 3], [100.0, 0.0, 0.0], &door));
+        assert!(!crosses([0.0, 50.0, 0.0], [100.0, 50.0, 0.0], &door));
     }
 }

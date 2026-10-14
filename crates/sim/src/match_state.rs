@@ -159,6 +159,9 @@ pub struct ScriptControls {
     pub usability_disabled: bool,
     pub linked: bool,
     pub switch_to: u32,
+    /// Campaign `allowstand`/`allowcrouch`/`allowprone`/`allowfire`/`allowmelee`:
+    /// what the player is refused (`script_player::campaign` bits).
+    pub denied: u8,
 }
 
 impl ClientMatchState {

@@ -211,6 +211,10 @@ impl AudioRuntime {
             .retain_epoch(epoch);
     }
 
+    pub fn set_match_paused(&self, paused: bool) {
+        self.shared.match_paused.store(paused, Ordering::Release);
+    }
+
     pub fn cancel_all(&self) {
         self.shared.cancelled.store(true, Ordering::Release);
         if let Some(worker) = &self.worker {
