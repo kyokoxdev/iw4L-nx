@@ -65,6 +65,39 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "disableinvulnerability", |world, receiver, _| {
         set(world, receiver, false, false)
     });
+    registry.register(
+        crate::script::Namespace::Function,
+        "isexplosivedamagemod",
+        |_, _, args| {
+            let explosive = matches!(
+                arg(args, 0)?,
+                Value::String(m) if matches!(
+                    &*m.to_string(),
+                    "MOD_EXPLOSIVE_BULLET"
+                        | "MOD_GRENADE"
+                        | "MOD_GRENADE_SPLASH"
+                        | "MOD_PROJECTILE"
+                        | "MOD_PROJECTILE_SPLASH"
+                        | "MOD_EXPLOSIVE"
+                )
+            );
+            Ok(Value::Int(explosive.into()))
+        },
+    );
+    registry.register(Method, "enablehealthshield", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let on = !matches!(arg(args, 0)?, Value::Int(0) | Value::Undefined);
+        let off = &mut world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .health_shield_off;
+        if on {
+            off.remove(&id);
+        } else {
+            off.insert(id);
+        }
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "enabledeathshield", |world, receiver, args| {
         let on = !matches!(arg(args, 0)?, Value::Int(0) | Value::Undefined);
         set(world, receiver, on, true)

@@ -4,6 +4,8 @@ use crate::script::{Arc, BTreeMap, Fault, Location, RoundScript, Value, VecDeque
 use crate::world::ClientId;
 use bevy_ecs::prelude::World;
 
+mod campaign;
+
 const CONNECT: &str = "maps/mp/gametypes/_callbacksetup::codecallback_playerconnect";
 const DISCONNECT: &str = "maps/mp/gametypes/_callbacksetup::codecallback_playerdisconnect";
 const DAMAGE: &str = "maps/mp/gametypes/_callbacksetup::codecallback_playerdamage";
@@ -49,6 +51,14 @@ pub(crate) fn player_damage(world: &mut World, tick: crate::Tick, hit: &crate::s
         .copied()
         .unwrap_or("none");
     let inflictor = damage_inflictor(world, hit).unwrap_or_else(|| attacker.clone());
+    if FrameWorld::from_world(world).bootstrap_ref().campaign {
+        let attacker = if hit.attacker.is_some() {
+            attacker
+        } else {
+            inflictor
+        };
+        return campaign::damage(world, tick, hit, attacker, Value::String(weapon.into()));
+    }
     let args = vec![
         inflictor,
         attacker,

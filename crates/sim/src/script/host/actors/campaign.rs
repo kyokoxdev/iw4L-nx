@@ -301,8 +301,10 @@ struct Cover {
     min_enemy_dist: f32,
     /// Spawnflag the cover search favours.
     priority: bool,
-    /// Dangerous for the searching actor's team.
+    /// Recently marked dangerous for the searching actor's team.
     dangerous: bool,
+    /// An ally searching, and the node is out of a steady player's line of fire.
+    clear_of_player: bool,
     /// Other known hostiles past `engagemindist` it covers against.
     other_threats: u8,
 }
@@ -352,6 +354,7 @@ const SCORE_VISIBILITY: f32 = 8.0;
 const SCORE_NODE_ANGLE: f32 = 4.0;
 const SCORE_PRIORITY: f32 = 8.0;
 const SCORE_DANGEROUS: f32 = 32.0;
+const SCORE_PLAYER_LOS: f32 = 8.0;
 /// Beyond this a cover's distance from the actor earns nothing.
 const SCORE_FAR: f32 = 1300.0;
 /// Covers nearer the actor than this are neither toward nor away from its enemy.
@@ -397,6 +400,9 @@ fn cover_score(cover: &Cover, scoring: &Scoring, sees_enemy: bool) -> f32 {
     }
     if cover.dangerous {
         score -= SCORE_DANGEROUS;
+    }
+    if cover.clear_of_player {
+        score += SCORE_PLAYER_LOS;
     }
     score += SCORE_NODE_ANGLE * f32::from(cover.other_threats);
     if sees_enemy {
@@ -479,7 +485,13 @@ fn find_cover(world: &mut World, id: u64, area: &Area, skip: Option<u64>) -> Opt
             continue;
         }
         if let Some(mut cover) = cover_at(&mut runtime, node).filter(|c| inside(area, c.origin)) {
-            cover.dangerous = node_dangerous(&runtime, node, &team, now);
+            cover.dangerous = node_marked(&runtime, node, &team, now);
+            cover.clear_of_player = team == Value::string("allies")
+                && runtime
+                    .campaign
+                    .node_los
+                    .get(&node)
+                    .is_none_or(|until| *until < now);
             let covered = others
                 .iter()
                 .filter(|at| {
@@ -531,8 +543,123 @@ fn cover_at(runtime: &mut RoundScript, node: u64) -> Option<Cover> {
         min_enemy_dist,
         priority: spawnflags & PRIORITY_COVER != 0,
         dangerous: false,
+        clear_of_player: false,
         other_threats: 0,
     })
+}
+
+/// A player holding still marks the path nodes in its line of fire, and
+/// allies' cover search prefers the others.
+const LOS_HALF_WIDTH: f32 = 25.0;
+const LOS_RANGE: f32 = 150.0;
+/// The aim counts as held within this cosine (10 degrees) of where it rests.
+const LOS_STEADY_COS: f32 = 0.9848;
+const LOS_PERIOD_MS: i64 = 750;
+const LOS_MARK_MS: i64 = 1500;
+/// Height around the aim line's midpoint the marked nodes are taken from.
+const LOS_HEIGHT: f32 = 80.0;
+
+/// Where a player rests its aim: eased origin and planar view direction, and
+/// when it last marked nodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct PlayerLos {
+    origin: [f32; 3],
+    dir: [f32; 2],
+    marked_ms: i64,
+}
+
+impl PlayerLos {
+    /// True when the aim has held long enough to mark again.
+    fn steady(&mut self, origin: [f32; 3], dir: [f32; 2], now: i64) -> bool {
+        let moved = (origin[0] - self.origin[0]).hypot(origin[1] - self.origin[1]);
+        let turned = self.dir[0] * dir[0] + self.dir[1] * dir[1];
+        if moved > LOS_HALF_WIDTH || turned < LOS_STEADY_COS {
+            *self = PlayerLos {
+                origin,
+                dir,
+                marked_ms: now,
+            };
+            return false;
+        }
+        for (eased, to) in self.origin.iter_mut().zip(origin) {
+            *eased += (to - *eased) * 0.25;
+        }
+        for (eased, to) in self.dir.iter_mut().zip(dir) {
+            *eased += (to - *eased) * 0.25;
+        }
+        if now - self.marked_ms < LOS_PERIOD_MS {
+            return false;
+        }
+        self.marked_ms = now;
+        true
+    }
+}
+
+/// Planar distance from `p` to the segment `a`..`b`.
+fn segment_distance(p: [f32; 3], a: [f32; 3], b: [f32; 3]) -> f32 {
+    let (p, a, b) = (
+        glam::Vec2::new(p[0], p[1]),
+        glam::Vec2::new(a[0], a[1]),
+        glam::Vec2::new(b[0], b[1]),
+    );
+    let ab = b - a;
+    let t = if ab.length_squared() > 0.0 {
+        ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
+}
+
+// ponytail: marks only; allies already holding a marked node are not moved off it.
+pub(super) fn mark_player_los(world: &mut World) {
+    let now = super::super::players::now_ms(world);
+    let clients: Vec<u32> = world
+        .resource::<RoundScript>()
+        .players
+        .keys()
+        .copied()
+        .collect();
+    for client in clients {
+        let Some((origin, height, angles)) = crate::frame::FrameWorld::from_world(world)
+            .player(crate::world::ClientId(client))
+            .map(|ps| (ps.origin, ps.view_height_current, ps.viewangles))
+        else {
+            continue;
+        };
+        let yaw = angles[1].to_radians();
+        let steady = world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .player_los
+            .entry(client)
+            .or_default()
+            .steady(origin, [yaw.cos(), yaw.sin()], now);
+        if !steady {
+            continue;
+        }
+        let eye = [origin[0], origin[1], origin[2] + height];
+        let (forward, _, _) = math_iw4::angle_vectors(angles);
+        let end: [f32; 3] = std::array::from_fn(|k| eye[k] + forward[k] * LOS_RANGE);
+        let trace = super::super::presence::settled(world).trace_world(
+            eye,
+            end,
+            [0.0; 3],
+            [0.0; 3],
+            crate::bullet_collision::MASK_SHOT,
+        );
+        let end: [f32; 3] = std::array::from_fn(|k| eye[k] + (end[k] - eye[k]) * trace.fraction);
+        let mid_z = (eye[2] + end[2]) * 0.5;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let campaign = &mut runtime.campaign;
+        for (node, at) in campaign.nodes.iter().zip(&campaign.node_origins) {
+            if (at[2] - mid_z).abs() <= LOS_HEIGHT
+                && segment_distance(*at, eye, end) <= LOS_HALF_WIDTH
+            {
+                campaign.node_los.insert(*node, now + LOS_MARK_MS);
+            }
+        }
+    }
 }
 
 /// A dangerous-node mark lasts this long; a node is dangerous only past it,
@@ -565,6 +692,17 @@ fn dangerous_until(until: Option<i64>, now: i64) -> bool {
     until.is_some_and(|until| until > now + DANGER_MARK_MS)
 }
 
+/// The cover search's test: any mark still running.
+fn node_marked(runtime: &RoundScript, node: u64, team: &Value, now: i64) -> bool {
+    danger_team(team).is_some_and(|team| {
+        runtime
+            .campaign
+            .node_danger
+            .get(&(node, team))
+            .is_some_and(|until| *until > now)
+    })
+}
+
 fn node_dangerous(runtime: &RoundScript, node: u64, team: &Value, now: i64) -> bool {
     danger_team(team).is_some_and(|team| {
         dangerous_until(
@@ -590,12 +728,12 @@ pub(super) fn mark_death_danger(world: &mut World, id: u64) {
         return;
     };
     let campaign = &mut runtime.campaign;
-    let links = campaign.node_links.get(index).cloned().unwrap_or_default();
-    let marked = std::iter::once(index).chain(links.into_iter().map(usize::from));
-    for node in marked
+    let links = campaign.node_links.get(index).into_iter().flatten();
+    let marked: Vec<u64> = std::iter::once(index)
+        .chain(links.map(|k| usize::from(*k)))
         .filter_map(|k| campaign.nodes.get(k).copied())
-        .collect::<Vec<_>>()
-    {
+        .collect();
+    for node in marked {
         let until = campaign
             .node_danger
             .entry((node, team.clone()))
@@ -895,8 +1033,26 @@ mod tests {
             min_enemy_dist,
             priority: false,
             dangerous: false,
+            clear_of_player: false,
             other_threats: 0,
         }
+    }
+
+    /// The aim marks after holding 750 ms, again 750 ms later; moving resets it.
+    #[test]
+    fn player_los_marks_a_held_aim() {
+        let mut los = PlayerLos::default();
+        assert!(!los.steady([0.0; 3], [1.0, 0.0], 0));
+        assert!(!los.steady([5.0, 0.0, 0.0], [1.0, 0.0], 500));
+        assert!(los.steady([5.0, 0.0, 0.0], [1.0, 0.0], 800));
+        assert!(!los.steady([5.0, 0.0, 0.0], [1.0, 0.0], 1000));
+        assert!(los.steady([5.0, 0.0, 0.0], [1.0, 0.0], 1600));
+        assert!(!los.steady([100.0, 0.0, 0.0], [1.0, 0.0], 3000));
+        assert!(!los.steady([100.0, 0.0, 0.0], [0.0, 1.0], 4000));
+        assert!(
+            segment_distance([50.0, 20.0, 0.0], [0.0; 3], [150.0, 0.0, 60.0]) <= LOS_HALF_WIDTH
+        );
+        assert!(segment_distance([200.0, 0.0, 0.0], [0.0; 3], [150.0, 0.0, 0.0]) > LOS_HALF_WIDTH);
     }
 
     /// One mark is not dangerous; a second inside its 15 s makes it so for 60 s.

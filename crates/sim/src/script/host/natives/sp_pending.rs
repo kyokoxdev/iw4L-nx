@@ -96,7 +96,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         // ponytail: every wheel on dirt; trace the surface under the wheel tag for tread fx.
         Method "getwheelsurface" => Dirt;
         Method "hidepart_allinstances" => Undefined;
-        Function "isexplosivedamagemod" => Zero;
         Method "joltbody" => Undefined;
         Method "linktoblendtotag" => Undefined;
         Function "physicsjitter" => Undefined;
@@ -139,7 +138,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "clearfixednodesafevolume" => Undefined;
         Method "deactivateeq" => Undefined;
         Method "dontinterpolate" => Undefined;
-        Method "enablehealthshield" => Undefined;
         Method "eqoff" => Undefined;
         Method "eqon" => Undefined;
         Method "getcentroid" => Origin;
@@ -150,7 +148,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "giveachievement" => Undefined;
         Method "laserforceoff" => Undefined;
         Method "laserforceon" => Undefined;
-        Method "makeentitysentient" => Undefined;
         Method "makefakeai" => Undefined;
         Method "painvisionoff" => Undefined;
         Method "painvisionon" => Undefined;
@@ -204,7 +201,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "dontcastshadows" => Undefined;
         Method "enablebreaching" => Undefined;
         Method "forceviewmodelanimation" => Undefined;
-        Method "freeentitysentient" => Undefined;
         Method "hideonclient" => Undefined;
         Method "hideviewmodel" => Undefined;
         Method "invisiblenotsolid" => Undefined;

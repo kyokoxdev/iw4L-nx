@@ -97,6 +97,10 @@ pub(crate) struct CampaignState {
     pub(crate) link_blends: BTreeMap<u32, ([f32; 3], [f32; 3], i64, i64)>,
     /// Objects `enableinvulnerability` took out of damage.
     pub(crate) invulnerable: std::collections::BTreeSet<u64>,
+    /// Players `enablehealthshield(false)` took the health shield from.
+    pub(crate) health_shield_off: std::collections::BTreeSet<u64>,
+    /// Running health shield windows: the level time (ms) each ends.
+    pub(crate) health_shield: BTreeMap<u64, i64>,
     /// Players `enabledeathshield` keeps alive at 1 health.
     pub(crate) death_shield: std::collections::BTreeSet<u64>,
     pub(crate) anim_library: Arc<super::super::host::script_anim::AnimLibrary>,
@@ -110,6 +114,12 @@ pub(crate) struct CampaignState {
     pub(crate) node_origins: Vec<[f32; 3]>,
     /// Their linked node indices, in the same order.
     pub(crate) node_links: Vec<Vec<u16>>,
+    /// `makeentitysentient`: non-AI entities actors fight, with their team.
+    pub(crate) sentients: BTreeMap<u64, Value>,
+    /// Where each player holds its aim (`actors::PlayerLos`), by client.
+    pub(crate) player_los: BTreeMap<u32, super::super::host::actors::PlayerLos>,
+    /// Nodes in a steady player's line of fire: the level time (ms) it lapses.
+    pub(crate) node_los: BTreeMap<u64, i64>,
     /// Dangerous-node marks: level time (ms) per `(node, team)`.
     pub(crate) node_danger: BTreeMap<(u64, String), i64>,
     /// SP actor goals (`setgoalpos`/`node`/`entity`).

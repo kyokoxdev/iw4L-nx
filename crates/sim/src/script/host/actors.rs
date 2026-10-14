@@ -15,7 +15,7 @@ mod events;
 pub(crate) use events::projectile_impact;
 mod grenades;
 mod prone;
-pub(crate) use campaign::{BadPlace, ThreatBias};
+pub(crate) use campaign::{BadPlace, PlayerLos, ThreatBias};
 
 /// Spawner flag 1: the entity spawns AI instead of being one.
 const SPAWNER: i32 = 1;
@@ -331,6 +331,7 @@ pub(crate) fn advance(world: &mut World) {
     events::raise_tick_events(world);
     suppress(world);
     grenades::advance(world);
+    campaign::mark_player_los(world);
     look(world);
     run_scripts(world);
     move_actors(world);
@@ -392,6 +393,18 @@ fn combatants(world: &mut World) -> Vec<(u64, Value)> {
     for id in out {
         if !truthy(&runtime.object_field(id, "ignoreme")) {
             found.push((id, runtime.object_field(id, "team")));
+        }
+    }
+    let sentients: Vec<(u64, Value)> = runtime
+        .campaign
+        .sentients
+        .iter()
+        .filter(|(id, _)| runtime.entities.contains_key(id))
+        .map(|(id, team)| (*id, team.clone()))
+        .collect();
+    for (id, team) in sentients {
+        if !truthy(&runtime.object_field(id, "ignoreme")) {
+            found.push((id, team));
         }
     }
     found
@@ -3231,11 +3244,37 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let team = world.resource_mut::<RoundScript>().object_field(id, "team");
         Ok(Value::Int((team == Value::string("axis")).into()))
     });
+    // `makeentitysentient(team, [expendable])`: actors fight the entity as one
+    // of `team`.
+    registry.register(Method, "makeentitysentient", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let team = super::args::string(args, 0)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let actor = runtime
+            .entities
+            .get(&id)
+            .is_some_and(|e| e.kind == EntityKind::Actor);
+        if actor || runtime.player_client(id).is_some() {
+            return Err("makeentitysentient: not for an AI or a player".into());
+        }
+        runtime.campaign.sentients.insert(id, Value::string(&team));
+        Ok(Value::Int(1))
+    });
+    registry.register(Method, "freeentitysentient", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world
+            .resource_mut::<RoundScript>()
+            .campaign
+            .sentients
+            .remove(&id);
+        Ok(Value::Undefined)
+    });
     registry.register(Function, "issentient", |world, _, args| {
         let sentient = match super::args::arg(args, 0)? {
             Value::Object(id) => {
                 let runtime = world.resource::<RoundScript>();
                 runtime.player_client(*id).is_some()
+                    || runtime.campaign.sentients.contains_key(id)
                     || runtime
                         .entities
                         .get(id)
