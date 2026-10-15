@@ -205,6 +205,12 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `animscripts/<aiScript>::main` on the gunner, which fires it
    (`shootturret`); one without fires on its own, its shots scattered inside the `setaispread` cone. The gunner is not placed on
    the turret's tag. `startfiring`/`stopfiring` make a turret shoot where it aims at its weapon's fire rate, with or without a gunner.
+   Dogs (aitype `type` "dog") run `animscripts/dog/dog_<script>` in place of each
+   animscript (`init`, `move`, `stop`, `combat`, `pain`, `death`, `scripted`); they
+   fight (`dog_combat`) only inside `meleeattackdist` + 15 of their enemy and, while
+   that enemy is inside `pathenemyfightdist` or their goal area, route to it instead
+   of the goal. `getaispeciesarray` filters on it. `getcorpsearray` returns the kept
+   corpses, `clearallcorpses` removes them. `getgroundposition` sweeps its box down.
 7. Player: `notifyoncommand` binds console commands (campaign set in
    `controls/campaign.rs`). Use triggers reach 72 units (retail SP `player_useRadius`). Tagged links ride the tag in campaign, so rig scenes
    place the player; `playerlinktoblend` eases onto the tag over its blend time, `lerpviewangleclamp`

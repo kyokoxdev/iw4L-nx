@@ -1595,12 +1595,26 @@ fn final_accuracy(
 }
 
 /// The animscript for the actor's situation: `move` on a route, its cover
-/// script at a claimed cover node, `combat` with an enemy, else `stop`.
+/// script at a claimed cover node, `combat` with an enemy, else `stop`. A dog
+/// fights only inside its bite reach.
 fn desired_script(world: &mut World, id: u64) -> String {
     if let Some(script) = super::turrets::campaign::gunner_script(world, id) {
         return script;
     }
     let mut runtime = world.resource_mut::<RoundScript>();
+    if is_dog(&mut runtime, id) {
+        if dog_bite_target(&mut runtime, id).is_some_and(|(at, reach)| {
+            matches!(runtime.object_field(id, "origin"), Value::Vector(o) if planar(o, at) <= reach)
+        }) {
+            return "combat".into();
+        }
+        let moving = runtime
+            .campaign
+            .actor_goals
+            .get(&id)
+            .is_some_and(|goal| !goal.route.is_empty());
+        return if moving { "move" } else { "stop" }.into();
+    }
     if runtime
         .campaign
         .actor_goals
@@ -1634,6 +1648,59 @@ fn desired_script(world: &mut World, id: u64) -> String {
         return "combat".into();
     }
     "stop".into()
+}
+
+fn is_dog(runtime: &mut RoundScript, id: u64) -> bool {
+    matches!(runtime.object_field(id, "type"), Value::String(kind) if &*kind == "dog")
+}
+
+/// `animscripts/<script>::<function>`; dogs run their own set under
+/// `animscripts/dog/dog_<script>`.
+fn script_entry(world: &mut World, id: u64, script: &str, function: &str) -> String {
+    if is_dog(&mut world.resource_mut::<RoundScript>(), id) {
+        format!("animscripts/dog/dog_{script}::{function}")
+    } else {
+        format!("animscripts/{script}::{function}")
+    }
+}
+
+/// A dog's live enemy and how near it must be to bite (`meleeattackdist` + 15);
+/// none before `meleeattackdist` is set.
+fn dog_bite_target(runtime: &mut RoundScript, id: u64) -> Option<([f32; 3], f32)> {
+    let Value::Object(enemy) = runtime.object_field(id, "enemy") else {
+        return None;
+    };
+    if !runtime.live(&enemy) {
+        return None;
+    }
+    let dist = number(runtime.object_field(id, "meleeattackdist")).filter(|d| *d > 0.0)?;
+    match runtime.object_field(enemy, "origin") {
+        Value::Vector(at) => Some((at, dist + DOG_REACH_SLACK)),
+        _ => None,
+    }
+}
+
+/// Where a dog runs instead of its goal: its enemy, while that enemy is inside
+/// `pathenemyfightdist` of it or inside its goal area.
+// ponytail: dogs only, aimed at where the enemy stands; human actors ignore
+// `pathenemyfightdist`/`pathenemylookahead`, and a moving enemy is not led.
+fn dog_chase(
+    runtime: &mut RoundScript,
+    id: u64,
+    origin: [f32; 3],
+    goal_pos: [f32; 3],
+    goal_radius: f32,
+) -> Option<([f32; 3], f32)> {
+    if !is_dog(runtime, id) {
+        return None;
+    }
+    let (at, reach) = dog_bite_target(runtime, id)?;
+    let fight = number(runtime.object_field(id, "pathenemyfightdist")).unwrap_or(0.0);
+    (planar(origin, at) <= fight || planar(goal_pos, at) <= goal_radius).then_some((at, reach))
+}
+
+fn planar(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
 fn cover_script(kind: &str) -> Option<&'static str> {
@@ -1677,7 +1744,7 @@ fn switch(world: &mut World, id: u64, brain: &mut ActorBrain, script: &str, star
     }
     if !old.is_empty() {
         crate::script::runtime::raise(world, receiver.clone(), "killanimscript", Vec::new());
-        let end = format!("animscripts/{old}::end_script");
+        let end = script_entry(world, id, &old, "end_script");
         if has_entry(world, &end) {
             let now = super::players::now_ms(world);
             let _ = crate::script::runtime::run_now(world, &end, receiver.clone(), Vec::new(), now);
@@ -1721,7 +1788,7 @@ fn store(world: &mut World, id: u64, brain: ActorBrain) {
 
 fn switch_to(world: &mut World, id: u64, script: &str, hold: Option<Hold>) {
     let mut brain = brain(world, id);
-    let entry = format!("animscripts/{script}::main");
+    let entry = script_entry(world, id, script, "main");
     switch(world, id, &mut brain, script, Start::Entry(&entry));
     brain.hold = hold;
     store(world, id, brain);
@@ -1798,13 +1865,20 @@ fn run_scripts(world: &mut World) {
             let desired = campaign::traverse_script(world, &mut brain)
                 .unwrap_or_else(|| desired_script(world, id));
             if *brain.script != *desired {
-                let entry = format!("animscripts/{desired}::main");
+                let entry = if desired.starts_with("traverse/") {
+                    format!("animscripts/{desired}::main")
+                } else {
+                    script_entry(world, id, &desired, "main")
+                };
                 switch(world, id, &mut brain, &desired, Start::Entry(&entry));
             }
         }
         store(world, id, brain);
     }
 }
+
+/// Bite reach beyond `meleeattackdist`.
+const DOG_REACH_SLACK: f32 = 15.0;
 
 /// Dead actors kept in the world (`ai_corpseCount`); older bodies are removed.
 const MAX_CORPSES: usize = 5;
@@ -1941,6 +2015,8 @@ fn move_actors(world: &mut World) {
                 number(runtime.object_field(id, "goalradius")).unwrap_or(DEFAULT_GOAL_RADIUS);
             let height =
                 number(runtime.object_field(id, "goalheight")).unwrap_or(DEFAULT_GOAL_HEIGHT);
+            let chase = dog_chase(&mut runtime, id, origin, goal_pos, radius);
+            let (goal_pos, radius) = chase.unwrap_or((goal_pos, radius));
             let team = runtime.object_field(id, "team");
             let avoid = campaign::badplaces_for(&runtime, &team, now);
             let goal = runtime.campaign.actor_goals.get_mut(&id).unwrap();
@@ -1952,7 +2028,7 @@ fn move_actors(world: &mut World) {
             {
                 goal.stepping = false;
                 goal.route.clear();
-                if !goal.settled {
+                if chase.is_none() && !goal.settled {
                     goal.settled = true;
                     goal.routed_to = Some(goal_pos);
                     notes.push((id, "goal"));
@@ -2451,11 +2527,11 @@ fn spawn_placed_actors(world: &mut World) {
         world
             .resource_mut::<RoundScript>()
             .set_object_field(id, "targetname", targetname);
-        const INIT: &str = "animscripts/init::main";
-        if has_entry(world, INIT) {
+        let init = script_entry(world, id, "init", "main");
+        if has_entry(world, &init) {
             let now = super::players::now_ms(world);
             let _ =
-                crate::script::runtime::run_now(world, INIT, Value::Object(id), Vec::new(), now);
+                crate::script::runtime::run_now(world, &init, Value::Object(id), Vec::new(), now);
         }
         world.resource_mut::<RoundScript>().delete_entity(placed);
     }
@@ -2523,11 +2599,11 @@ fn spawn_actor(world: &mut World, receiver: &Value) -> Result<Value, String> {
         .resource_mut::<RoundScript>()
         .set_object_field(spawner, "count", Value::Int(count - 1));
     let id = spawn_from(world, spawner, true)?;
-    const INIT: &str = "animscripts/init::main";
-    if has_entry(world, INIT) {
+    let init = script_entry(world, id, "init", "main");
+    if has_entry(world, &init) {
         let now = super::players::now_ms(world);
-        crate::script::runtime::run_now(world, INIT, Value::Object(id), Vec::new(), now)
-            .map_err(|fault| format!("{INIT}: {fault:?}"))?;
+        crate::script::runtime::run_now(world, &init, Value::Object(id), Vec::new(), now)
+            .map_err(|fault| format!("{init}: {fault:?}"))?;
     }
     let guy = Value::Object(id);
     crate::script::runtime::raise(world, Value::Object(spawner), "spawned", vec![guy.clone()]);
@@ -2667,14 +2743,50 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let ids = actors(world, args);
         new_array(world, ids)
     });
-    // ponytail: species ignored (every IW4 aitype here is "human"); filter on
-    // `type` once dogs spawn.
     registry.register(Function, "getaispeciesarray", |world, _, args| {
-        let ids = actors(world, &args[..args.len().min(1)]);
+        let mut ids = actors(world, &args[..args.len().min(1)]);
+        let species = match args.get(1) {
+            Some(Value::String(species)) => species.to_string(),
+            _ => "all".into(),
+        };
+        if species != "all" {
+            if species != "human" && species != "dog" {
+                return Err(format!(
+                    "unknown species '{species}' (should be human, dog, or all)"
+                ));
+            }
+            let mut runtime = world.resource_mut::<RoundScript>();
+            ids.retain(|id| match id {
+                Value::Object(id) => is_dog(&mut runtime, *id) == (species == "dog"),
+                _ => false,
+            });
+        }
         new_array(world, ids)
     });
     registry.register(Function, "getaicount", |world, _, args| {
         Ok(Value::Int(actors(world, args).len() as i32))
+    });
+    // Dead actors still in the world (the `ai_corpseCount` ring), oldest first.
+    registry.register(Function, "getcorpsearray", |world, _, _| {
+        let runtime = world.resource::<RoundScript>();
+        let ids = runtime
+            .campaign
+            .corpses
+            .iter()
+            .filter(|id| runtime.entities.contains_key(id))
+            .map(|id| Value::Object(*id))
+            .collect();
+        new_array(world, ids)
+    });
+    registry.register(Function, "clearallcorpses", |world, _, _| {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let ids: Vec<u64> = runtime.campaign.corpses.drain(..).collect();
+        for id in ids {
+            if runtime.entities.contains_key(&id) {
+                runtime.request_delete(id);
+            }
+        }
+        Ok(Value::Undefined)
     });
     registry.register(Method, "forceteleport", |world, receiver, args| {
         let id = actor(world, receiver)?;
@@ -2738,13 +2850,13 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let Ok(id) = actor(world, receiver) else {
             return super::script_anim::scripted_native(world, receiver, args);
         };
-        const INIT: &str = "animscripts/scripted::init";
-        if !has_entry(world, INIT) {
+        let init = script_entry(world, id, "scripted", "init");
+        if !has_entry(world, &init) {
             return super::script_anim::scripted_native(world, receiver, args);
         }
         let now = super::players::now_ms(world);
-        crate::script::runtime::run_now(world, INIT, receiver.clone(), args.to_vec(), now)
-            .map_err(|fault| format!("{INIT}: {fault:?}"))?;
+        crate::script::runtime::run_now(world, &init, receiver.clone(), args.to_vec(), now)
+            .map_err(|fault| format!("{init}: {fault:?}"))?;
         if let Some(anim) = world
             .resource_mut::<RoundScript>()
             .entities

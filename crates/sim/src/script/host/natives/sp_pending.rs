@@ -10,7 +10,6 @@ enum Stub {
     Undefined,
     Zero,
     One,
-    EmptyArray,
     ZeroVector,
     EmptyString,
     /// The surface name `getwheelsurface` answers.
@@ -19,8 +18,6 @@ enum Stub {
     Unbound,
     /// The receiver's origin.
     Origin,
-    /// An argument passed through (`getstartorigin` returns its origin).
-    Arg(usize),
 }
 
 fn pending(
@@ -28,7 +25,6 @@ fn pending(
     name: &'static str,
     default: Stub,
     receiver: &Value,
-    args: &[Value],
 ) -> Result<Value, String> {
     let calls = {
         let mut runtime = world.resource_mut::<RoundScript>();
@@ -43,7 +39,6 @@ fn pending(
         Stub::Undefined => Value::Undefined,
         Stub::Zero => Value::Int(0),
         Stub::One => Value::Int(1),
-        Stub::EmptyArray => return new_array(world, Vec::new()),
         Stub::ZeroVector => Value::Vector([0.0; 3]),
         Stub::EmptyString => Value::string(""),
         Stub::Dirt => Value::string("dirt"),
@@ -66,14 +61,13 @@ fn pending(
             Value::Object(id) => entity_field(world, *id, "origin"),
             _ => Value::Undefined,
         },
-        Stub::Arg(index) => args.get(index).cloned().unwrap_or(Value::Undefined),
     })
 }
 
 macro_rules! stubs {
     ($registry:ident; $($namespace:ident $name:literal => $default:expr;)*) => {
-        $($registry.register(Namespace::$namespace, $name, |world, receiver, args| {
-            pending(world, $name, $default, receiver, args)
+        $($registry.register(Namespace::$namespace, $name, |world, receiver, _| {
+            pending(world, $name, $default, receiver)
         });)*
     };
 }
@@ -111,7 +105,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "badplace_arc" => Undefined;
         Function "freeentitysentient" => Undefined;
         Function "getcommandfromkey" => EmptyString;
-        Function "getcorpsearray" => EmptyArray;
         Function "getkeybinding" => Unbound;
         Function "getweaponclipmodel" => EmptyString;
         Function "issavesuccessful" => One;
@@ -165,7 +158,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "uploadscore" => Undefined;
         Method "uploadtime" => Undefined;
         Function "bullettracer" => Undefined;
-        Function "clearallcorpses" => Undefined;
         Function "disableforcedsunshadows" => Undefined;
         Function "disableouterspacemodellighting" => Undefined;
         Function "enableforcednosunshadows" => Undefined;
@@ -207,7 +199,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "stoplookat" => Undefined;
         // MP-catalog names other campaign levels reach with no native yet.
         Function "deleteglass" => Undefined;
-        Function "getgroundposition" => Arg(0);
         Method "hideallparts" => Undefined;
         Function "physicsjolt" => Undefined;
         Method "setautorotationdelay" => Undefined;

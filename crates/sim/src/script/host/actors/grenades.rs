@@ -196,9 +196,10 @@ fn notice(world: &mut World, id: u64, dangers: &[Danger]) {
     if distance(origin, danger.at) >= safe {
         return;
     }
+    let throw_back = super::script_entry(world, id, "grenade_return_throw", "main");
     if distance(origin, danger.at) <= THROWBACK_DIST
         && !no_return
-        && super::has_entry(world, "animscripts/grenade_return_throw::main")
+        && super::has_entry(world, &throw_back)
     {
         if danger.due - super::super::players::now_ms(world) < FUSE_SHORT_MS {
             delay(world, danger, FUSE_GRACE_MS);
@@ -212,7 +213,8 @@ fn notice(world: &mut World, id: u64, dangers: &[Danger]) {
     if super::campaign::covered_from(world, id, danger.at) {
         return;
     }
-    if !flee(world, id, origin, danger.at, safe) {
+    let cower = super::script_entry(world, id, "grenade_cower", "main");
+    if !flee(world, id, origin, danger.at, safe) && super::has_entry(world, &cower) {
         super::switch_to(world, id, "grenade_cower", Some(Hold::Custom));
     }
 }

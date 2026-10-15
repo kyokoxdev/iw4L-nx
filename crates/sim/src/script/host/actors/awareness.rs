@@ -556,6 +556,26 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         }
         Ok(Value::Vector(trace.endpos))
     });
+    // `getgroundposition(pos, radius, [down 1000], [up max(radius, 64)])`: where a
+    // box `radius` wide and `2 * radius` tall, swept from `up` above to `down`
+    // below `pos`, comes to rest.
+    registry.register(Namespace::Function, "getgroundposition", |world, _, args| {
+        let at = super::super::args::vector(args, 0)?;
+        let radius = float(args, 1)?;
+        let down = if args.len() > 2 { float(args, 2)? } else { 1000.0 };
+        let up = if args.len() > 3 { float(args, 3)? } else { radius.max(64.0) };
+        let trace = super::super::presence::settled(world).trace_world(
+            [at[0], at[1], at[2] + up],
+            [at[0], at[1], at[2] - down],
+            [-radius, -radius, 0.0],
+            [radius, radius, 2.0 * radius],
+            crate::bullet_collision::MASK_PLAYER_SOLID,
+        );
+        if trace.startsolid != 0 {
+            return Err("GetGroundPosition: check starts in solid".into());
+        }
+        Ok(Value::Vector(trace.endpos))
+    });
     registry.register(
         Method,
         "checkcoverexitposwithpath",
