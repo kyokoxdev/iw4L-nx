@@ -71,8 +71,8 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    (`game["weaponstates"]`) only for dcemp → dc_whitehouse and af_caves →
    af_chase, every other mission takes its own loadout. A menu start of
    another level drops it.
-   The bootstrap kind is still `FreeForAll` internally (campaign is
-   `MatchBootstrap::campaign`).
+   The bootstrap kind is `GameModeKind::Campaign` (no teams, no team spawns;
+   the player is placed by `MatchBootstrap::campaign`).
 3. Frontend — done. `iw4l_select` tints its tiles (Special Ops blue,
    Campaign green, Multiplayer yellow) and shows the focused mode's soldier
    art (`mw2_main_{co,sp,mp}_image`) behind them (`ui_iw4l_focus`). The

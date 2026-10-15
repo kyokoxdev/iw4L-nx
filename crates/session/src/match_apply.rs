@@ -1862,7 +1862,11 @@ fn install_clip_and_player(
         classes,
         bot_classes,
         seed: 0,
-        kind,
+        kind: if asset_transport::campaign_zone_set() {
+            gamemode_iw4::GameModeKind::Campaign
+        } else {
+            kind
+        },
         score_limit: std::env::var("IW4L_SCORE_LIMIT")
             .ok()
             .and_then(|s| s.parse().ok())
