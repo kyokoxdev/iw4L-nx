@@ -128,6 +128,32 @@ pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
     registry.register(Method, "setplayerspread", |world, receiver, args| {
         set_spread(world, receiver, args, PLAYER_SPREAD)
     });
+    // `setsuppressiontime(seconds)`: how long the turret keeps firing at
+    // where a target went out of sight.
+    registry.register(Method, "setsuppressiontime", |world, receiver, args| {
+        let object = turret_object(world, receiver)?;
+        let ms = (super::super::args::float(args, 0)? * 1000.0) as i32;
+        world.resource_mut::<RoundScript>().set_object_field(
+            object,
+            SUPPRESSION_TIME,
+            Value::Int(ms),
+        );
+        Ok(Value::Undefined)
+    });
+    // `isturretactive(turret)`: an actor or a player mans it.
+    registry.register(
+        crate::script::Namespace::Function,
+        "isturretactive",
+        |world, _, args| {
+            let object = turret_object(world, super::super::args::arg(args, 0)?)?;
+            let runtime = world.resource::<RoundScript>();
+            Ok(Value::Int(
+                (runtime.campaign.turret_gunners.contains_key(&object)
+                    || runtime.campaign.turret_users.contains_key(&object))
+                .into(),
+            ))
+        },
+    );
     registry.register(Method, "getmode", |world, receiver, _| {
         let object = turret_object(world, receiver)?;
         let runtime = world.resource::<RoundScript>();
@@ -242,7 +268,7 @@ fn use_turret(world: &mut World, receiver: &Value, args: &[Value]) -> Result<Val
 
 fn stop_use_turret(world: &mut World, receiver: &Value) -> Result<Value, String> {
     let gunner = super::super::natives::engine::entity_id(world, receiver)?;
-    let mut runtime = world.resource_mut::<RoundScript>();
+    let runtime = world.resource_mut::<RoundScript>();
     let manned: Vec<u64> = runtime
         .campaign
         .turret_gunners
@@ -250,15 +276,28 @@ fn stop_use_turret(world: &mut World, receiver: &Value) -> Result<Value, String>
         .filter(|(_, (g, _))| *g == gunner)
         .map(|(t, _)| *t)
         .collect();
+    drop(runtime);
     for object in manned {
-        runtime.campaign.turret_gunners.remove(&object);
-        if let Some(turret) = runtime.engine.turrets.get_mut(&object) {
-            turret.owner = None;
-            turret.mode = "manual".into();
-            turret.firing = false;
-        }
+        unman(world, object);
     }
     Ok(Value::Undefined)
+}
+
+/// The actor leaves the turret (stops using it or dies): notify `turret_deactivate`.
+fn unman(world: &mut World, object: u64) {
+    let mut runtime = world.resource_mut::<RoundScript>();
+    runtime.campaign.turret_gunners.remove(&object);
+    if let Some(turret) = runtime.engine.turrets.get_mut(&object) {
+        turret.owner = None;
+        turret.mode = "manual".into();
+        turret.firing = false;
+    }
+    super::raise(
+        world,
+        Value::Object(object),
+        "turret_deactivate",
+        Vec::new(),
+    );
 }
 
 /// The animscript the actor manning a turret runs: its weapon's `aiScript`.
@@ -305,11 +344,7 @@ pub(super) fn gunner_turrets(world: &mut World) {
             }
         };
         let Some((firing, weapon, aim)) = state else {
-            world
-                .resource_mut::<RoundScript>()
-                .campaign
-                .turret_gunners
-                .remove(&object);
+            unman(world, object);
             continue;
         };
         if !firing || now < next || gunner_script(world, gunner).is_some() {
@@ -330,6 +365,82 @@ pub(super) fn gunner_turrets(world: &mut World) {
         let aim = spread(world, object, AI_SPREAD, from, aim);
         super::fire_bullet(world, object, from, aim, weapon, None);
     }
+}
+
+/// Turret object field holding `setsuppressiontime` (ms; unset = none).
+const SUPPRESSION_TIME: &str = "suppressiontime";
+/// Suppression fire holds while the lost target stays this near where it was
+/// last seen, and lands this far to its side.
+const SUPPRESSION_STAY: f32 = 64.0;
+const SUPPRESSION_SIDE: f32 = 30.0;
+
+/// Live actors and sentient entities turrets pick from (players aside), with
+/// the point they aim at. Only a turret with a side (its team or its owner's)
+/// picks them: a sideless one would fire on its own allies.
+pub(super) fn sentient_targets(world: &mut World, turret: &Turret) -> Vec<(u64, glam::Vec3)> {
+    if turret.team.is_none() && turret.owner.is_none() {
+        return Vec::new();
+    }
+    let players: Vec<u64> = world
+        .resource::<RoundScript>()
+        .players
+        .values()
+        .map(|slot| slot.object)
+        .collect();
+    super::super::actors::combatants(world)
+        .into_iter()
+        .filter(|(id, _)| !players.contains(id))
+        .filter_map(
+            |(id, _)| match super::super::players::entity_field(world, id, "origin") {
+                Value::Vector(origin) => Some((
+                    id,
+                    glam::Vec3::from_array(origin) + glam::Vec3::Z * super::TARGET_HEIGHT,
+                )),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Suppression: a turret that lost its target less than its suppression time
+/// ago keeps firing beside where it was last seen while the target stays near
+/// that spot (behind cover). Remembers the target while it is in sight.
+pub(super) fn suppression(
+    world: &mut World,
+    object: u64,
+    from: [f32; 3],
+    found: Option<(u64, glam::Vec3)>,
+) -> Option<(u64, glam::Vec3)> {
+    let now = super::super::players::now_ms(world);
+    let mut runtime = world.resource_mut::<RoundScript>();
+    if let Some((target, at)) = found {
+        runtime
+            .campaign
+            .turret_seen
+            .insert(object, (target, at.to_array(), now));
+        return found;
+    }
+    let Value::Int(window) = runtime.object_field(object, SUPPRESSION_TIME) else {
+        return None;
+    };
+    let (target, at, seen) = runtime.campaign.turret_seen.get(&object).copied()?;
+    if now - seen > i64::from(window) || !runtime.live(&target) {
+        runtime.campaign.turret_seen.remove(&object);
+        return None;
+    }
+    drop(runtime);
+    let at = glam::Vec3::from_array(at);
+    let Value::Vector(origin) = super::super::players::entity_field(world, target, "origin") else {
+        return None;
+    };
+    let now_at = glam::Vec3::from_array(origin) + glam::Vec3::Z * super::TARGET_HEIGHT;
+    if now_at.distance(at) > SUPPRESSION_STAY {
+        return None;
+    }
+    let side = (at - glam::Vec3::from_array(from))
+        .cross(glam::Vec3::Z)
+        .normalize_or_zero();
+    Some((target, at + side * SUPPRESSION_SIDE))
 }
 
 /// Turret object fields holding the `setaispread`/`setplayerspread` cones.
@@ -405,7 +516,10 @@ pub(super) fn spread(
     from: [f32; 3],
     aim: [f32; 3],
 ) -> [f32; 3] {
-    let spread = match world.resource_mut::<RoundScript>().object_field(object, field) {
+    let spread = match world
+        .resource_mut::<RoundScript>()
+        .object_field(object, field)
+    {
         Value::Float(spread) => spread,
         _ => return aim,
     };
@@ -480,6 +594,12 @@ fn release(world: &mut World, object: u64, client: u32) {
         turret.firing = false;
     }
     set_weapons_held(world, client, false);
+    super::raise(
+        world,
+        Value::Object(object),
+        "turret_deactivate",
+        Vec::new(),
+    );
 }
 
 /// Manned turrets aim along their player's view and fire while attack is held,

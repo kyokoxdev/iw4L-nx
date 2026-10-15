@@ -54,6 +54,19 @@ fn carried() -> std::sync::MutexGuard<'static, Option<(String, Vec<(Arc<str>, De
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Campaign difficulty, `getplayersetting("gameskill")`: 0 Recruit, 1 Regular,
+/// 2 Hardened, 3 Veteran. Process-wide: the menu picks it before a level loads
+/// and it holds across level changes and restarts.
+static GAME_SKILL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+pub fn set_game_skill(skill: u8) {
+    GAME_SKILL.store(skill.min(3), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn game_skill() -> u8 {
+    GAME_SKILL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Before level main: `game` as the level change into this level left it. A
 /// load of any other level (a menu start) drops it.
 pub(crate) fn restore_game(world: &mut World) {
@@ -345,6 +358,13 @@ fn save(world: &mut World, commit: bool) -> Value {
 
 pub(crate) fn register(registry: &mut NativeRegistry) {
     use Namespace::Function;
+    // Scripts read only "gameskill" (`_gameskill`, polled each second).
+    registry.register(Namespace::Method, "getplayersetting", |_, _, args| {
+        Ok(match string(args, 0)?.to_ascii_lowercase().as_str() {
+            "gameskill" => Value::Int(game_skill().into()),
+            _ => Value::Undefined,
+        })
+    });
     // `savegame(name, ...)` keeps the world as the checkpoint;
     // `savegamenocommit(name, ...)` keeps it until `commitsave(id)`.
     registry.register(Function, "savegame", |world, _, _| Ok(save(world, true)));

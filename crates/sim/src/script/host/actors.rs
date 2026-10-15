@@ -279,8 +279,16 @@ fn nodes_in_radius(world: &mut World, _: &Value, args: &[Value]) -> Result<Value
     let at = vector(args, 0)?;
     let radius = float(args, 1)?;
     let min = float(args, 2)?;
-    let height = if args.len() > 3 { float(args, 3)? } else { NODE_QUERY_HEIGHT };
-    let kind = if args.len() > 4 { Some(string(args, 4)?) } else { None };
+    let height = if args.len() > 3 {
+        float(args, 3)?
+    } else {
+        NODE_QUERY_HEIGHT
+    };
+    let kind = if args.len() > 4 {
+        Some(string(args, 4)?)
+    } else {
+        None
+    };
     let mut runtime = world.resource_mut::<RoundScript>();
     let candidates: Vec<(u64, [f32; 3])> = runtime
         .campaign
@@ -386,6 +394,7 @@ pub(crate) fn advance(world: &mut World) {
     grenades::advance(world);
     campaign::mark_player_los(world);
     look(world);
+    campaign::player_attackers(world);
     run_scripts(world);
     move_actors(world);
     awareness::run_to_arrivals(world);
@@ -434,7 +443,7 @@ fn clear_sight(world: &mut World, from: [f32; 3], to: [f32; 3]) -> bool {
 }
 
 /// Hostile players and actors that can be fought: `(object, team)`.
-fn combatants(world: &mut World) -> Vec<(u64, Value)> {
+pub(crate) fn combatants(world: &mut World) -> Vec<(u64, Value)> {
     let mut runtime = world.resource_mut::<RoundScript>();
     let mut out: Vec<u64> = runtime.players.values().map(|slot| slot.object).collect();
     out.extend(
@@ -2389,6 +2398,14 @@ pub(crate) fn damaged(
         }
         health(&mut runtime, id) > 0
     };
+    if alive
+        && let Value::Vector(at) = world
+            .resource_mut::<RoundScript>()
+            .object_field(id, "origin")
+    {
+        let team = world.resource_mut::<RoundScript>().object_field(id, "team");
+        events::broadcast(world, "pain", Some(id), at, events::Hearers::Team(&team));
+    }
     let pain_allowed = !matches!(
         world
             .resource_mut::<RoundScript>()

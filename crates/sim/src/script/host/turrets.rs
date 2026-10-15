@@ -380,19 +380,27 @@ fn acquire(world: &mut World, object: u64, turret: &Turret, from: [f32; 3]) -> O
         .filter(|(_, slot)| &*slot.sessionstate == "playing")
         .map(|(client, slot)| (*client, slot.object))
         .collect();
+    let mut targets: Vec<(u64, Vec3)> = {
+        let frame = FrameWorld::from_world(world);
+        candidates
+            .into_iter()
+            .filter_map(|(client, player)| {
+                let ps = frame.player(ClientId(client))?;
+                (ps.health > 0).then(|| {
+                    (
+                        player,
+                        Vec3::from_array(ps.origin) + Vec3::Z * TARGET_HEIGHT,
+                    )
+                })
+            })
+            .collect()
+    };
+    targets.extend(campaign::sentient_targets(world, turret));
     let mut best: Option<(f32, u64, Vec3)> = None;
-    for (client, player) in candidates {
-        let alive = {
-            let frame = FrameWorld::from_world(world);
-            frame
-                .player(ClientId(client))
-                .and_then(|ps| (ps.health > 0).then_some(ps.origin))
-        };
-        let Some(origin) = alive else { continue };
+    for (player, at) in targets {
         if !hostile(world, turret, player) {
             continue;
         }
-        let at = Vec3::from_array(origin) + Vec3::Z * TARGET_HEIGHT;
         let delta = at - Vec3::from_array(from);
         let distance = delta.length();
         if distance > range || best.is_some_and(|(d, ..)| d <= distance) {
@@ -443,6 +451,11 @@ pub(crate) fn advance(world: &mut World) {
         let active = !turret.carried && &*turret.mode != "sentry_offline";
         let found = if active {
             acquire(world, object, &turret, from)
+        } else {
+            None
+        };
+        let found = if active {
+            campaign::suppression(world, object, from, found)
         } else {
             None
         };

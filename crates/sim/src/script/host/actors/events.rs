@@ -13,18 +13,67 @@ use crate::script::{Namespace, NativeRegistry, RoundScript, Value};
 
 /// Script name, distance dvar and its default, then the same while busy: an
 /// actor with an enemy hears events its enemy did not raise only this far.
-const KINDS: [(&str, (&str, f32), (&str, f32)); 11] = [
-    ("footstep", ("ai_eventdistfootstep", 256.0), ("ai_busyeventdistfootstep", 256.0)),
-    ("footstep_walk", ("ai_eventdistfootstepwalk", 128.0), ("ai_busyeventdistfootstepwalk", 128.0)),
-    ("footstep_sprint", ("ai_eventdistfootstepsprint", 400.0), ("ai_busyeventdistfootstepsprint", 256.0)),
-    ("death", ("ai_eventdistdeath", 1024.0), ("ai_busyeventdistdeath", 256.0)),
-    ("explode", ("ai_eventdistexplosion", 1024.0), ("ai_busyeventdistexplosion", 1024.0)),
-    ("grenade danger", ("ai_eventdistgrenadeping", 512.0), ("ai_busyeventdistgrenadeping", 256.0)),
-    ("gunshot", ("ai_eventdistgunshot", 2048.0), ("ai_busyeventdistgunshot", 400.0)),
-    ("gunshot_teammate", ("ai_eventdistgunshotteam", 2048.0), ("ai_busyeventdistgunshotteam", 256.0)),
-    ("silenced_shot", ("ai_eventdistsilencedshot", 128.0), ("ai_busyeventdistsilencedshot", 128.0)),
-    ("bulletwhizby", ("ai_eventdistbullet", 128.0), ("ai_busyeventdistbullet", 128.0)),
-    ("projectile_impact", ("ai_eventdistprojimpact", 256.0), ("ai_busyeventdistprojimpact", 256.0)),
+const KINDS: [(&str, (&str, f32), (&str, f32)); 12] = [
+    (
+        "footstep",
+        ("ai_eventdistfootstep", 256.0),
+        ("ai_busyeventdistfootstep", 256.0),
+    ),
+    (
+        "footstep_walk",
+        ("ai_eventdistfootstepwalk", 128.0),
+        ("ai_busyeventdistfootstepwalk", 128.0),
+    ),
+    (
+        "footstep_sprint",
+        ("ai_eventdistfootstepsprint", 400.0),
+        ("ai_busyeventdistfootstepsprint", 256.0),
+    ),
+    (
+        "pain",
+        ("ai_eventdistpain", 512.0),
+        ("ai_busyeventdistpain", 256.0),
+    ),
+    (
+        "death",
+        ("ai_eventdistdeath", 1024.0),
+        ("ai_busyeventdistdeath", 256.0),
+    ),
+    (
+        "explode",
+        ("ai_eventdistexplosion", 1024.0),
+        ("ai_busyeventdistexplosion", 1024.0),
+    ),
+    (
+        "grenade danger",
+        ("ai_eventdistgrenadeping", 512.0),
+        ("ai_busyeventdistgrenadeping", 256.0),
+    ),
+    (
+        "gunshot",
+        ("ai_eventdistgunshot", 2048.0),
+        ("ai_busyeventdistgunshot", 400.0),
+    ),
+    (
+        "gunshot_teammate",
+        ("ai_eventdistgunshotteam", 2048.0),
+        ("ai_busyeventdistgunshotteam", 256.0),
+    ),
+    (
+        "silenced_shot",
+        ("ai_eventdistsilencedshot", 128.0),
+        ("ai_busyeventdistsilencedshot", 128.0),
+    ),
+    (
+        "bulletwhizby",
+        ("ai_eventdistbullet", 128.0),
+        ("ai_busyeventdistbullet", 128.0),
+    ),
+    (
+        "projectile_impact",
+        ("ai_eventdistprojimpact", 256.0),
+        ("ai_busyeventdistprojimpact", 256.0),
+    ),
 ];
 
 /// Listening entities kept at most.
@@ -145,15 +194,34 @@ fn deliver(
     near: impl Fn([f32; 3], f32) -> bool,
 ) {
     let (idle, busy) = (reach(world, kind, false), reach(world, kind, true));
-    let listeners: Vec<u64> = world
-        .resource::<RoundScript>()
-        .campaign
-        .ai_listeners
-        .iter()
-        .filter(|(id, kinds)| Some(**id) != originator && kinds.contains(kind))
-        .map(|(id, _)| *id)
-        .collect();
-    for id in listeners {
+    // Script listeners get `ai_event`; every living actor reacts on its own.
+    let receivers: Vec<(u64, bool, bool)> = {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let mut ids: Vec<u64> = super::live_actors(&runtime)
+            .into_iter()
+            .filter(|id| super::health(&mut runtime, *id) > 0)
+            .collect();
+        ids.extend(runtime.campaign.ai_listeners.keys().copied());
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .filter(|id| Some(*id) != originator)
+            .map(|id| {
+                let listens = runtime
+                    .campaign
+                    .ai_listeners
+                    .get(&id)
+                    .is_some_and(|kinds| kinds.contains(kind));
+                let actor = runtime
+                    .entities
+                    .get(&id)
+                    .is_some_and(|entity| entity.kind == EntityKind::Actor);
+                (id, listens, actor)
+            })
+            .filter(|(_, listens, actor)| *listens || *actor)
+            .collect()
+    };
+    for (id, listens, actor) in receivers {
         let (team, enemy) = {
             let mut runtime = world.resource_mut::<RoundScript>();
             let enemy = match runtime.object_field(id, "enemy") {
@@ -185,27 +253,108 @@ fn deliver(
             continue;
         };
         if hears && near(origin, reach) {
-            let args = vec![
-                Value::string(kind),
-                originator.map_or(Value::Undefined, Value::Object),
-                Value::Vector(at),
-            ];
-            crate::script::runtime::raise(world, Value::Object(id), "ai_event", args);
+            if actor {
+                react(world, id, kind, originator, at);
+            }
+            if listens {
+                let args = vec![
+                    Value::string(kind),
+                    originator.map_or(Value::Undefined, Value::Object),
+                    Value::Vector(at),
+                ];
+                crate::script::runtime::raise(world, Value::Object(id), "ai_event", args);
+            }
         }
     }
+}
+
+/// A hostile seen this recently is not re-learned from what the actor hears.
+const HEARD_SEEN_MS: i64 = 2_000;
+/// An explosion teaches its hostile originator only this near.
+const EXPLOSION_LEARN_DIST: f32 = 512.0;
+
+/// An actor's own reaction to an event it hears (retail, no script needed):
+/// shots, footsteps and near explosions from a hostile tell it where that
+/// hostile is (as if seen), unless it saw it in the last 2 s; an ally's
+/// gunfire teaches the ally's enemy, an ally's pain or death its attacker.
+/// Gunfire, explosions and an ally's pain put it in combat (`alertlevel`).
+fn react(world: &mut World, id: u64, kind: &str, originator: Option<u64>, at: [f32; 3]) {
+    let field = |world: &mut World, object: u64, name: &str| {
+        super::super::players::entity_field(world, object, name)
+    };
+    let (learn, alert) = match kind {
+        "gunshot" | "silenced_shot" => (originator, true),
+        "footstep" | "footstep_walk" | "footstep_sprint" => (originator, false),
+        "gunshot_teammate" => (
+            originator.and_then(|ally| match field(world, ally, "enemy") {
+                Value::Object(enemy) => Some(enemy),
+                _ => None,
+            }),
+            true,
+        ),
+        "pain" | "death" => (
+            originator.and_then(|ally| match field(world, ally, "lastattacker") {
+                Value::Object(attacker) => Some(attacker),
+                _ => None,
+            }),
+            kind == "pain",
+        ),
+        "explode" => {
+            if super::truthy(&field(world, id, "ignoreexplosionevents")) {
+                return;
+            }
+            let near = match field(world, id, "origin") {
+                Value::Vector(origin) => super::distance(origin, at) < EXPLOSION_LEARN_DIST,
+                _ => false,
+            };
+            let args = vec![
+                Value::Vector(at),
+                originator.map_or(Value::Undefined, Value::Object),
+            ];
+            crate::script::runtime::raise(world, Value::Object(id), "explode", args);
+            (originator.filter(|_| near), true)
+        }
+        _ => (None, false),
+    };
+    if alert {
+        let mut runtime = world.resource_mut::<RoundScript>();
+        if !matches!(runtime.object_field(id, "alertlevelint"), Value::Int(level) if level >= 2) {
+            runtime.set_object_field(id, "alertlevel", Value::string("combat"));
+            runtime.set_object_field(id, "alertlevelint", Value::Int(2));
+        }
+    }
+    let Some(target) = learn else { return };
+    if !world.resource::<RoundScript>().live(&target)
+        || !super::hostile(&field(world, id, "team"), &field(world, target, "team"))
+    {
+        return;
+    }
+    let Value::Vector(position) = field(world, target, "origin") else {
+        return;
+    };
+    let now = super::super::players::now_ms(world);
+    let mut brain = super::brain(world, id);
+    if brain
+        .known
+        .iter()
+        .any(|(known, seen, _)| *known == target && now - seen < HEARD_SEEN_MS)
+    {
+        return;
+    }
+    brain.known.retain(|(known, _, _)| *known != target);
+    brain.known.push((target, now, position));
+    super::store(world, id, brain);
 }
 
 /// Last tick's weapon fire (`gunshot`, `silenced_shot` to the other teams),
 /// explosions (`explode`, every team) and player footsteps (`footstep*` to
 /// the other teams, from the player's origin).
 pub(super) fn raise_tick_events(world: &mut World) {
-    if world
-        .resource::<RoundScript>()
-        .campaign
-        .ai_listeners
-        .is_empty()
     {
-        return;
+        let runtime = world.resource::<RoundScript>();
+        if runtime.campaign.ai_listeners.is_empty() && super::live_actors(&runtime).is_empty() {
+            return;
+        }
     }
     let tick = world.resource::<crate::step::StepRequest>().tick.0;
     let frame = crate::frame::FrameWorld::from_world(world);

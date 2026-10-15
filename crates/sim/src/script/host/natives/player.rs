@@ -1114,6 +1114,8 @@ fn register_body(registry: &mut NativeRegistry) {
         "enableweaponswitch" => switch_disabled = false,
         "disableusability" => usability_disabled = true,
         "enableusability" => usability_disabled = false,
+        "hideviewmodel" => viewmodel_hidden = true,
+        "showviewmodel" => viewmodel_hidden = false,
     );
     registry.register(Method, "setmovespeedscale", |world, receiver, args| {
         let id = client_of(world, receiver)?;

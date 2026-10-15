@@ -82,7 +82,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "getattachpos" => Origin;
         Function "getpartname" => Undefined;
         Method "getplayerknifemodel" => Undefined;
-        Method "getplayersetting" => One; // only key read: "gameskill"; 1 = Regular
         Method "getplayerweaponmodel" => Undefined;
         // ponytail: every wheel on dirt; trace the surface under the wheel tag for tread fx.
         Method "getwheelsurface" => Dirt;
@@ -108,7 +107,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "getkeybinding" => Unbound;
         Function "getweaponclipmodel" => EmptyString;
         Function "issavesuccessful" => One;
-        Function "isturretactive" => Zero;
         Function "kill" => Undefined;
         Function "laserforceoff" => Undefined;
         Function "laserforceon" => Undefined;
@@ -185,7 +183,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "enablebreaching" => Undefined;
         Method "forceviewmodelanimation" => Undefined;
         Method "hideonclient" => Undefined;
-        Method "hideviewmodel" => Undefined;
         Method "nightvisionforceoff" => Undefined;
         Method "playersetgroundreferenceent" => Undefined;
         Method "setcorpseremovetimer" => Undefined;
@@ -195,7 +192,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setturretanim" => Undefined;
         Method "setturretcanaidetach" => Undefined;
         Method "showonclient" => Undefined;
-        Method "showviewmodel" => Undefined;
         Method "stoplookat" => Undefined;
         // MP-catalog names other campaign levels reach with no native yet.
         Function "deleteglass" => Undefined;
@@ -205,7 +201,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "setmotiontrackervisible" => Undefined;
         Function "setnorthyaw" => Undefined;
         Method "setstablemissile" => Undefined;
-        Method "setsuppressiontime" => Undefined;
         Function "stopallrumbles" => Undefined;
         Function "transformmove" => Undefined;
         Method "vehicle_getbodyvelocity" => ZeroVector;

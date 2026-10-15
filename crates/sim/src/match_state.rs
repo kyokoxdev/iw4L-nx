@@ -162,6 +162,9 @@ pub struct ScriptControls {
     /// Campaign `allowstand`/`allowcrouch`/`allowprone`/`allowfire`/`allowmelee`:
     /// what the player is refused (`script_player::campaign` bits).
     pub denied: u8,
+    /// Campaign `hideviewmodel`/`showviewmodel`. Not on the wire: campaign is
+    /// local, its loopback hands the snapshot over in memory.
+    pub viewmodel_hidden: bool,
 }
 
 impl ClientMatchState {

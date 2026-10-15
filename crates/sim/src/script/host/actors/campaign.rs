@@ -688,6 +688,41 @@ fn segment_distance(p: [f32; 3], a: [f32; 3], b: [f32; 3]) -> f32 {
     p.distance(a + ab * t)
 }
 
+/// Player sentient fields scripts read (`_gameskill`): `attackercount`, the
+/// living actors with the player as their enemy, and `ignoreme` (default 0).
+// ponytail: counts every actor targeting the player; retail may count only
+// those attacking it lately, narrow if regen/accuracy feel off.
+pub(super) fn player_attackers(world: &mut World) {
+    if !crate::frame::FrameWorld::from_world(world)
+        .bootstrap_ref()
+        .campaign
+    {
+        return;
+    }
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let players: Vec<u64> = runtime.players.values().map(|slot| slot.object).collect();
+    if players.is_empty() {
+        return;
+    }
+    let mut counts = vec![0; players.len()];
+    for id in super::live_actors(&runtime) {
+        if super::health(&mut runtime, id) <= 0 {
+            continue;
+        }
+        if let Value::Object(enemy) = runtime.object_field(id, "enemy")
+            && let Some(k) = players.iter().position(|p| *p == enemy)
+        {
+            counts[k] += 1;
+        }
+    }
+    for (player, count) in players.into_iter().zip(counts) {
+        runtime.set_object_field(player, "attackercount", Value::Int(count));
+        if runtime.object_field(player, "ignoreme") == Value::Undefined {
+            runtime.set_object_field(player, "ignoreme", Value::Int(0));
+        }
+    }
+}
+
 // ponytail: marks only; allies already holding a marked node are not moved off it.
 pub(super) fn mark_player_los(world: &mut World) {
     let now = super::super::players::now_ms(world);

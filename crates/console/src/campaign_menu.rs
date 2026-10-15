@@ -39,6 +39,7 @@ pub(crate) fn register(registry: &mut ConsoleRegistry) {
         "ui_campaign_start",
         "ui_campaign_resume",
         "ui_campaign_new",
+        "ui_campaign_skill",
         "ui_campaign_objectives",
     ] {
         registry.register(CommandSpec::new(name));
@@ -52,7 +53,8 @@ fn mission_name(level: &str) -> String {
         .map_or_else(|| map_label(level), |(_, name)| name.to_uppercase())
 }
 
-/// The last campaign level started, kept beside the settings file.
+/// The last campaign level started and its difficulty (`level\nskill`), kept
+/// beside the settings file.
 fn save_path(identity: &frame::LaunchIdentity) -> Option<std::path::PathBuf> {
     crate::user_settings::settings_path(&identity.artifacts)
         .map(|path| path.with_file_name("campaign.txt"))
@@ -60,7 +62,12 @@ fn save_path(identity: &frame::LaunchIdentity) -> Option<std::path::PathBuf> {
 
 fn saved_level(identity: &frame::LaunchIdentity) -> Option<String> {
     let text = std::fs::read_to_string(save_path(identity)?).ok()?;
-    Some(text.trim().to_owned()).filter(|level| !level.is_empty())
+    let mut lines = text.lines();
+    let level = lines.next()?.trim().to_owned();
+    if let Some(skill) = lines.next().and_then(|line| line.trim().parse().ok()) {
+        sim::script::set_game_skill(skill);
+    }
+    Some(level).filter(|level| !level.is_empty())
 }
 
 fn save_level(identity: &frame::LaunchIdentity, level: &str) {
@@ -70,7 +77,8 @@ fn save_level(identity: &frame::LaunchIdentity, level: &str) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(error) = std::fs::write(&path, level) {
+    let text = format!("{level}\n{}\n", sim::script::game_skill());
+    if let Err(error) = std::fs::write(&path, text) {
         warn!("could not write {}: {error}", path.display());
     }
 }
@@ -168,18 +176,30 @@ pub(crate) fn route(
                     dvars.set(&format!("ui_obj_{row}"), text);
                 }
             }
-            "ui_campaign_start" | "ui_campaign_resume" | "ui_campaign_new" => {
-                let level = match command.name.as_str() {
-                    "ui_campaign_start" => command
-                        .args
-                        .first()
-                        .and_then(|arg| arg.parse::<usize>().ok())
+            "ui_campaign_start" | "ui_campaign_resume" | "ui_campaign_new"
+            | "ui_campaign_skill" => {
+                let row = |arg: Option<&str>| {
+                    arg.and_then(|arg| arg.parse::<usize>().ok())
                         .and_then(|row| levels.get(row))
-                        .cloned(),
+                        .cloned()
+                };
+                let level = match command.name.as_str() {
+                    "ui_campaign_start" => row(command.args.first().map(String::as_str)),
                     "ui_campaign_resume" => identity
                         .as_deref()
                         .and_then(saved_level)
                         .filter(|level| levels.contains(level)),
+                    // `ui_campaign_skill <0..3>` from the difficulty menu starts
+                    // what opened it: `ui_sp_pending` = "new" or a level row.
+                    "ui_campaign_skill" => {
+                        if let Some(skill) = command.args.first().and_then(|arg| arg.parse().ok()) {
+                            sim::script::set_game_skill(skill);
+                        }
+                        match dvars.get("ui_sp_pending") {
+                            Some("new") => levels.first().cloned(),
+                            pending => row(pending),
+                        }
+                    }
                     _ => levels.first().cloned(),
                 };
                 let Some(level) = level else {

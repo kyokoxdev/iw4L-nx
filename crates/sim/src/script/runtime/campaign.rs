@@ -94,6 +94,9 @@ pub(crate) struct CampaignState {
     pub(crate) turret_users: BTreeMap<u64, (u32, i64)>,
     /// Turrets `startfiring` keeps firing: the next shot time (ms).
     pub(crate) turret_firing: BTreeMap<u64, i64>,
+    /// The target each turret last had: (target, aim point, level time ms),
+    /// for suppression fire after it drops out of sight.
+    pub(crate) turret_seen: BTreeMap<u64, (u64, [f32; 3], i64)>,
     /// `playerlinktoblend` in progress, by client: (origin, view) at the
     /// link, level time it started and its length (ms).
     pub(crate) link_blends: BTreeMap<u32, ([f32; 3], [f32; 3], i64, i64)>,

@@ -1254,6 +1254,7 @@ fn decode_client_meta(input: &mut WireReader<'_>) -> Result<ClientSnapshotMeta, 
         switch_to: input.get_u32()?,
         // Server-side only: the authority filters the command before it moves.
         denied: 0,
+        viewmodel_hidden: false,
     };
     let killcam_hud = match input.get_u8()? {
         0 => None,

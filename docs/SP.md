@@ -82,7 +82,11 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    New Game (first level in story order), Mission Select
    (`iw4l_campaign_levels`: `list_sp_maps` without `so_*`, in story order
    (`console::campaign_menu`), 20 rows, mission names), Options, Main Menu,
-   Quit; Stats and Credits are disabled.
+   Quit; Stats and Credits are disabled. New Game and a Mission Select row
+   open `iw4l_campaign_difficulty` (Recruit … Veteran); the pick is
+   `getplayersetting("gameskill")` (`_gameskill` polls it each second), held
+   process-wide across level changes and saved as `campaign.txt`'s second line
+   (Resume Game restores it).
 4. Level GSC — in progress. Campaign runs `maps/<level>::main` plus
    `codescripts/{delete,struct}` against `iw4_sp()`, started once the local
    player begins (SP scripts expect the player before `main`). Builtins not
@@ -157,8 +161,14 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `footstep_sprint`, walk steps `footstep_walk`, run steps/jumps/landings
    `footstep`, or `footstep_walk` crouched or in ADS), within the `ai_eventDist*` dvars (an actor with an
    enemy: `ai_busyEventDist*` for events its enemy did not raise; it also spots
-   others only within `fovcosinebusy`) (actors do not react to unheard
-   events on their own; no projectile ping: retail maps it to `grenade danger`,
+   others only within `fovcosinebusy`). Actors also react on their own (retail):
+   a hostile's gunshot or footsteps, or an explosion it set off within 512,
+   tells them where it is (as if seen) unless seen in the last 2 s; an ally's
+   `gunshot_teammate` teaches the ally's enemy, an ally's `pain` (`ai_eventDistPain`)
+   or `death` its `lastattacker`; gunfire, explosions and ally pain set
+   `alertlevel` "combat"; explosions notify the actor `explode` (position,
+   originator) unless `ignoreexplosionevents` (no investigate-the-spot for far
+   explosions, no `new_enemy` event; no projectile ping: retail maps it to `grenade danger`,
    which only battlechatter reads, for frags). An owned missile with explosion
    damage notifies its owner `projectile_impact` (weapon, position, explosion
    radius) when it explodes (AC-130, remote missile); stand-in-owned rockets
@@ -205,6 +215,11 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    `animscripts/<aiScript>::main` on the gunner, which fires it
    (`shootturret`); one without fires on its own, its shots scattered inside the `setaispread` cone. The gunner is not placed on
    the turret's tag. `startfiring`/`stopfiring` make a turret shoot where it aims at its weapon's fire rate, with or without a gunner.
+   Auto and sentry turrets with a side (a team or an owner) also pick hostile actors and sentient
+   entities, so allied gunners and player sentries fight AI. `setsuppressiontime` keeps a turret firing
+   30 units beside where its target dropped out of sight while the target stays within 64 of that spot.
+   `isturretactive`: an actor or player mans it; leaving a turret notifies `turret_deactivate`.
+   `hideviewmodel`/`showviewmodel` hide the player's arms (campaign meta, not on the wire).
    Dogs (aitype `type` "dog") run `animscripts/dog/dog_<script>` in place of each
    animscript (`init`, `move`, `stop`, `combat`, `pain`, `death`, `scripted`); they
    fight (`dog_combat`) only inside `meleeattackdist` + 15 of their enemy and, while
