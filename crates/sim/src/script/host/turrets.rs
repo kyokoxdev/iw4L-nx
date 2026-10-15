@@ -527,7 +527,8 @@ fn shoot(world: &mut World, object: u64) {
             .and_then(|o| runtime.player_client(o))
             .map(ClientId)
     };
-    fire_bullet(world, object, from, turret.aim, turret.weapon, attacker);
+    let aim = campaign::spread(world, object, campaign::AI_SPREAD, from, turret.aim);
+    fire_bullet(world, object, from, aim, turret.weapon, attacker);
 }
 
 pub(crate) fn fire_bullet(

@@ -1105,6 +1105,21 @@ fn register_appearance(registry: &mut NativeRegistry) {
     registry.register(Method, "notsolid", |world, receiver, _| {
         with_entity(world, receiver, |e| e.solid = false)
     });
+    // Campaign: `hide` + `notsolid`, and `show` + `solid`.
+    registry.register(Method, "invisiblenotsolid", |world, receiver, _| {
+        with_entity(world, receiver, |e| {
+            e.hidden = true;
+            e.shown_to = 0;
+            e.solid = false;
+        })
+    });
+    registry.register(Method, "visiblesolid", |world, receiver, _| {
+        with_entity(world, receiver, |e| {
+            e.hidden = false;
+            e.shown_to = 0;
+            e.solid = true;
+        })
+    });
     registry.register(Method, "setcontents", |world, receiver, args| {
         let contents = int(args, 0)?;
         let mut previous = 0;

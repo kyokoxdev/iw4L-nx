@@ -55,7 +55,7 @@ pub(crate) fn random_unit(world: &mut World) -> f32 {
 }
 
 /// `bulletspread`'s point for two unit draws (radius, angle).
-fn spread_end(start: [f32; 3], end: [f32; 3], spread: f32, (r, t): (f32, f32)) -> [f32; 3] {
+pub(crate) fn spread_end(start: [f32; 3], end: [f32; 3], spread: f32, (r, t): (f32, f32)) -> [f32; 3] {
     const RANGE: f32 = 8192.0;
     let angles = math_iw4::vect_to_angles(std::array::from_fn(|k| end[k] - start[k]));
     let (forward, right, up) = math_iw4::angle_vectors(angles);

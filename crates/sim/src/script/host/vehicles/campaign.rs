@@ -37,6 +37,23 @@ pub(super) fn take_speed(vehicle: &mut Heli, mph: f32) {
     }
 }
 
+/// Vehicle object fields holding a pending `setswitchnode`.
+const SWITCH_FROM: &str = "switchnode_from";
+const SWITCH_TO: &str = "switchnode_to";
+
+/// The node a vehicle that just reached `reached` switches to, once.
+pub(super) fn take_switch(runtime: &mut RoundScript, vehicle: u64, reached: u64) -> Option<u64> {
+    if runtime.object_field(vehicle, SWITCH_FROM) != Value::Object(reached) {
+        return None;
+    }
+    let Value::Object(to) = runtime.object_field(vehicle, SWITCH_TO) else {
+        return None;
+    };
+    runtime.set_object_field(vehicle, SWITCH_FROM, Value::Undefined);
+    runtime.set_object_field(vehicle, SWITCH_TO, Value::Undefined);
+    Some(to)
+}
+
 /// Map `script_vehicle`s that are not spawners are live vehicles from the start.
 pub(crate) fn init_map_vehicles(world: &mut World) {
     let ids: Vec<u64> = {
@@ -301,6 +318,39 @@ pub(crate) fn register_sp(registry: &mut NativeRegistry) {
         let vehicle = heli(world, receiver)?;
         vehicle.max_speed = vehicle.path_speed;
         vehicle.accel = accel;
+        Ok(Value::Undefined)
+    });
+    // `setswitchnode(from, to)`: reaching `from` the vehicle goes on to `to`
+    // instead of `from`'s target; one already past `from` turns to `to` now.
+    registry.register(Method, "setswitchnode", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        heli(world, receiver)?;
+        let vehicle = entity_id(world, receiver)?;
+        let from = entity_id(world, super::super::args::arg(args, 0)?)?;
+        let to = entity_id(world, super::super::args::arg(args, 1)?)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let goal = super::node(&mut runtime, to)?;
+        let heading = runtime.vehicles[&vehicle].path_node;
+        if heading.is_some() && super::next_node(&mut runtime, from)? == heading {
+            let last = super::next_node(&mut runtime, to)?.is_none();
+            let v = runtime.vehicles.get_mut(&vehicle).unwrap();
+            v.path_node = Some(to);
+            let stop = !v.ground || last;
+            super::set_goal(v, goal, stop);
+        } else {
+            runtime.set_object_field(vehicle, SWITCH_FROM, Value::Object(from));
+            runtime.set_object_field(vehicle, SWITCH_TO, Value::Object(to));
+        }
+        Ok(Value::Undefined)
+    });
+    // `setwaitspeed(mph)`: the speed it holds while waiting (0 when its driver dies).
+    // ponytail: taken as its speed now; the path's speed comes back on `resumespeed`.
+    registry.register(Method, "setwaitspeed", |world, receiver, args| {
+        let mph = float(args, 0)?;
+        if mph < 0.0 {
+            return Err("Cannot have a negative wait speed on a vehicle".into());
+        }
+        heli(world, receiver)?.max_speed = mph * MPH;
         Ok(Value::Undefined)
     });
     registry.register(Method, "setvehicleteam", |world, receiver, args| {

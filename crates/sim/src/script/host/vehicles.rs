@@ -1169,7 +1169,11 @@ pub(crate) fn advance(world: &mut World) {
             .flatten();
         let speed = heli.speed;
         if let Some(reached) = reached_node {
-            let successor = next_node(&mut runtime, reached).and_then(|next| match next {
+            let next = match campaign::take_switch(&mut runtime, id, reached) {
+                Some(to) => Ok(Some(to)),
+                None => next_node(&mut runtime, reached),
+            };
+            let successor = next.and_then(|next| match next {
                 Some(next) => Ok(Some((next, node(&mut runtime, next)?))),
                 None => Ok(None),
             });

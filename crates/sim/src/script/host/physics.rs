@@ -85,6 +85,11 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         );
         Ok(Value::Undefined)
     });
+    // ponytail: campaign cylinder blasts push as the sphere does; a separate
+    // cylinder event when props on slopes or stairs fly wrong.
+    if let Some(sphere) = registry.get(Function, "physicsexplosionsphere") {
+        registry.register(Function, "physicsexplosioncylinder", sphere);
+    }
     for name in ["physicslaunchserver", "physicslaunchclient"] {
         registry.register(Method, name, |world, receiver, args| {
             let object = object_of(world, receiver)?;

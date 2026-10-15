@@ -135,6 +135,8 @@ pub(crate) struct ActorBrain {
     likely_enemy: Option<(i64, Option<[f32; 3]>)>,
     /// `setproneanimnodes`: legs-down, aim and legs-up nodes.
     prone_nodes: Option<[Value; 3]>,
+    /// `setproneanimnodes`: 1 / down angle and 1 / up angle.
+    prone_scale: (f32, f32),
     /// Between `enterprone` and `exitprone`.
     prone: bool,
     /// `flagenemyunattackable`: enemies it gives up on until a level time.
@@ -262,6 +264,57 @@ fn matching_nodes(world: &mut World, args: &[Value]) -> Result<Vec<Value>, Strin
         .filter(|id| runtime.object_field(*id, &key) == value)
         .map(Value::Object)
         .collect())
+}
+
+/// Nodes a node query returns at most.
+const NODE_QUERY_MAX: usize = 256;
+const NODE_QUERY_HEIGHT: f32 = 512.0;
+
+/// `getnodesinradius(origin, radius, min_radius, [max_height], [type])`:
+/// nodes within `radius` (2D) and `max_height` of `origin`, at least
+/// `min_radius` (3D) away; `type` is a node type or "Cover" (any cover kind).
+// ponytail: level order where the original walks its node tree.
+fn nodes_in_radius(world: &mut World, _: &Value, args: &[Value]) -> Result<Value, String> {
+    use super::args::{float, string, vector};
+    let at = vector(args, 0)?;
+    let radius = float(args, 1)?;
+    let min = float(args, 2)?;
+    let height = if args.len() > 3 { float(args, 3)? } else { NODE_QUERY_HEIGHT };
+    let kind = if args.len() > 4 { Some(string(args, 4)?) } else { None };
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let candidates: Vec<(u64, [f32; 3])> = runtime
+        .campaign
+        .nodes
+        .iter()
+        .copied()
+        .zip(runtime.campaign.node_origins.iter().copied())
+        .collect();
+    let mut found = Vec::new();
+    for (node, origin) in candidates {
+        let planar = (origin[0] - at[0]).hypot(origin[1] - at[1]);
+        if planar > radius || (origin[2] - at[2]).abs() > height || distance(at, origin) < min {
+            continue;
+        }
+        if let Some(kind) = &kind {
+            let Value::String(node_kind) = runtime.object_field(node, "type") else {
+                continue;
+            };
+            let matches = if kind.eq_ignore_ascii_case("Cover") {
+                cover_script(&node_kind).is_some()
+            } else {
+                node_kind.eq_ignore_ascii_case(kind)
+            };
+            if !matches {
+                continue;
+            }
+        }
+        found.push(Value::Object(node));
+        if found.len() == NODE_QUERY_MAX {
+            break;
+        }
+    }
+    drop(runtime);
+    new_array(world, found)
 }
 
 fn set_goal(
@@ -2646,6 +2699,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let nodes = matching_nodes(world, args)?;
         new_array(world, nodes)
     });
+    registry.register(Function, "getnodesinradius", nodes_in_radius);
     registry.register(Function, "getallnodes", |world, _, _| {
         let nodes = world
             .resource::<RoundScript>()

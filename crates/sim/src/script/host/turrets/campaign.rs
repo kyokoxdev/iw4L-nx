@@ -120,6 +120,35 @@ pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
     use super::super::natives::engine::entity_id;
     use crate::script::Namespace::Method;
     registry.register(Method, "useturret", use_turret);
+    // `setaispread(degrees)` / `setplayerspread(degrees)`: how far an AI
+    // gunner's / a manning player's shots scatter.
+    registry.register(Method, "setaispread", |world, receiver, args| {
+        set_spread(world, receiver, args, AI_SPREAD)
+    });
+    registry.register(Method, "setplayerspread", |world, receiver, args| {
+        set_spread(world, receiver, args, PLAYER_SPREAD)
+    });
+    registry.register(Method, "getmode", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        let runtime = world.resource::<RoundScript>();
+        Ok(Value::string(&runtime.engine.turrets[&object].mode))
+    });
+    // A minigun's barrel: `startbarrelspin`/`stopbarrelspin` spin it up or
+    // down, `getbarrelspinrate` answers 0 (rest) … 1 (full, fires).
+    registry.register(Method, "startbarrelspin", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        set_barrel_spin(world, object, true);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "stopbarrelspin", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        set_barrel_spin(world, object, false);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "getbarrelspinrate", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        Ok(Value::Float(barrel_spin(world, object)))
+    });
     registry.register(Method, "startfiring", |world, receiver, _| {
         let object = entity_id(world, receiver)?;
         let mut runtime = world.resource_mut::<RoundScript>();
@@ -298,8 +327,101 @@ pub(super) fn gunner_turrets(world: &mut World) {
             entry.1 = now + i64::from(interval);
         }
         let from = super::muzzle(world, object);
+        let aim = spread(world, object, AI_SPREAD, from, aim);
         super::fire_bullet(world, object, from, aim, weapon, None);
     }
+}
+
+/// Turret object fields holding the `setaispread`/`setplayerspread` cones.
+pub(super) const AI_SPREAD: &str = "aispread";
+const PLAYER_SPREAD: &str = "playerspread";
+
+fn turret_object(world: &mut World, receiver: &Value) -> Result<u64, String> {
+    let object = super::super::natives::engine::entity_id(world, receiver)?;
+    if !world
+        .resource::<RoundScript>()
+        .engine
+        .turrets
+        .contains_key(&object)
+    {
+        return Err("entity is not a turret".into());
+    }
+    Ok(object)
+}
+
+fn set_spread(
+    world: &mut World,
+    receiver: &Value,
+    args: &[Value],
+    field: &str,
+) -> Result<Value, String> {
+    let object = turret_object(world, receiver)?;
+    let spread = super::super::args::float(args, 0)?;
+    world
+        .resource_mut::<RoundScript>()
+        .set_object_field(object, field, Value::Float(spread));
+    Ok(Value::Undefined)
+}
+
+/// A minigun barrel spins from rest to full rate, or back, over this long.
+// ponytail: one fixed time; read the weapon's own spin-up/down times if a
+// minigun feels wrong.
+const BARREL_SPIN_MS: f32 = 1_000.0;
+
+/// Barrel spin rate now: the rate kept at its last change, ramped up while
+/// spinning and down while not.
+fn barrel_spin(world: &mut World, object: u64) -> f32 {
+    let now = super::super::players::now_ms(world);
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let (Value::Float(rate), Value::Int(at)) = (
+        runtime.object_field(object, "barrelspinrate"),
+        runtime.object_field(object, "barrelspintime"),
+    ) else {
+        return 0.0;
+    };
+    let spinning = runtime.object_field(object, "barrelspinning") == Value::Int(1);
+    spin_rate(rate, (now - i64::from(at)) as f32, spinning)
+}
+
+fn spin_rate(rate: f32, elapsed_ms: f32, spinning: bool) -> f32 {
+    let step = elapsed_ms / BARREL_SPIN_MS;
+    (if spinning { rate + step } else { rate - step }).clamp(0.0, 1.0)
+}
+
+fn set_barrel_spin(world: &mut World, object: u64, spinning: bool) {
+    let rate = barrel_spin(world, object);
+    let now = super::super::players::now_ms(world);
+    let mut runtime = world.resource_mut::<RoundScript>();
+    runtime.set_object_field(object, "barrelspinrate", Value::Float(rate));
+    runtime.set_object_field(object, "barrelspintime", Value::Int(now as i32));
+    runtime.set_object_field(object, "barrelspinning", Value::Int(spinning.into()));
+}
+
+/// The aim scattered inside the turret's spread cone `field` (degrees; none unset).
+pub(super) fn spread(
+    world: &mut World,
+    object: u64,
+    field: &str,
+    from: [f32; 3],
+    aim: [f32; 3],
+) -> [f32; 3] {
+    let spread = match world.resource_mut::<RoundScript>().object_field(object, field) {
+        Value::Float(spread) => spread,
+        _ => return aim,
+    };
+    let draws = (
+        super::super::natives::math::random_unit(world),
+        super::super::natives::math::random_unit(world),
+    );
+    let end = super::super::natives::math::spread_end(
+        from,
+        std::array::from_fn(|k| from[k] + aim[k]),
+        spread,
+        draws,
+    );
+    (glam::Vec3::from(end) - glam::Vec3::from(from))
+        .normalize_or(glam::Vec3::from(aim))
+        .to_array()
 }
 
 /// Turrets under `startfiring` shoot where they aim at their weapon's fire rate.
@@ -411,6 +533,22 @@ pub(super) fn player_turrets(world: &mut World) {
             user.1 = now + i64::from(interval);
         }
         let from = super::muzzle(world, object);
+        let aim = spread(world, object, PLAYER_SPREAD, from, aim);
         super::fire_bullet(world, object, from, aim, weapon, Some(id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The barrel reaches full rate a second after starting, and rests a
+    /// second after stopping; a stop halfway spins down from there.
+    #[test]
+    fn barrel_spins_up_and_down() {
+        assert_eq!(spin_rate(0.0, 500.0, true), 0.5);
+        assert_eq!(spin_rate(0.0, 1500.0, true), 1.0);
+        assert_eq!(spin_rate(0.5, 250.0, false), 0.25);
+        assert_eq!(spin_rate(1.0, 2000.0, false), 0.0);
     }
 }

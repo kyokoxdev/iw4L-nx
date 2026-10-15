@@ -4,7 +4,8 @@
 //! chance. It sets `grenade`, hears `grenade danger` when a hostile threw it,
 //! and, inside the blast (explosion radius + 128), throws it back from 64
 //! units (`grenade_return_throw`, the fuse stretched to give it time), else
-//! runs out of the blast, else cowers (`grenade_cower`). Fork-only; hooks in
+//! stays at a cover node that shields it, else runs out of the blast, else
+//! cowers (`grenade_cower`). Fork-only; hooks in
 //! `actors.rs`.
 
 use bevy_ecs::prelude::World;
@@ -203,6 +204,12 @@ fn notice(world: &mut World, id: u64, dangers: &[Danger]) {
             delay(world, danger, FUSE_GRACE_MS);
         }
         super::switch_to(world, id, "grenade_return_throw", Some(Hold::Custom));
+        return;
+    }
+    // Takes cover where it is when its cover node shields it from the grenade.
+    // ponytail: cover arc only; the shield fraction and the move to another
+    // cover out of the blast are not decoded.
+    if super::campaign::covered_from(world, id, danger.at) {
         return;
     }
     if !flee(world, id, origin, danger.at, safe) {

@@ -82,13 +82,10 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     use Stub::*;
     stubs! { registry;
         Method "deactivatereverb" => Undefined;
-        Function "destroyglass" => Undefined;
         Method "disableaimassist" => Undefined;
         Method "enableaimassist" => Undefined;
         Method "freevehicle" => Undefined;
         Method "getattachpos" => Origin;
-        Function "getglass" => Undefined;
-        Function "getglassarray" => EmptyArray;
         Function "getpartname" => Undefined;
         Method "getplayerknifemodel" => Undefined;
         Method "getplayersetting" => One; // only key read: "gameskill"; 1 = Regular
@@ -102,9 +99,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "restoredefaultdroppitch" => Undefined;
         Method "setairresistance" => Undefined;
         Method "setreverb" => Undefined;
-        Method "setswitchnode" => Undefined;
         Method "setvehiclelookattext" => Undefined;
-        Method "setwaitspeed" => Undefined;
         Method "setwatersheeting" => Undefined;
         Method "setwaypointedgestyle_rotatingicon" => Undefined;
         Method "setwaypointiconoffscreenonly" => Undefined;
@@ -178,7 +173,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Function "enableouterspacemodellighting" => Undefined;
         Function "getculldist" => Zero;
         Function "getmapsunlight" => ZeroVector;
-        Function "getnodesinradius" => EmptyArray;
         Function "gettimesincelastpaused" => Zero;
         Function "hideonclient" => Undefined;
         Function "precachenightvisioncodeassets" => Undefined;
@@ -200,7 +194,6 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "forceviewmodelanimation" => Undefined;
         Method "hideonclient" => Undefined;
         Method "hideviewmodel" => Undefined;
-        Method "invisiblenotsolid" => Undefined;
         Method "nightvisionforceoff" => Undefined;
         Method "playersetgroundreferenceent" => Undefined;
         Method "setcorpseremovetimer" => Undefined;
@@ -212,25 +205,17 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         Method "showonclient" => Undefined;
         Method "showviewmodel" => Undefined;
         Method "stoplookat" => Undefined;
-        Method "visiblesolid" => Undefined;
         // MP-catalog names other campaign levels reach with no native yet.
         Function "deleteglass" => Undefined;
-        Method "getbarrelspinrate" => Zero;
         Function "getgroundposition" => Arg(0);
-        Method "getmode" => Undefined;
         Method "hideallparts" => Undefined;
-        Function "physicsexplosioncylinder" => Undefined;
         Function "physicsjolt" => Undefined;
-        Method "setaispread" => Undefined;
         Method "setautorotationdelay" => Undefined;
         Method "setmotiontrackervisible" => Undefined;
         Function "setnorthyaw" => Undefined;
-        Method "setplayerspread" => Undefined;
         Method "setstablemissile" => Undefined;
         Method "setsuppressiontime" => Undefined;
-        Method "startbarrelspin" => Undefined;
         Function "stopallrumbles" => Undefined;
-        Method "stopbarrelspin" => Undefined;
         Function "transformmove" => Undefined;
         Method "vehicle_getbodyvelocity" => ZeroVector;
         Method "vehicle_turnengineon" => Undefined;

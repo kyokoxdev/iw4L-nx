@@ -450,10 +450,74 @@ fn free_for(runtime: &mut RoundScript, id: u64, node: u64) -> bool {
     }
 }
 
-/// The best scoring free cover node inside `area` for `id`.
-// ponytail: every cover in the area, traced to the enemy from standing eye
-// height; cap the search at 256 nodes and read precomputed node sight.
-fn find_cover(world: &mut World, id: u64, area: &Area, skip: Option<u64>) -> Option<u64> {
+/// Covers a search looks at, at most.
+const COVER_SEARCH_MAX: usize = 256;
+/// A cover search reaches no farther than this from its centre.
+const COVER_SEARCH_RADIUS: f32 = 716.8;
+
+/// Where `findbestcovernode` looks: a goal radius past the search reach is
+/// searched around the actor, pulled toward the goal far enough to stay
+/// inside it; a smaller goal is searched whole.
+// ponytail: the wider 1024 reach (an unnamed actor flag) and the node-goal
+// shrink (radius − 128, at least 64) are left out; neither flag is decoded.
+fn cover_search(runtime: &mut RoundScript, id: u64) -> Area {
+    let origin = vector_field(runtime, id, "origin").unwrap_or([0.0; 3]);
+    let goal = vector_field(runtime, id, "goalpos").unwrap_or(origin);
+    let radius = number(runtime.object_field(id, "goalradius")).unwrap_or(DEFAULT_GOAL_RADIUS);
+    let height = number(runtime.object_field(id, "goalheight")).unwrap_or(DEFAULT_GOAL_HEIGHT);
+    let (center, radius) = search_centre(origin, goal, radius);
+    Area::Sphere {
+        center,
+        radius,
+        height,
+    }
+}
+
+/// Centre and radius of a cover search for an actor at `origin` with a goal
+/// of `radius` at `goal`.
+fn search_centre(origin: [f32; 3], goal: [f32; 3], radius: f32) -> ([f32; 3], f32) {
+    if radius <= COVER_SEARCH_RADIUS {
+        return (goal, radius);
+    }
+    let to_goal = glam::Vec3::from(goal) - glam::Vec3::from(origin);
+    let pull = (to_goal.length() - (radius - COVER_SEARCH_RADIUS)).max(0.0);
+    let at = glam::Vec3::from(origin) + to_goal.normalize_or_zero() * pull;
+    ([at.x, at.y, goal[2]], COVER_SEARCH_RADIUS)
+}
+
+/// The nearest [`COVER_SEARCH_MAX`] covers inside `search`.
+// ponytail: nearest first; the original keeps the first 256 its node tree yields.
+fn search_covers(runtime: &mut RoundScript, search: &Area) -> Vec<Cover> {
+    let center = match search {
+        Area::Sphere { center, .. } => Some(*center),
+        _ => None,
+    };
+    let mut covers: Vec<Cover> = runtime
+        .campaign
+        .nodes
+        .clone()
+        .into_iter()
+        .filter_map(|node| cover_at(runtime, node))
+        .filter(|cover| inside(search, cover.origin))
+        .collect();
+    if let Some(center) = center {
+        let planar = |at: [f32; 3]| (at[0] - center[0]).hypot(at[1] - center[1]);
+        covers.sort_by(|a, b| planar(a.origin).total_cmp(&planar(b.origin)));
+    }
+    covers.truncate(COVER_SEARCH_MAX);
+    covers
+}
+
+/// The best scoring free cover node inside `area` for `id`, from the covers in `search`.
+// ponytail: covers traced to the enemy from standing eye height; read
+// precomputed node sight instead if traces cost too much.
+fn find_cover(
+    world: &mut World,
+    id: u64,
+    area: &Area,
+    search: &Area,
+    skip: Option<u64>,
+) -> Option<u64> {
     let now = super::super::players::now_ms(world);
     let enemy = enemy_origin(world, id);
     let known = brain(world, id).known;
@@ -480,11 +544,12 @@ fn find_cover(world: &mut World, id: u64, area: &Area, skip: Option<u64>) -> Opt
         }),
     };
     let mut covers = Vec::new();
-    for node in runtime.campaign.nodes.clone() {
+    for mut cover in search_covers(&mut runtime, search) {
+        let node = cover.id;
         if Some(node) == skip || !free_for(&mut runtime, id, node) {
             continue;
         }
-        if let Some(mut cover) = cover_at(&mut runtime, node).filter(|c| inside(area, c.origin)) {
+        if inside(area, cover.origin) {
             cover.dangerous = node_marked(&runtime, node, &team, now);
             cover.clear_of_player = team == Value::string("allies")
                 && runtime
@@ -546,6 +611,18 @@ fn cover_at(runtime: &mut RoundScript, node: u64) -> Option<Cover> {
         clear_of_player: false,
         other_threats: 0,
     })
+}
+
+/// The actor is at its claimed cover node and the node shields it from `at`.
+pub(super) fn covered_from(world: &mut World, id: u64, at: [f32; 3]) -> bool {
+    if super::near_claim_node(world, &Value::Object(id), false) != Ok(Value::Int(1)) {
+        return false;
+    }
+    let mut runtime = world.resource_mut::<RoundScript>();
+    let Value::Object(node) = runtime.object_field(id, "node") else {
+        return false;
+    };
+    cover_at(&mut runtime, node).is_some_and(|cover| covers_against(&cover, at))
 }
 
 /// A player holding still marks the path nodes in its line of fire, and
@@ -874,7 +951,8 @@ pub(super) fn register(registry: &mut NativeRegistry) {
     registry.register(Method, "findbestcovernode", |world, receiver, _| {
         let id = actor(world, receiver)?;
         let area = goal_area(world, id);
-        Ok(find_cover(world, id, &area, None).map_or(Value::Undefined, Value::Object))
+        let search = cover_search(&mut world.resource_mut::<RoundScript>(), id);
+        Ok(find_cover(world, id, &area, &search, None).map_or(Value::Undefined, Value::Object))
     });
     registry.register(Method, "findshufflecovernode", |world, receiver, _| {
         let id = actor(world, receiver)?;
@@ -890,7 +968,7 @@ pub(super) fn register(registry: &mut NativeRegistry) {
             radius: SHUFFLE_RADIUS,
             height: DEFAULT_GOAL_HEIGHT,
         };
-        Ok(find_cover(world, id, &area, skip).map_or(Value::Undefined, Value::Object))
+        Ok(find_cover(world, id, &area, &area, skip).map_or(Value::Undefined, Value::Object))
     });
     // Claims the node and goes to it; the cover animscript plays once there.
     registry.register(Method, "usecovernode", |world, receiver, args| {
@@ -1053,6 +1131,18 @@ mod tests {
             segment_distance([50.0, 20.0, 0.0], [0.0; 3], [150.0, 0.0, 60.0]) <= LOS_HALF_WIDTH
         );
         assert!(segment_distance([200.0, 0.0, 0.0], [0.0; 3], [150.0, 0.0, 0.0]) > LOS_HALF_WIDTH);
+    }
+
+    /// A small goal is searched whole; a big one around the actor, pulled
+    /// inside the goal when the actor stands near its edge or outside.
+    #[test]
+    fn cover_search_stays_inside_the_goal() {
+        let goal = [0.0, 0.0, 10.0];
+        assert_eq!(search_centre([500.0, 0.0, 0.0], goal, 512.0), (goal, 512.0));
+        let deep = search_centre([100.0, 0.0, 0.0], goal, 2048.0);
+        assert_eq!(deep, ([100.0, 0.0, 10.0], COVER_SEARCH_RADIUS));
+        let (outside, _) = search_centre([3000.0, 0.0, 0.0], goal, 2048.0);
+        assert!((outside[0] - (2048.0 - COVER_SEARCH_RADIUS)).abs() < 0.01);
     }
 
     /// One mark is not dangerous; a second inside its 15 s makes it so for 60 s.
