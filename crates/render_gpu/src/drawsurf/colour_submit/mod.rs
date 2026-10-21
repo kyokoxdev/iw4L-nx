@@ -21,7 +21,7 @@ use bevy::render::render_resource::{
     SpecializedRenderPipelines, TextureFormat, TextureSampleType, TextureView,
     TextureViewDescriptor, VertexAttribute, VertexFormat, VertexStepMode,
 };
-use bevy::render::render_resource::{BindGroup, BindGroupId};
+use bevy::render::render_resource::BindGroup;
 use bevy::render::renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery};
 use bevy::render::view::{ExtractedView, Msaa, ViewTarget};
 use bevy::render::{Render, RenderSystems};
@@ -117,6 +117,7 @@ mod record;
 pub(super) use diagnostics::ExactColourSubmitCensus;
 use encode::RecordCensus;
 mod residency;
+mod skinning;
 mod smodel_skinned;
 
 pub use pipeline::cached_lighting_port_variant;
@@ -126,9 +127,12 @@ fn upload_exact_geometry(
     mut geometry: ResMut<ExactColourGeometry>,
     mut smodel_cache_gpu: ResMut<SmodelCacheGpu>,
     mut census: ResMut<ExactColourSubmitCensus>,
+    mut skin: ResMut<skinning::SkinGpu>,
+    mut pending: ResMut<bevy::render::renderer::PendingCommandBuffers>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
     mut patch_stats: Local<geometry::SmcPatchStats>,
+    support: Res<crate::SkinSupport>,
 ) {
     let result = geometry::upload_exact_geometry(
         &frame,
@@ -138,6 +142,32 @@ fn upload_exact_geometry(
         &queue,
         &mut patch_stats,
     );
+    let skinned = skin.dispatch(
+        &frame.skin_jobs,
+        geometry.xmodel.vertex.buffer(),
+        geometry.xmodel.vertex.len(),
+        &device,
+        &queue,
+        &mut pending,
+        support.resident_budget,
+    );
+    let limits = device.limits();
+    support.report(
+        frame.world_generation,
+        render_frame::skinning::SkinBatchLimits {
+            storage_bytes: limits.max_storage_buffer_binding_size,
+            buffer_bytes: limits.max_buffer_size,
+            storage_alignment: u64::from(limits.min_storage_buffer_offset_alignment),
+            uniform_alignment: u64::from(limits.min_uniform_buffer_offset_alignment),
+            dispatch_groups: limits.max_compute_workgroups_per_dimension,
+        },
+        skin.device_generation(),
+        skinned.as_ref().err().copied(),
+    );
+    let skinned = skinned.unwrap_or_default();
+    perf::Counter::CounterSkinJobs.emit(skinned.jobs as f64);
+    perf::Counter::CounterSkinVertices.emit(skinned.vertices as f64);
+    perf::Counter::CounterSkinResidentBytes.emit(skin.resident_bytes() as f64);
     if let Some(kind) = result.code_mesh_gpu_kind {
         census.preparation.code_mesh_gpu_kind = Some(kind);
     }
@@ -3273,6 +3303,7 @@ pub(super) fn register(app: &mut App) {
         .init_resource::<InstalledRenderWorld>()
         .init_resource::<PublishedRenderFrame>()
         .init_resource::<ExactColourGeometry>()
+        .init_resource::<skinning::SkinGpu>()
         .init_resource::<super::resolved_scene::ResolvedScene>()
         .init_resource::<SmodelCacheGpu>()
         .init_resource::<ExactColourPipeline>()
@@ -3301,6 +3332,9 @@ pub(super) fn register(app: &mut App) {
             (
                 pipeline::init_or_update_pipeline.in_set(RenderSystems::PrepareAssets),
                 upload_exact_geometry.in_set(RenderSystems::PrepareResources),
+                skinning::retire_submitted_buffers
+                    .after(RenderSystems::Render)
+                    .before(RenderSystems::Cleanup),
                 pipeline::kick_extracted_colour_pipelines.in_set(RenderSystems::Prepare),
                 prepare_camera::install_shared_colour_pass
                     .in_set(RenderSystems::Prepare)

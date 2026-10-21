@@ -88,6 +88,7 @@ impl std::ops::Deref for PublishedRenderFrame {
 
 #[derive(Clone, Debug, Default)]
 pub struct RenderFrameData {
+    pub skin_jobs: Vec<render_frame::skinning::PackedSkinJob>,
     pub frame_products: ExtractedRenderFrameProducts,
     pub generation: MaterialGenerationId,
     pub world_generation: frame::WorldStamp,

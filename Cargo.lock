@@ -3218,6 +3218,7 @@ name = "frame"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "master_protocol",
 ]
 
 [[package]]
@@ -5889,6 +5890,7 @@ dependencies = [
  "hud_iw4",
  "lighting_iw4",
  "marks_iw4",
+ "master_protocol",
  "math_iw4",
  "naga 30.0.1",
  "net",
@@ -5959,6 +5961,7 @@ dependencies = [
  "render_backend",
  "render_frame",
  "render_material",
+ "render_scene",
 ]
 
 [[package]]

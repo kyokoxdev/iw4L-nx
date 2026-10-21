@@ -157,20 +157,22 @@
       {"name": "quit", "item_type": 1, "style": 1, "text_key": "QUIT", "rect": {"x": -64, "y": 200, "w": 336, "h": 20, "horz_align": 1, "vert_align": 1}, "background": "menu_button_selection_bar", "fore_color": [1, 1, 1, 1], "back_color": [0, 0, 0, 0], "font_enum": 3, "text_scale": 0.375, "text_align_mode": 10, "text_align_x": -4, "text_align_y": 0, "handlers": {"action": [{"Script": "play mouse_click; open quit_popmenu;"}], "focus": [{"Script": "play mouse_over; setItemColor self backcolor 0 0 0 1;"}], "leave_focus": [{"Script": "setItemColor self backcolor 0 0 0 0;"}]}},
       {"name": "play_separator", "background": "white", "rect": {"x": 4, "y": 75, "w": 248, "h": 0.5, "horz_align": 1, "vert_align": 1}, "fore_color": [1, 1, 1, 0.25], "static_flags": 1048576},
       {"name": "exit_separator", "background": "white", "rect": {"x": 4, "y": 191, "w": 248, "h": 0.5, "horz_align": 1, "vert_align": 1}, "fore_color": [1, 1, 1, 0.25], "static_flags": 1048576},
-      {"name": "master_status", "text_key": "", "rect": {"x": 8, "y": -24, "w": 624, "h": 20, "horz_align": 1, "vert_align": 3}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.3, "text_align_mode": 8, "text_align_x": 0, "static_flags": 1048576, "text_literal": true, "text_exp": "op 38 s:75695f6d61737465725f737461747573 op 1"}
+      {"name": "master_status", "text_key": "", "rect": {"x": 8, "y": -44, "w": 624, "h": 20, "horz_align": 1, "vert_align": 3}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.3, "text_align_mode": 8, "text_align_x": 0, "static_flags": 1048576, "text_literal": true, "text_exp": "op 38 s:75695f6d61737465725f737461747573 op 1"},
+      {"name": "players_online", "text_key": "", "rect": {"x": 8, "y": -24, "w": 624, "h": 20, "horz_align": 1, "vert_align": 3}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.3, "text_align_mode": 8, "text_align_x": 0, "static_flags": 1048576, "text_literal": true, "text_exp": "op 38 s:75695f706c61796572735f6f6e6c696e65 op 1"}
     ]
   },
   {
-    "name": "iw4l_frontend_loading",
+    "name": "class_loading",
     "fullscreen": 1,
     "rect": {"x": 0, "y": 0, "w": 640, "h": 480, "horz_align": 4, "vert_align": 4},
-    "handlers": {"esc": [{"Script": "open quit_popmenu;"}]},
+    "handlers": {"esc": [{"Script": "close self;"}]},
     "items": [
       {"name": "background", "background": "mw2_main_background", "rect": {"x": 0, "y": 0, "w": 640, "h": 480, "horz_align": 4, "vert_align": 4}, "fore_color": [1, 1, 1, 1], "static_flags": 1048576},
       {"name": "clouds", "background": "mw2_main_cloud_overlay", "rect": {"x": -107, "y": 0, "w": 1708, "h": 480, "horz_align": 0, "vert_align": 0}, "fore_color": [1, 1, 1, 0.45], "static_flags": 1048576, "float_exp": [[0, "-107 op 6 op 34 op 1 op 4 60000 op 3 60000 op 2 854"]]},
       {"name": "soldier", "background": "mw2_main_mp_image", "rect": {"x": -427, "y": -240, "w": 854, "h": 480, "horz_align": 2, "vert_align": 2}, "fore_color": [1, 1, 1, 1], "static_flags": 1048576, "cover": true},
       {"name": "glow", "background": "mockup_bg_glow", "rect": {"x": 0, "y": 0, "w": 640, "h": 480, "horz_align": 4, "vert_align": 4}, "fore_color": [1, 1, 1, 0.5], "static_flags": 1048576},
-      {"name": "title", "text_key": "LOADING ASSETS...", "rect": {"x": -64, "y": 28, "w": 336, "h": 20, "horz_align": 1, "vert_align": 1}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.375, "text_align_mode": 8, "text_align_x": 68, "static_flags": 1048576}
+      {"name": "title", "text_key": "LOADING CLASSES...", "rect": {"x": -64, "y": 28, "w": 336, "h": 20, "horz_align": 1, "vert_align": 1}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.375, "text_align_mode": 8, "text_align_x": 68, "static_flags": 1048576},
+      {"name": "back", "text_key": "@PLATFORM_BACK_CAPS", "rect": {"x": 8, "y": -24, "w": 624, "h": 20, "horz_align": 1, "vert_align": 3}, "fore_color": [1, 1, 1, 0.8], "font_enum": 3, "text_scale": 0.3, "text_align_mode": 8, "static_flags": 1048576}
     ]
   },
   {
@@ -700,7 +702,7 @@
         ],
         [
           3,
-          "176"
+          "196"
         ]
       ],
       "handlers": {
@@ -719,15 +721,15 @@
       }
     },
     "item_overrides": [
-      {"index": 2, "fields": {"rect": {"h": 176}, "float_exp": []}},
-      {"index": 5, "fields": {"rect": {"h": 176}, "float_exp": []}},
-      {"index": 8, "fields": {"rect": {"h": 176}, "float_exp": []}},
-      {"index": 12, "fields": {"rect": {"h": 176}, "float_exp": []}},
-      {"index": 13, "fields": {"rect": {"y": 176}, "float_exp": []}},
-      {"index": 14, "fields": {"rect": {"y": 176}, "float_exp": []}},
-      {"index": 15, "fields": {"rect": {"y": 176}, "float_exp": []}},
-      {"index": 16, "fields": {"rect": {"h": 176}, "float_exp": []}},
-      {"index": 17, "fields": {"rect": {"h": 176}, "float_exp": []}},
+      {"index": 2, "fields": {"rect": {"h": 196}, "float_exp": []}},
+      {"index": 5, "fields": {"rect": {"h": 196}, "float_exp": []}},
+      {"index": 8, "fields": {"rect": {"h": 196}, "float_exp": []}},
+      {"index": 12, "fields": {"rect": {"h": 196}, "float_exp": []}},
+      {"index": 13, "fields": {"rect": {"y": 196}, "float_exp": []}},
+      {"index": 14, "fields": {"rect": {"y": 196}, "float_exp": []}},
+      {"index": 15, "fields": {"rect": {"y": 196}, "float_exp": []}},
+      {"index": 16, "fields": {"rect": {"h": 196}, "float_exp": []}},
+      {"index": 17, "fields": {"rect": {"h": 196}, "float_exp": []}},
       {
         "index": 19,
         "fields": {
@@ -780,7 +782,7 @@
         "index": 23,
         "fields": {
           "rect": {
-            "y": 148
+            "y": 168
           },
           "text_key": "@PLATFORM_BACK_CAPS",
           "vis_exp": "1",
@@ -842,6 +844,175 @@
           "dvar_flags": 0,
           "dvar_test": "",
           "enable_dvar": ""
+        }
+      },
+      {
+        "index": 22,
+        "fields": {
+          "name": "game_assets",
+          "text_key": "GAME ASSETS",
+          "text_literal": true,
+          "text_exp": "",
+          "rect": {
+            "y": 144
+          },
+          "handlers": {
+            "action": [
+              {
+                "Script": "play mouse_click; close self; open lobby_game_assets;"
+              }
+            ]
+          },
+          "vis_exp": "1",
+          "disabled_exp": "0",
+          "float_exp": [],
+          "dvar_flags": 0,
+          "dvar_test": "",
+          "enable_dvar": ""
+        }
+      }
+    ]
+  },
+  {
+    "name": "lobby_game_assets",
+    "base": "popup_gamesetup",
+    "fields": {
+      "float_exp": [
+        [
+          1,
+          "24"
+        ],
+        [
+          3,
+          "116"
+        ]
+      ],
+      "handlers": {
+        "open": [
+          {
+            "Script": "focusFirst;"
+          }
+        ],
+        "close": [],
+        "close_request": [],
+        "esc": [
+          {
+            "Script": "close self; open lobby_game_setup;"
+          }
+        ]
+      }
+    },
+    "item_overrides": [
+      {"index": 2, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {"index": 5, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {"index": 8, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {"index": 12, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {"index": 13, "fields": {"rect": {"y": 116}, "float_exp": []}},
+      {"index": 14, "fields": {"rect": {"y": 116}, "float_exp": []}},
+      {"index": 15, "fields": {"rect": {"y": 116}, "float_exp": []}},
+      {"index": 16, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {"index": 17, "fields": {"rect": {"h": 116}, "float_exp": []}},
+      {
+        "index": 18,
+        "fields": {
+          "text_key": "GAME ASSETS",
+          "text_literal": true
+        }
+      },
+      {
+        "index": 19,
+        "fields": {
+          "name": "assets_iw5",
+          "text_key": "",
+          "text_exp": "op 38 s:75695f6173736574735f697735 op 1",
+          "rect": {
+            "y": 24
+          },
+          "handlers": {
+            "action": [
+              {
+                "Script": "play mouse_click; exec \"ui_asset_family iw5\";"
+              }
+            ]
+          },
+          "vis_exp": "1",
+          "disabled_exp": "op 38 s:75695f6173736574735f6977355f626c6f636b6564 op 1 op 12 s:31",
+          "float_exp": [],
+          "dvar_flags": 0,
+          "dvar_test": "",
+          "enable_dvar": ""
+        }
+      },
+      {
+        "index": 20,
+        "fields": {
+          "name": "assets_t5",
+          "text_key": "",
+          "text_exp": "op 38 s:75695f6173736574735f7435 op 1",
+          "rect": {
+            "y": 44
+          },
+          "handlers": {
+            "action": [
+              {
+                "Script": "play mouse_click; exec \"ui_asset_family t5\";"
+              }
+            ]
+          },
+          "vis_exp": "1",
+          "disabled_exp": "op 38 s:75695f6173736574735f74355f626c6f636b6564 op 1 op 12 s:31",
+          "float_exp": [],
+          "dvar_flags": 0,
+          "dvar_test": "",
+          "enable_dvar": ""
+        }
+      },
+      {
+        "index": 21,
+        "fields": {
+          "name": "assets_t6",
+          "text_key": "",
+          "text_exp": "op 38 s:75695f6173736574735f7436 op 1",
+          "rect": {
+            "y": 64
+          },
+          "handlers": {
+            "action": [
+              {
+                "Script": "play mouse_click; exec \"ui_asset_family t6\";"
+              }
+            ]
+          },
+          "vis_exp": "1",
+          "disabled_exp": "op 38 s:75695f6173736574735f74365f626c6f636b6564 op 1 op 12 s:31",
+          "float_exp": [],
+          "dvar_flags": 0,
+          "dvar_test": "",
+          "enable_dvar": ""
+        }
+      },
+      {
+        "index": 22,
+        "fields": {
+          "vis_exp": "0"
+        }
+      },
+      {
+        "index": 23,
+        "fields": {
+          "rect": {
+            "y": 88
+          },
+          "text_key": "@PLATFORM_BACK_CAPS",
+          "vis_exp": "1",
+          "disabled_exp": "0",
+          "handlers": {
+            "action": [
+              {
+                "Script": "play mouse_click; close self; open lobby_game_setup;"
+              }
+            ]
+          }
         }
       }
     ]

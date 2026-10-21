@@ -123,6 +123,7 @@ pub struct FpvAssemblyKey {
 
 #[derive(Clone, Debug)]
 pub struct FpvSideAssemblies {
+    pub ammunition: asset_model::AmmunitionVisualMode,
     pub bare: Arc<FpvAssembly>,
     pub rocket: Option<Arc<FpvAssembly>>,
     pub melee: Option<Arc<FpvAssembly>>,
@@ -240,11 +241,7 @@ impl FpvAssembly {
                 }),
             ));
         }
-        if rocket {
-            let mount = mounts
-                .rocket
-                .as_ref()
-                .ok_or(FpvAssemblyError::Catalog("rocket mount"))?;
+        if rocket && let Some(mount) = mounts.rocket.as_ref() {
             parts.push((
                 mount.model,
                 FpvPartRole::Rocket,

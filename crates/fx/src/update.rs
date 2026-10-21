@@ -2,8 +2,8 @@ use fx_iw4::{
     FX_ELEM_TYPE_SPARK_CLOUD, FX_ELEM_TYPE_SPARK_FOUNTAIN, FX_STATUS_HAS_PENDING_LOOP_ELEMS,
     FX_STATUS_REF_COUNT_MASK_IW4, FxUpdateEffectBolt, axis_to_quat,
     begin_iterating_over_effects_exclusive, bolt_compose_orientation, bolt_mark_lost,
-    elem_norm_time, elem_uses_collision, end_iterating_over_effects, end_iterating_runs_gc,
-    unit_quat_to_axis, update_effect_bolt, vector_vectors,
+    elem_norm_time, elem_skips_position_update, elem_uses_collision, end_iterating_over_effects,
+    end_iterating_runs_gc, unit_quat_to_axis, update_effect_bolt, vector_vectors,
 };
 use std::collections::HashMap;
 
@@ -48,6 +48,7 @@ pub struct FxElemMotionQuery<'a> {
     pub orient: fx_iw4::FxOrientation,
 
     pub at_rest_fraction: u8,
+    pub supported_since_ms: Option<i32>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +71,7 @@ pub struct PendingCollide {
     effect_axis: [[f32; 3]; 3],
     orient: fx_iw4::FxOrientation,
     at_rest_fraction: u8,
+    supported_since_ms: Option<i32>,
 }
 
 impl PendingCollide {
@@ -92,6 +94,7 @@ impl PendingCollide {
             effect_axis: self.effect_axis,
             orient: self.orient,
             at_rest_fraction: self.at_rest_fraction,
+            supported_since_ms: self.supported_since_ms,
         }
     }
 }
@@ -104,6 +107,7 @@ pub struct FxElemMotionResult {
     pub remove: bool,
 
     pub at_rest_fraction: Option<u8>,
+    pub supported_since_ms: Option<i32>,
 
     pub spawn_impact: Option<FxImpactSpawn>,
 }
@@ -138,6 +142,7 @@ pub struct FxChildSpawnRequest<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FxElemTraceHit {
+    pub complete: bool,
     pub fraction: f32,
     pub normal: [f32; 3],
     pub startsolid: bool,
@@ -384,7 +389,7 @@ fn pending_collide_for_elem(
     if msec_now >= death {
         return None;
     }
-    if !elem_uses_collision(elem.flags) {
+    if !elem_uses_collision(elem.flags) && !elem_skips_position_update(elem.elem_type, elem.flags) {
         return None;
     }
     let def_index = elem.def_index;
@@ -424,6 +429,7 @@ fn pending_collide_for_elem(
         effect_axis: now.axis,
         orient,
         at_rest_fraction: elem.at_rest_fraction,
+        supported_since_ms: elem.supported_since_ms,
     })
 }
 
@@ -620,6 +626,7 @@ fn update_element(
     let elem_type = elem.elem_type;
     let spark_handle = elem.spark_cloud_handle;
     let at_rest_fraction = elem.at_rest_fraction;
+    let supported_since_ms = elem.supported_since_ms;
     let (def_name, catalog_index, now, alt, products, mark_entity) =
         match host.effect_at(effect_slot) {
             Some(e) => (
@@ -672,6 +679,7 @@ fn update_element(
         effect_axis: now.axis,
         orient,
         at_rest_fraction,
+        supported_since_ms,
     };
     match collide_cache
         .get(&handle)
@@ -687,9 +695,10 @@ fn update_element(
             if let Some(elem) = host.elems.get_mut(slot) {
                 elem.origin = origin_end;
                 elem.base_vel = result.base_vel;
-                if let Some(frac) = result.at_rest_fraction {
-                    elem.at_rest_fraction = frac;
-                }
+                elem.at_rest_fraction = result
+                    .at_rest_fraction
+                    .unwrap_or(fx_iw4::FX_ELEM_AT_REST_NONE);
+                elem.supported_since_ms = result.supported_since_ms;
             }
             let emit_residual = host.elems.get(slot).map(|e| e.emit_residual).unwrap_or(0);
             if let Some(sched) = on_emit(FxEmitQuery {

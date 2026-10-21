@@ -60,13 +60,31 @@ fn adopt(
     let model =
         Value::string(FrameWorld::from_world(world).weapon_projectile_model(projectile.weapon));
     let facts = FrameWorld::from_world(world).equipment_facts_for(projectile.weapon);
+    if let Some(object) = world
+        .resource::<RoundScript>()
+        .missiles
+        .get(&projectile.id)
+        .copied()
+    {
+        return Ok(object);
+    }
+    let object = world
+        .resource_mut::<RoundScript>()
+        .create_entity(EntityKind::Missile(projectile.id), classname)?;
     let presence = if facts.is_some_and(|facts| !facts.timed_detonation && facts.stickiness != 0) {
-        Some(super::presence::spawn_presence(world, projectile.origin)?)
+        match super::presence::spawn_presence(world, projectile.origin) {
+            Ok(presence) => Some(presence),
+            Err(error) => {
+                let mut runtime = world.resource_mut::<RoundScript>();
+                runtime.entities.remove(&object);
+                runtime.objects.remove(&object);
+                return Err(error);
+            }
+        }
     } else {
         None
     };
     let mut runtime = world.resource_mut::<RoundScript>();
-    let object = runtime.create_entity(EntityKind::Missile(projectile.id), classname)?;
     let owner = runtime
         .players
         .get(&projectile.owner.0)
@@ -176,6 +194,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
                 angles,
                 ..Default::default()
             });
+            crate::remote_missile::mark_remote(frame.ecs(), id);
         }
         Ok(Value::Undefined)
     });
@@ -305,11 +324,6 @@ pub(crate) fn publish_projectile_launches(world: &mut World) {
 }
 
 fn adopt_fired(world: &mut World) {
-    let now = now_ms(world);
-    let seen = std::mem::replace(
-        &mut world.resource_mut::<RoundScript>().missiles_seen_ms,
-        now,
-    );
     let touches = world
         .resource::<RoundScript>()
         .grenade_touches
@@ -320,7 +334,7 @@ fn adopt_fired(world: &mut World) {
     let fresh: Vec<crate::ProjectileState> = crate::frame::collect_projectiles(world)
         .into_iter()
         .chain(touches)
-        .filter(|p| p.live && p.spawn_time_ms > seen)
+        .filter(|p| p.live)
         .filter(|p| !world.resource::<RoundScript>().missiles.contains_key(&p.id))
         .filter(|p| adopted.insert(p.id))
         .collect();
@@ -330,7 +344,7 @@ fn adopt_fired(world: &mut World) {
             continue;
         }
         let weap_type = FrameWorld::from_world(world)
-            .combat_facts_for(projectile.weapon)
+            .equipment_facts_for(projectile.weapon)
             .map_or(-1, |facts| facts.weap_type);
         let (classname, notify) = match weap_type {
             WEAPTYPE_GRENADE => ("grenade", "grenade_fire"),

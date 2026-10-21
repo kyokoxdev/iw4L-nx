@@ -2183,12 +2183,17 @@ fn phase_from_tag(tag: u8) -> Result<MatchPhase, WireError> {
 
 fn encode_corpse_pool(out: &mut WireWriter, pool: &PlayerCorpsePool) {
     out.put_u8(pool.spawn_ring);
+    out.put_u64(pool.next_spawn_sequence);
     for slot in &pool.slots {
         if !slot.occupied {
             out.put_u8(0);
             continue;
         }
         out.put_u8(1);
+        out.put_u64(slot.spawn_sequence);
+        out.put_u8(slot.weapon_model);
+        out.put_i32(slot.client_state_team);
+        out.put_u8(slot.ffa_team.unwrap_or(u8::MAX));
         out.put_u32(slot.victim.0);
         for v in slot.origin {
             out.put_f32(v);
@@ -2213,13 +2218,21 @@ fn encode_corpse_pool(out: &mut WireWriter, pool: &PlayerCorpsePool) {
         }
         out.put_u8(u8::from(slot.falling));
         out.put_i32(slot.ground_entity_num);
+        out.put_i32(slot.spawn_time_ms);
+        out.put_u32(slot.shield.map_or(0, |shield| shield.weapon));
+        out.put_u8(u8::from(slot.shield.is_some_and(|shield| shield.on_back)));
     }
 }
 
 fn decode_corpse_pool(input: &mut WireReader<'_>) -> Result<PlayerCorpsePool, WireError> {
     let spawn_ring = input.get_u8()?;
+    let next_spawn_sequence = input.get_u64()?;
+    if spawn_ring >= playerstate_iw4::MAX_CLIENT_CORPSES as u8 {
+        return Err(WireError::Malformed("corpse ring outside slots"));
+    }
     let mut pool = PlayerCorpsePool {
         spawn_ring,
+        next_spawn_sequence,
         ..PlayerCorpsePool::default()
     };
     for slot in &mut pool.slots {
@@ -2228,6 +2241,13 @@ fn decode_corpse_pool(input: &mut WireReader<'_>) -> Result<PlayerCorpsePool, Wi
             1 => {
                 *slot = PlayerCorpseSlot {
                     occupied: true,
+                    spawn_sequence: input.get_u64()?,
+                    weapon_model: input.get_u8()?,
+                    client_state_team: input.get_i32()?,
+                    ffa_team: {
+                        let team = input.get_u8()?;
+                        (team != u8::MAX).then_some(team)
+                    },
                     victim: ClientId(input.get_u32()?),
                     origin: [input.get_f32()?, input.get_f32()?, input.get_f32()?],
                     viewangles: [input.get_f32()?, input.get_f32()?, input.get_f32()?],
@@ -2246,12 +2266,48 @@ fn decode_corpse_pool(input: &mut WireReader<'_>) -> Result<PlayerCorpsePool, Wi
                     tr_base: [input.get_f32()?, input.get_f32()?, input.get_f32()?],
                     falling: input.get_u8()? != 0,
                     ground_entity_num: input.get_i32()?,
+                    spawn_time_ms: input.get_i32()?,
+                    shield: decode_corpse_shield(input)?,
                 };
+                if slot.spawn_sequence == 0 || slot.spawn_sequence > next_spawn_sequence {
+                    return Err(WireError::Malformed("invalid corpse spawn sequence"));
+                }
             }
             _ => return Err(WireError::Malformed("bad corpse slot tag")),
         }
     }
+    let mut identities = std::collections::HashSet::new();
+    let mut entities = std::collections::HashSet::new();
+    for slot in pool.slots.iter().filter(|slot| slot.occupied) {
+        if !identities.insert(slot.spawn_sequence)
+            || !entities.insert(slot.entnum)
+            || slot.entnum < playerstate_iw4::PLAYER_CORPSE_ENTITY_BASE
+            || slot.entnum
+                >= playerstate_iw4::PLAYER_CORPSE_ENTITY_BASE + playerstate_iw4::MAX_CLIENT_CORPSES
+            || slot
+                .origin
+                .iter()
+                .chain(slot.viewangles.iter())
+                .chain(slot.tr_base.iter())
+                .chain(slot.tr_delta.iter())
+                .any(|n| !n.is_finite())
+        {
+            return Err(WireError::Malformed("invalid corpse occupancy"));
+        }
+    }
     Ok(pool)
+}
+
+fn decode_corpse_shield(
+    input: &mut WireReader<'_>,
+) -> Result<Option<sim::ShieldAttachment>, WireError> {
+    let weapon = input.get_u32()?;
+    let on_back = match input.get_u8()? {
+        0 => false,
+        1 => true,
+        _ => return Err(WireError::Malformed("bad corpse shield tag")),
+    };
+    Ok((weapon != 0).then_some(sim::ShieldAttachment { weapon, on_back }))
 }
 
 fn encode_entity_states(out: &mut WireWriter, rows: &[entity_iw4::EntityState]) {

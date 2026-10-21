@@ -132,9 +132,11 @@ pub struct UploadedTextureView {
     pub dimension: TextureViewDimension,
 }
 
-#[derive(Resource, Clone, Debug, Default)]
+#[derive(Resource, Clone, Default)]
 pub struct RuntimeUploadedImageRegistry {
     source_handles: Option<RuntimeImageHandles>,
+    device: Option<RenderDevice>,
+    pub device_generation: u64,
     slot_index: UploadedSlotIndex,
     pending: UploadedPending,
     pub generation_id: MaterialGenerationId,
@@ -275,14 +277,15 @@ struct UploadedRefreshSlots {
 }
 
 pub(crate) fn prepare_uploaded_image_registry(
+    device: Res<RenderDevice>,
     handles: Option<Res<ExtractedRuntimeImageHandles>>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     extracted: Option<Res<ExtractedAssets<GpuImage>>>,
     mut registry: ResMut<RuntimeUploadedImageRegistry>,
-    device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
     refresh_uploaded_image_registry(
+        &device,
         handles.as_deref(),
         &gpu_images,
         extracted.as_deref(),
@@ -391,17 +394,44 @@ fn build_probe_array(
 }
 
 fn refresh_uploaded_image_registry(
+    device: &RenderDevice,
     handles: Option<&ExtractedRuntimeImageHandles>,
     gpu_images: &RenderAssets<GpuImage>,
     extracted: Option<&ExtractedAssets<GpuImage>>,
     registry: &mut RuntimeUploadedImageRegistry,
 ) {
+    if registry
+        .device
+        .as_ref()
+        .is_none_or(|previous| previous.wgpu_device() != device.wgpu_device())
+    {
+        let generation = registry
+            .device_generation
+            .checked_add(1)
+            .expect("image device generation exhausted");
+        let views = registry
+            .views_revision
+            .checked_add(1)
+            .expect("image view revision exhausted");
+        let replaced = registry
+            .replaced_revision
+            .checked_add(1)
+            .expect("image allocation revision exhausted");
+        *registry = RuntimeUploadedImageRegistry::default();
+        registry.device = Some(device.clone());
+        registry.device_generation = generation;
+        registry.views_revision = views;
+        registry.replaced_revision = replaced;
+    }
     let Some(handles) = handles else {
         if registry.source_handles.is_none() {
             return;
         }
         let (views, replaced) = (registry.views_revision, registry.replaced_revision);
+        let generation = registry.device_generation;
         *registry = RuntimeUploadedImageRegistry::default();
+        registry.device = Some(device.clone());
+        registry.device_generation = generation;
         registry.views_revision = views.wrapping_add(1);
         registry.replaced_revision = replaced.wrapping_add(1);
         return;

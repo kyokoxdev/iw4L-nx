@@ -23,6 +23,7 @@ pub(crate) struct FrontendState {
     password_joining: bool,
     lobby_password: String,
     rules_seeded: bool,
+    family_inventory: Option<u8>,
 }
 
 #[derive(SystemParam)]
@@ -62,6 +63,7 @@ pub(crate) fn register(registry: &mut ConsoleRegistry) {
         "ui_start_match",
         "ui_lobby_privacy",
         "ui_lobby_cheats",
+        "ui_asset_family",
         "ui_vote_skip",
         "ui_maps",
         "ui_map_pack",
@@ -97,16 +99,17 @@ fn change_page(page: &mut usize, command: &ConsoleCommand, len: usize) {
 
 pub(crate) fn route(
     mut events: MessageReader<ConsoleCommand>,
-    (mut returned, scope): (
+    (mut returned, scope, match_scope): (
         MessageReader<StateTransitionEvent<frame::MatchScope>>,
         Res<session::ScopeControl>,
+        Res<State<frame::MatchScope>>,
     ),
     mut commands: Commands,
     mut dvars: ResMut<UiMenuDvars>,
     mut party: ResMut<UiPartyState>,
     mut menus: MessageWriter<UiMenuRequest>,
     mut transition: ResMut<session::SessionSwapRequest>,
-    maps: Res<ui::MenuMapList>,
+    (maps, identity): (Res<ui::MenuMapList>, Res<frame::LaunchIdentity>),
     presentation: Option<Res<ui::frontend::maps::MapPresentation>>,
     settings: Res<frame::GameSettings>,
     localize: Option<Res<asset_game::LocalizeCatalog>>,
@@ -187,6 +190,56 @@ pub(crate) fn route(
         seed_rules(&mut dvars, config);
         state.rules_seeded = true;
     }
+    let have = *state.family_inventory.get_or_insert_with(|| {
+        let trees = asset_transport::NamespaceTrees::discover(&asset_transport::GamesRoot(
+            identity.games_root.clone(),
+        ));
+        net::content_inventory(
+            trees.get(asset_core::AssetNamespace::Iw4).is_some(),
+            trees.get(asset_core::AssetNamespace::Iw5).is_some(),
+            trees.get(asset_core::AssetNamespace::T5).is_some(),
+            trees.get(asset_core::AssetNamespace::T6).is_some(),
+        )
+        .0
+    });
+    for (family, setting, bit) in frame::AssetFamilies::SETTINGS {
+        if dvars.get(setting).is_none() {
+            let env = std::env::var(format!("IW4L_ASSETS_{}", family.to_ascii_uppercase())).ok();
+            dvars.set(
+                setting,
+                env.unwrap_or_else(|| if have & bit != 0 { "1" } else { "0" }.into()),
+            );
+        }
+    }
+    for (family, setting, bit) in frame::AssetFamilies::SETTINGS {
+        let selection = services
+            .bridge
+            .as_ref()
+            .and_then(|bridge| bridge.state().families());
+        let enabled = selection.map_or_else(
+            || dvars.get(setting) == Some("1"),
+            |families| families.enabled(family),
+        );
+        let status = if have & bit == 0 {
+            "NOT INSTALLED"
+        } else if enabled {
+            "ENABLED"
+        } else {
+            "DISABLED"
+        };
+        dvars.set(
+            &format!("ui_assets_{family}"),
+            format!("{}: {status}", family.to_ascii_uppercase()),
+        );
+        dvars.set(
+            &format!("ui_assets_{family}_blocked"),
+            if have & bit == 0 || state.public || !party.is_host {
+                "1"
+            } else {
+                "0"
+            },
+        );
+    }
     let mut browser_page_changed = false;
     for command in events.read() {
         if command.name.starts_with("ui_browser") || command.name.starts_with("ui_join_lobby") {
@@ -199,11 +252,37 @@ pub(crate) fn route(
                         if values.is_empty() {
                             echo.write(format!("{name} = {}", dvars.get(name).unwrap_or_default()));
                         } else {
+                            if let Some((family, _, bit)) = frame::AssetFamilies::SETTINGS
+                                .iter()
+                                .find(|(_, setting, _)| setting.eq_ignore_ascii_case(name))
+                            {
+                                if state.public
+                                    || (party.in_lobby && !party.is_host)
+                                    || *match_scope.get() != frame::MatchScope::Absent
+                                {
+                                    return Err("Change asset families in a private host lobby before starting the match".into());
+                                }
+                                if values.len() != 1 || !matches!(values[0].as_str(), "0" | "1") {
+                                    return Err(format!("{name} must be 0 or 1"));
+                                }
+                                if values[0] == "1" && have & bit == 0 {
+                                    return Err(format!(
+                                        "Cannot enable {family}: game content is not installed"
+                                    ));
+                                }
+                            }
                             dvars.set(name, values.join(" "));
                         }
                     }
                 }
                 "setfromdvar" => {
+                    if command.args.first().is_some_and(|name| {
+                        frame::AssetFamilies::SETTINGS
+                            .iter()
+                            .any(|(_, setting, _)| setting.eq_ignore_ascii_case(name))
+                    }) {
+                        return Err("Use set <asset setting> 0|1 to change asset families".into());
+                    }
                     if let [name, source] = command.args.as_slice()
                         && let Some(value) = dvars.get(source).map(str::to_owned)
                     {
@@ -236,6 +315,7 @@ pub(crate) fn route(
                         services.submit(net::MasterMenuAction::LeaveLobby)?;
                     } else {
                         let (map, mode) = selected_game(&dvars, &maps)?;
+                        frame::AssetFamilies::from_inventory(have, &dvars)?.require_map(&map)?;
                         services.submit(net::MasterMenuAction::Host {
                             map,
                             mode: mode.token().into(),
@@ -243,6 +323,34 @@ pub(crate) fn route(
                         })?;
                     }
                     state.public = !state.public;
+                }
+                "ui_asset_family" => {
+                    if !party.in_lobby
+                        || !party.is_host
+                        || state.public
+                        || *match_scope.get() != frame::MatchScope::Absent
+                    {
+                        return Err(
+                            "Change asset families in a private host lobby before making it public"
+                                .into(),
+                        );
+                    }
+                    let family = command.args.first().ok_or("ui_asset_family <iw5|t5|t6>")?;
+                    let (_, setting, bit) = frame::AssetFamilies::SETTINGS
+                        .iter()
+                        .find(|(name, _, _)| name == family)
+                        .ok_or("Unknown optional asset family")?;
+                    if have & bit == 0 {
+                        return Err(format!(
+                            "Cannot enable {family}: game content is not installed"
+                        ));
+                    }
+                    let value = if dvars.get(setting) == Some("1") {
+                        "0"
+                    } else {
+                        "1"
+                    };
+                    dvars.set(setting, value);
                 }
                 "ui_lobby_cheats" => {
                     if !party.in_lobby || !party.is_host {
@@ -256,6 +364,13 @@ pub(crate) fn route(
                         return Err("Only the lobby host can start a match".into());
                     }
                     let (map, mode) = selected_game(&dvars, &maps)?;
+                    let families = services
+                        .bridge
+                        .as_ref()
+                        .and_then(|bridge| bridge.state().families())
+                        .map(Ok)
+                        .unwrap_or_else(|| frame::AssetFamilies::from_inventory(have, &dvars))?;
+                    families.require_map(&map)?;
                     commands.insert_resource(host_rules(&dvars));
                     if state.public {
                         services.submit(net::MasterMenuAction::StartMatch {
@@ -330,6 +445,13 @@ pub(crate) fn route(
                             .and_then(|arg| sim::HostGameModeSelection::from_token(arg))
                             .ok_or("Unsupported game mode")?;
                     }
+                    let families = services
+                        .bridge
+                        .as_ref()
+                        .and_then(|bridge| bridge.state().families())
+                        .map(Ok)
+                        .unwrap_or_else(|| frame::AssetFamilies::from_inventory(have, &dvars))?;
+                    families.require_map(&map)?;
                     if state.public {
                         services.submit(net::MasterMenuAction::UpdateLobby {
                             map: map.clone(),
@@ -458,19 +580,18 @@ pub(crate) fn route(
                                     .find(|advert| advert.id == id)
                             })
                             .ok_or("Lobby is no longer available")?;
-                        if advert.locked
-                            || advert.players >= advert.max_players
-                            || !advert.missing.is_empty()
+                        if let Some(message) =
+                            frame::AssetFamilies(advert.missing.0).missing_notice(0)
                         {
+                            dvars.set("partyend_reason", message);
+                            dvars.set("ui_connection_error", "1");
+                            return Ok(());
+                        }
+                        if advert.locked || advert.players >= advert.max_players {
                             return Err(if advert.locked {
                                 "Lobby closed".into()
-                            } else if advert.players >= advert.max_players {
-                                "Lobby is full".into()
                             } else {
-                                format!(
-                                    "Requires {}",
-                                    net::content_names(advert.missing).to_uppercase()
-                                )
+                                "Lobby is full".into()
                             });
                         }
                         if advert.password_protected {
@@ -535,6 +656,12 @@ pub(crate) fn route(
                 menus.write(UiMenuRequest::Open("game_lobby".into()));
             }
             net::MasterBridgeState::Failed { error, .. } => {
+                if error.source.starts_with("Missing game files:") {
+                    dvars.set("partyend_reason", &error.source);
+                    dvars.set("ui_connection_error", "1");
+                    dvars.set("ui_password_pending", "0");
+                    menus.write(UiMenuRequest::Close("lobby_password_join".into()));
+                }
                 dvars.set(
                     "ui_password_status",
                     if error.source.contains("IncorrectPassword") {

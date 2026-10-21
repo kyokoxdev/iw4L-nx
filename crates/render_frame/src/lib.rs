@@ -8,6 +8,7 @@ pub mod packet;
 pub mod packing;
 pub mod products;
 pub mod retained;
+pub mod skinning;
 pub mod sun_effects;
 pub mod sun_shadow;
 pub mod texture_bind;

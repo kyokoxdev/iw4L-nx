@@ -586,7 +586,7 @@ fn upload_xmodel_streams(
             geometry.xmodel.vertex.reserve(
                 device,
                 "iw4_exact_colour_xmodel_vb",
-                BufferUsages::VERTEX,
+                BufferUsages::VERTEX | BufferUsages::STORAGE,
                 verts,
                 asset_iw4::size::GFX_PACKED_VERTEX,
             );

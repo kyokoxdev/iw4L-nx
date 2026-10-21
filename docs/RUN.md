@@ -18,8 +18,9 @@ scenario`, `chaos`, `bench` ([`BENCH.md`](BENCH.md)), `bench-live`, `lifecycle-*
 
 Linux startup creates `iw4`, `iw5`, `t5` and `t6` symlinks in `IW4L_GAMES` for missing games with exactly one valid Steam installation. Existing entries are preserved.
 
-`menu` opens on a Loading assets screen while the shared weapon catalog is
-prepared; the main menu replaces it with every entry available. In `--cmds`,
+`menu` opens the main menu immediately while the shared weapon catalog prepares
+in the background. Opening Classes before it is ready shows Loading Classes;
+Escape returns to the menu, and readiness opens the editor for unlocked accounts. In `--cmds`,
 `wait progression` holds until then.
 
 **Cheats are on by default.** The host accepts the debug
@@ -111,8 +112,10 @@ sliders and a saved First person / Third person camera selector. Use
 `thirdperson` to toggle, `thirdperson 0|1` to select, or `set cg_thirdPerson 0|1`.
 Death, killcam and remote missile cameras take priority. Drag with the mouse
 or use Left/Right on the focused slider; the value
-appears to its right. Multiplayer settings contain the player-name field
-(Enter to edit and accept, Escape to cancel). These settings persist across
+appears to its right. Windowed, Resolution sizes the window; fullscreen covers
+the display, and a resolution shorter than the display renders the match at
+that many rows (the window's aspect) and scales it up. Multiplayer settings
+contain the player-name field (Enter to edit and accept, Escape to cancel). These settings persist across
 launches in `$XDG_CONFIG_HOME/iw4l/settings.cfg` or `~/.config/iw4l/settings.cfg`
 on Linux; `IW4L_SETTINGS_PATH` selects a separate settings file for probes.
 Listen hosts also persist the three script completion percentages in `profile.cfg`

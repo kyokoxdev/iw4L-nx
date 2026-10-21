@@ -771,6 +771,7 @@ fn follow_master_match(
         RuntimeRole::Client
     };
     commands.insert_resource(mode);
+    commands.insert_resource(offer.families);
     match swap.request_zone(offer.map.clone()) {
         Ok(id) => {
             diag::info!(

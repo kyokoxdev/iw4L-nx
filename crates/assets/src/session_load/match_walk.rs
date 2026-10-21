@@ -8,6 +8,7 @@ pub(super) async fn walk_prepared_match(
     zone_ff: Result<PathBuf, String>,
     common_mp: Result<PathBuf, String>,
     progress: LoadProgress,
+    families: frame::AssetFamilies,
 ) -> (MatchLoadOutcome, Option<Arc<CommonSet>>) {
     let mut image_trees = games_root_from_env()
         .map(|root| asset_transport::NamespaceTrees::discover(&root))
@@ -18,6 +19,7 @@ pub(super) async fn walk_prepared_match(
     if let Ok(path) = &zone_ff {
         image_trees.adopt_zone(path);
     }
+    image_trees.retain(|ns| families.enabled(ns.as_str()));
     let zone_name = zone_ff
         .as_ref()
         .ok()
@@ -52,6 +54,7 @@ pub(super) async fn walk_prepared_match(
         zone_ff.as_ref().ok().map(PathBuf::as_path),
         common_mp.as_ref().ok().map(PathBuf::as_path),
         &mut donor_report,
+        families,
     );
     let waiting = progress.begin_scoped(StageId::CommonAssets, "shared common", None);
     let (common, reach) = ensure_common(key).await;
@@ -97,6 +100,7 @@ pub(super) async fn walk_prepared_match(
         t6_player_anim_sources,
         t5_fx,
         t5_impact_fx,
+        t6_impact_fx,
         iw5_materials,
         mut iw5_scene_models,
         iw5_shared_surfaces,
@@ -667,6 +671,10 @@ pub(super) async fn walk_prepared_match(
         fx_model_edges.absent,
     ));
     weapons.resolve_combat_fx(&world.fx, &common_tracers);
+    weapons.stamp_projectile_model_edges(
+        &projectile_meshes,
+        asset_core::ZoneOwner::intern(&zone_name),
+    );
     weapons.resolve_projectile_fx_edges(&world.fx);
     let projectile_fx = weapons.projectile_fx_edge_census();
     report.push(format!(
@@ -735,12 +743,14 @@ pub(super) async fn walk_prepared_match(
             .into(),
     );
     decode_fx_colour_maps(&world.fx, &mut global, &image_trees, &progress, &mut report);
+    world.family_impact_fx = [t5_impact_fx, t6_impact_fx].into_iter().flatten().collect();
     if world.impact_fx.is_none() {
-        world.impact_fx = if map_namespace == Some(asset_core::AssetNamespace::T5) {
-            t5_impact_fx.or(common_impact)
-        } else {
-            common_impact
-        };
+        world.impact_fx = world
+            .family_impact_fx
+            .iter()
+            .find(|table| Some(table.namespace) == map_namespace)
+            .cloned()
+            .or(common_impact);
     } else if let Some(common_table) = common_impact {
         report.push(format!(
             "impactfx: map table kept; common_mp table `{}` discarded",
@@ -757,6 +767,14 @@ pub(super) async fn walk_prepared_match(
         ));
     } else {
         report.push("impactfx handoff: missing — combat play_oriented will miss cells".into());
+    }
+    for table in &world.family_impact_fx {
+        report.push(format!(
+            "impactfx family table: {:?}:`{}` rows={}",
+            table.namespace,
+            table.name,
+            table.row_count()
+        ));
     }
     report.push(format!(
         "tracer catalog handoff: {} named ({} bound, {} unresolved)",

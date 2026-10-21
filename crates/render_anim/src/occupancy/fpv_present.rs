@@ -600,12 +600,15 @@ pub fn tick_fpv_viewmodel(
         product.kind = FpvPoseKind::Hide;
         return;
     }
-    if presented_is_third_person(
+    // Outside the killcam the hidden viewmodel keeps animating: its notetracks
+    // are the player's reload and handling sounds.
+    let hidden = presented_is_third_person(
         &presented,
         local.0,
         view.in_killcam(),
         settings.third_person,
-    ) {
+    );
+    if hidden && view.in_killcam() {
         product.kind = FpvPoseKind::Hide;
         return;
     }
@@ -844,6 +847,10 @@ pub fn tick_fpv_viewmodel(
             snapshot.view_tick(local.0),
         ));
     }
+    if hidden {
+        product.kind = FpvPoseKind::Hide;
+        return;
+    }
     if let FpvPoseKind::Posed(frame) = &mut kind {
         // Nothing downstream of the bones waits for a vertex.
         if let Some(bolt) = frame.secondary_bolt.take() {
@@ -934,13 +941,18 @@ fn skin_fpv_geometry(
                 fpv_plan.rig_generation = rig.generation();
                 fpv_plan.camo = product.camo;
             }
-            if let Some(rows) = fpv_plan.packed_rows_mut() {
-                if !rig.skin_into(&frame.poses, rows) {
-                    crate::clear_fpv_draw_plan(&mut fpv_plan, handle);
-                    return;
-                }
-            }
-            fpv_plan.revisions.bump_vertices();
+            let Some(jobs) = rig.gpu_skin_jobs(&frame.poses) else {
+                let cause = RenderGapCause::FpvDependencyUnresolved {
+                    weapon_id: session.map_or(0, |session| session.weapon_id),
+                    role: "skinning",
+                    name: "packed geometry or bone range unavailable".into(),
+                };
+                crate::clear_fpv_draw_plan(&mut fpv_plan, handle);
+                gaps.raise(cause.clone());
+                status.0 = Some(FpvState::Blocked(cause));
+                return;
+            };
+            fpv_plan.skin_jobs = jobs;
             fpv_plan.geometry_ok = !fpv_plan.draws().is_empty();
             fpv_plan.settle_visible();
             gaps.clear(RenderGap::FpvViewmodel);

@@ -104,6 +104,7 @@ pub(crate) fn register_combat_fx_systems(app: &mut App) {
     app.add_message::<BulletHitFx>()
         .add_message::<WeaponFireFx>()
         .scoped::<PresentedFireFx>(frame::MatchScope::Live)
+        .scoped::<super::flame::FlameStreams>(frame::MatchScope::Live)
         .scoped::<render_fx::FxModelStaging>(frame::MatchScope::Live)
         .scoped::<crate::assemble::drawsurf::GfxGlassMeshPlan>(frame::MatchScope::Live)
         .scoped::<crate::assemble::drawsurf::GlassTable>(frame::MatchScope::Live)
@@ -139,6 +140,7 @@ pub(crate) fn register_combat_fx_systems(app: &mut App) {
             (
                 maintain_fire_fx.in_set(frame::InMatch),
                 drain_weapon_fire_fx.in_set(frame::InMatch),
+                super::flame::tick_flame_streams.in_set(frame::InMatch),
                 drain_bullet_hit_fx.in_set(frame::InMatch),
                 drain_pellet_fx.in_set(frame::InMatch),
                 present_tracker_light.in_set(frame::InMatch),
@@ -626,7 +628,7 @@ fn commit_fx_transaction(
     mut mark_plan: ResMut<GfxMarkMeshPlan>,
     mut model_plan: ResMut<FxModelDrawPlan>,
     mut dump_req: ResMut<FxDumpRequest>,
-    mut tracer_world: ResMut<TracerWorld>,
+    (mut tracer_world, flames): (ResMut<TracerWorld>, Res<super::flame::FlameStreams>),
     mut combat: ResMut<CombatFxDump>,
     mut env: FxPresentEnv,
     lighting_cache: Option<Res<WorldModelLightingCache>>,
@@ -707,7 +709,7 @@ fn commit_fx_transaction(
                 light.origin,
                 light.axis[0],
                 light.radius,
-                light.color_bgr,
+                light.color_rgb,
                 spot_cone,
             )),
             Err(lighting_iw4::AddOmniLightRefuse::Cap) => {
@@ -725,7 +727,7 @@ fn commit_fx_transaction(
             Ok(()) => env.dlights.scene.push(lighting_iw4::omni_light_pack(
                 light.origin,
                 light.radius,
-                light.color_bgr,
+                light.color_rgb,
             )),
             Err(lighting_iw4::AddOmniLightRefuse::Cap) => {
                 env.dlights.cap_full = env.dlights.cap_full.saturating_add(1);
@@ -927,6 +929,7 @@ fn commit_fx_transaction(
         code_mesh_bind_asset,
     );
     *tracer_world = tracers;
+    flames.present(&cam_tf, &color_images, &runtime, host.0.msec_now, &mut plan);
 
     let mut spark_drawn = 0usize;
     for spark in &out.spark_clouds {
@@ -2071,7 +2074,10 @@ fn publish_weapon_fire(
     (view, settings): (Res<ViewSubject>, Res<frame::GameSettings>),
     (weapons, sound_bank): (Option<Res<PreparedWeapons>>, Option<Res<audio::SoundBank>>),
     prediction: Res<ClientPredictionState>,
-    mut sounds: Option<ResMut<Messages<audio::WeaponSound>>>,
+    (mut sounds, mut flames): (
+        Option<ResMut<Messages<audio::WeaponSound>>>,
+        Option<ResMut<Messages<audio::FlameFire>>>,
+    ),
     mut cursor: ResMut<FxJournalCursor>,
     mut combat: ResMut<CombatFxDump>,
     (players, mut demand): (
@@ -2118,6 +2124,27 @@ fn publish_weapon_fire(
         .get(fire.entity)
         .ok()
         .is_some_and(|identity| gate.skip_self_fpv(identity.number()));
+    if let (Some(flames), Some(weapons), Some(bank), Ok(number)) = (
+        flames.as_deref_mut(),
+        weapons.as_ref(),
+        sound_bank.as_deref(),
+        u32::try_from(fire.event.payload.number),
+    ) && weapons
+        .registry()
+        .weapon_sound_alias(
+            fire.event.payload.weapon,
+            asset_game::WeaponSoundSlot::FireStart,
+            &bank.0,
+        )
+        .is_some()
+    {
+        flames.write(audio::FlameFire {
+            number,
+            weapon: fire.event.payload.weapon,
+            player_view,
+            origin_inches: fire.event.payload.origin,
+        });
+    }
     let last_shot = is_weapon_fire_last_shot_event(fire.event.event);
     let alias = identities.get(fire.entity).ok().and_then(|_| {
         let weapons = weapons.as_ref()?;
@@ -2215,7 +2242,10 @@ fn drain_weapon_fire_fx(
     mut host: ResMut<HostFxSystem>,
     mut cursor: ResMut<FxJournalCursor>,
     mut combat: ResMut<CombatFxDump>,
-    mut ping_bus: ResMut<WeaponFirePingBus>,
+    (mut ping_bus, mut flames): (
+        ResMut<WeaponFirePingBus>,
+        ResMut<super::flame::FlameStreams>,
+    ),
     fx_world: FxSceneAccess,
     poses: Option<Res<crate::adapters::anim::dobj_pose::HostDObjPoseFrame>>,
 ) {
@@ -2253,6 +2283,19 @@ fn drain_weapon_fire_fx(
             .ok()
             .is_some_and(|identity| gate.skip_self_fpv(identity.number()));
         combat.last_fire_player_view = Some(i64::from(player_view));
+        if let Some(stream) = weapons.as_ref().and_then(|weapons| {
+            weapons
+                .registry()
+                .flame_stream_of(fire.event.payload.weapon)
+        }) {
+            flames.note_fire(
+                fire.event.payload.number,
+                fire.entity,
+                player_view,
+                stream.view(player_view),
+                msec,
+            );
+        }
         let last_shot = is_weapon_fire_last_shot_event(fire.event.event);
         combat.last_fire_lastshot = Some(i64::from(last_shot));
         combat.last_tracer_name = combat_fx.and_then(|fx| fx.tracer_hint.clone());
@@ -2691,10 +2734,15 @@ fn explosion(
         .and_then(|weapons| weapons.registry().combat_fx_of(payload.weapon));
     combat.last_weapon_explosion_edge = combat_fx.map(|fx| fx.explosion.edge_kind().to_owned());
     let slot = combat_fx.and_then(|fx| fx.explosion_present());
+    let weapon_namespace = weapons
+        .as_ref()
+        .and_then(|weapons| weapons.registry().identity_namespace_of(payload.weapon));
     let names = explosion_fx_names(
         impact_type,
         payload.surf_type,
-        impact_fx.as_ref().and_then(|fx| fx.0.as_ref()),
+        impact_fx
+            .as_ref()
+            .and_then(|fx| fx.explosion_table(weapon_namespace)),
         slot,
     );
     combat.last_explosion_table = names.table.map(|n| n.name.to_owned());
@@ -2754,7 +2802,10 @@ fn explosion(
                         payload.weapon,
                         asset_game::WeaponComponent::Sound,
                     )?;
-                    if namespace != asset_core::AssetNamespace::Iw4 {
+                    if !matches!(
+                        namespace,
+                        asset_core::AssetNamespace::Iw4 | asset_core::AssetNamespace::Iw5
+                    ) {
                         return None;
                     }
                     let (alias, fallback) =

@@ -31,6 +31,7 @@ pub use render_scene::{XModelColourRefusal, XModelSurfaceDraw};
 
 #[derive(Resource, Clone, Debug, Default)]
 pub struct XModelDrawPlan {
+    pub skin_jobs: Vec<render_frame::skinning::PackedSkinJob>,
     pub vertices: Vec<SmodelVertex>,
 
     pub decoded_n: usize,
@@ -78,6 +79,7 @@ pub const XMODEL_PACKED_EMPTY_PLAN: &str = "xmodel plan has no vertices";
 
 impl XModelDrawPlan {
     pub fn clear(&mut self) {
+        self.skin_jobs.clear();
         self.vertices.clear();
         self.decoded_n = 0;
         self.indices.clear();
@@ -419,6 +421,7 @@ pub fn merge_xmodel_draw_plan(
         fpv, bodies, scripts, missiles, items, fx_models, dynents, scene, sky,
     );
     if merged.last_input == Some(stamp) {
+        publish_skin_jobs(merged, fpv, bodies);
         return XModelMergeStamps {
             concatenated: false,
             ..XModelMergeStamps::default()
@@ -460,6 +463,7 @@ pub fn merge_xmodel_draw_plan(
             );
         }
         merged.last_input = Some(stamp);
+        publish_skin_jobs(merged, fpv, bodies);
         return XModelMergeStamps {
             concatenated: true,
             packed_ms,
@@ -699,11 +703,35 @@ pub fn merge_xmodel_draw_plan(
     publish_decoded_share(merged);
     merged.last_input = Some(stamp);
     merged.last_topology = Some(stamp.topology);
+    publish_skin_jobs(merged, fpv, bodies);
     let packed_ms = packed_started.elapsed().as_secs_f32() * 1000.0;
     XModelMergeStamps {
         append_ms,
         packed_ms,
         concatenated: true,
+    }
+}
+
+fn publish_skin_jobs(merged: &mut XModelDrawPlan, fpv: &FpvDrawPlan, bodies: &RemoteBodyDrawPlan) {
+    merged.skin_jobs.clear();
+    if merged.last_admitted & ADMIT_BODY != 0 {
+        merged.skin_jobs.extend(bodies.skin_jobs.iter().cloned());
+    }
+    if merged.last_admitted & ADMIT_FPV == 0 {
+        return;
+    }
+    let base = if merged.last_admitted & ADMIT_BODY != 0 {
+        bodies.decoded_n()
+    } else {
+        0
+    };
+    for job in &fpv.skin_jobs {
+        let mut job = job.clone();
+        job.destination = u32::try_from(base)
+            .expect("xmodel vertex base fits u32")
+            .checked_add(job.destination)
+            .expect("xmodel skin destination fits u32");
+        merged.skin_jobs.push(job);
     }
 }
 

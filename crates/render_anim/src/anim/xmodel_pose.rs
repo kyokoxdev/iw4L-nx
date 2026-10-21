@@ -398,7 +398,7 @@ pub fn build_skin_layout(
             return None;
         }
         let visible = surface_is_visible(lod_local);
-        if !visible || vertex_count == 0 || index_count == 0 {
+        if vertex_count == 0 || index_count == 0 {
             surfaces.push(SkinSurfaceLayout {
                 surface_index,
                 src_first_vertex: first_vertex,
@@ -427,7 +427,7 @@ pub fn build_skin_layout(
             vertex_count,
             index_start: new_start,
             index_count: index_count as u32,
-            visible: true,
+            visible,
         });
     }
     Some(SkinLayout {
@@ -437,88 +437,53 @@ pub fn build_skin_layout(
     })
 }
 
-/// `layout` must come from [`build_skin_layout`] at the LOD being skinned:
-/// its visible surfaces are exactly the vertices to pose.
-pub fn skin_packed_into(
+pub(crate) fn packed_skin_shape(
     skel: &FpvSkel,
-    bone_to_local: impl Fn(usize) -> Mat4,
-    surface_rigid: impl Fn(usize) -> bool,
+    lod: u8,
     layout: &SkinLayout,
-    dest: &mut [[u8; asset_iw4::size::GFX_PACKED_VERTEX]],
-) {
-    debug_assert_eq!(dest.len(), layout.dest_vertex_n);
-    if dest.is_empty() {
-        return;
-    }
-    let max_bone = layout
-        .surfaces
-        .iter()
-        .filter(|surf| surf.visible)
-        .flat_map(|surf| surf.src_first_vertex..surf.src_first_vertex + surf.vertex_count)
-        .filter_map(|src| skel.vert_skin.get(src))
-        .flat_map(|skin| {
-            std::iter::once(skin.bones[0]).chain(
-                (1..4)
-                    .filter(|&extra| skin.weights()[extra] > 0.0)
-                    .map(|extra| skin.bones[extra]),
-            )
-        })
-        .max();
-    let bone_cache: Vec<_> = max_bone.map_or_else(Vec::new, |max_bone| {
-        (0..=usize::from(max_bone))
-            .map(|bone| {
-                let matrix = bone_to_local(bone);
-                (matrix, matrix.to_cols_array())
-            })
-            .collect()
-    });
-    for surf in &layout.surfaces {
-        if !surf.visible {
+    surface_rigid: impl Fn(usize) -> bool,
+) -> std::sync::Arc<render_frame::skinning::PackedSkinShape> {
+    use render_frame::skinning::{PackedSkinShape, PackedSkinVertex};
+    let (active, rigid) = vertex_stream_masks(skel, lod, |_| true, surface_rigid);
+    let mut vertices = vec![
+        PackedSkinVertex {
+            bones: [u32::MAX; 4],
+            ..Default::default()
+        };
+        layout.dest_vertex_n
+    ];
+    for surface in &layout.surfaces {
+        if surface.index_count == 0 {
             continue;
         }
-        let rigid = surface_rigid(surf.surface_index);
-        for local in 0..surf.vertex_count {
-            let src = surf.src_first_vertex + local;
-            let dst = surf.dest_first_vertex + local;
-            dest[dst] = skel.packed_vertices.get(src).copied().unwrap_or([0; 32]);
-            let Some(skin) = skel.vert_skin.get(src) else {
+        for local in 0..surface.vertex_count {
+            let source = surface.src_first_vertex + local;
+            let vertex = &mut vertices[surface.dest_first_vertex + local];
+            if let Some(row) = skel.packed_vertices.get(source) {
+                for (word, bytes) in vertex.packed.iter_mut().zip(row.chunks_exact(4)) {
+                    *word = u32::from_le_bytes(bytes.try_into().unwrap());
+                }
+            }
+            if !active.get(source).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(skin) = skel.vert_skin.get(source) else {
                 continue;
             };
-            let p = Vec3::from_array(skel.position(src));
-            let (posed_position, primary_basis) = if rigid {
-                let matrix = bone_cache[usize::from(skin.bones[0])].0;
-                (matrix.transform_point3(p), matrix)
-            } else {
-                let (primary, primary_esi) = &bone_cache[usize::from(skin.bones[0])];
-                let mut extras = [(primary_esi, 0u16); 3];
-                let mut extra_n = 0usize;
+            vertex.packed[..3].copy_from_slice(&skel.position(source).map(f32::to_bits));
+            vertex.bones = skin.bones.map(u32::from);
+            vertex.weights[0] = f32::from(skin.primary_is_zero());
+            if !rigid[source] {
                 for extra in 1..4 {
-                    if skin.weights()[extra] <= 0.0 {
-                        continue;
+                    if skin.has_extra_weight(extra) {
+                        vertex.weights[extra] =
+                            dpvs_iw4::skin_blend_weight(skin.extra_weight(extra));
                     }
-                    extras[extra_n] = (
-                        &bone_cache[usize::from(skin.bones[extra])].1,
-                        skin.weight_u16[extra],
-                    );
-                    extra_n += 1;
                 }
-                (
-                    Vec3::from_array(dpvs_iw4::skin_packed_weighted_point(
-                        p.to_array(),
-                        primary_esi,
-                        &extras[..extra_n],
-                    )),
-                    *primary,
-                )
-            };
-            let posed_position = if posed_position == Vec3::ZERO && skin.weights()[0] == 0.0 {
-                p
-            } else {
-                posed_position
-            };
-            pose_packed_vertex(&mut dest[dst], posed_position, primary_basis);
+            }
         }
     }
+    PackedSkinShape::new(vertices)
 }
 
 pub fn smodel_surfaces_from_blended(

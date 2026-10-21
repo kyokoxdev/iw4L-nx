@@ -586,6 +586,10 @@ pub fn seal_render_frame(
         sun_effects: sun.0.and_then(|sun| sun.def),
     };
     let next_frame = render_gpu::RenderFrameData {
+        skin_jobs: xmodel
+            .as_ref()
+            .map(|plan| plan.skin_jobs.clone())
+            .unwrap_or_default(),
         frame_products,
         generation,
         world_generation,

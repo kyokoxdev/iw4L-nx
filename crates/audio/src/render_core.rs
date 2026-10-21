@@ -154,7 +154,7 @@ pub(crate) struct RenderShared {
     rendering: AtomicBool,
     state: UnsafeCell<RenderState>,
     pub frame: AtomicU64,
-    pub match_epoch: AtomicU64,
+    pub presentation_epoch: AtomicU64,
     /// The game is paused: match sounds hold where they are.
     pub match_paused: AtomicBool,
     pub master: AtomicU32,
@@ -197,7 +197,7 @@ impl RenderShared {
                 limiter: Default::default(),
             }),
             frame: AtomicU64::new(0),
-            match_epoch: AtomicU64::new(0),
+            presentation_epoch: AtomicU64::new(0),
             match_paused: AtomicBool::new(false),
             master: AtomicU32::new(1.0f32.to_bits()),
             busy_blocks: AtomicU64::new(0),
@@ -234,7 +234,7 @@ impl RenderShared {
         // The lease is held until every reference to this state has expired.
         let state = unsafe { &mut *self.state.get() };
         let frame = self.frame.load(Ordering::Relaxed);
-        let epoch = self.match_epoch.load(Ordering::Acquire);
+        let epoch = self.presentation_epoch.load(Ordering::Acquire);
         let cancelled = self.cancelled.load(Ordering::Acquire);
         let match_paused = self.match_paused.load(Ordering::Acquire);
         let hold_one_shots = device == Some(false) && self.device_required.load(Ordering::Relaxed);

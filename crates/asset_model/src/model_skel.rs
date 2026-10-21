@@ -241,6 +241,33 @@ pub struct VertSkin {
 }
 
 impl VertSkin {
+    pub(crate) fn rigid(bone: u8) -> Self {
+        Self {
+            bones: [bone, 0, 0, 0],
+            weight_u16: [0; 4],
+        }
+    }
+
+    pub fn has_extra_weight(&self, index: usize) -> bool {
+        index >= 1 && index < 4 && self.weight_u16[index] > 0
+    }
+
+    pub fn primary_is_zero(&self) -> bool {
+        self.weights()[0] <= 0.0
+    }
+
+    pub fn extra_weight(&self, index: usize) -> u16 {
+        self.weight_u16[index]
+    }
+
+    pub fn has_only_primary_weight(&self) -> bool {
+        !self.primary_is_zero() && self.weight_u16[1..].iter().all(|&w| w == 0)
+    }
+
+    pub(crate) fn is_rigid(&self) -> bool {
+        self.has_only_primary_weight()
+    }
+
     /// Float weights, derived on read: storing them too cost 16 bytes per
     /// vertex across every captured model.
     pub fn weights(&self) -> [f32; 4] {

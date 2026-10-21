@@ -41,6 +41,7 @@ pub(crate) use host::presence::sync_presence;
 pub use host::registry::{Native, NativeRegistry};
 pub(crate) use host::restart::restart_level;
 pub use host::script_anim::{AnimLibrary, AnimTree, AnimTreeNode, ClipSource};
+pub(crate) use host::spectators::hold_killcam_viewer;
 pub(crate) use host::weapons::{publish_projectile_launches, sync_engine_events};
 pub use ir::IR_VERSION;
 pub(crate) use ir::{Binary, Callee, Function, Global, Op, Unary};

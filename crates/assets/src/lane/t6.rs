@@ -48,6 +48,7 @@ struct T6Content {
     pub fx: Vec<asset_game::T6FxCapture>,
     pub fx_materials: BTreeMap<String, T6MaterialCapture>,
     pub camouflages: BTreeMap<String, Vec<asset_game::WeaponCamouflage>>,
+    pub impact_fx: Option<asset_game::OwnedFxImpactTable>,
     pub report: Vec<String>,
 }
 
@@ -1351,8 +1352,50 @@ fn capture_content(
         content.materials.len(),
         ipaks.len()
     ));
+    content.impact_fx = capture_impact_table(&zones);
     capture_effects(&zones, ipaks, &mut content);
     content
+}
+
+const FX_IMPACT_ROWS: u32 = 21;
+const FX_IMPACT_ENTRY: u32 = 144;
+const FX_IMPACT_NONFLESH: u32 = 32;
+const FX_IMPACT_FIRST_EXPLOSION_ROW: usize = 11;
+
+fn capture_impact_table(
+    zones: &[&fastfile_t6::ZoneLoad],
+) -> Option<asset_game::OwnedFxImpactTable> {
+    zones.iter().find_map(|&load| {
+        let asset = load
+            .assets
+            .iter()
+            .find(|asset| asset.ty == fastfile_t6::AssetType::ImpactFx)?;
+        let table = decode_ptr(header_u32(&asset.header, 4)?)?;
+        let name_at = |cell: u32| {
+            load.asset_at(table.at(cell * 4))
+                .and_then(|fx| header_str(load, &fx.header, 0))
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let entries = (0..FX_IMPACT_ROWS)
+            .map(|row| {
+                let first = row * FX_IMPACT_ENTRY / 4;
+                // The 32nd nonflesh surface (riotshield) has no IW4-shaped column.
+                asset_game::OwnedFxImpactEntry {
+                    nonflesh: std::array::from_fn(|surf| name_at(first + surf as u32)),
+                    flesh: std::array::from_fn(|slot| {
+                        name_at(first + FX_IMPACT_NONFLESH + slot as u32)
+                    }),
+                }
+            })
+            .collect();
+        Some(asset_game::OwnedFxImpactTable {
+            namespace: asset_core::AssetNamespace::T6,
+            name: header_str(load, &asset.header, 0)?.to_owned(),
+            entries,
+            capture_gaps: 0,
+        })
+    })
 }
 
 const FX_ELEM_DEF: u32 = 292;
@@ -1367,6 +1410,7 @@ const FX_EFFECT_DEF_ELEMS: usize = 28;
 const FX_ELEM_LAST_SPRITE: u8 = 6;
 const FX_ELEM_MODEL: u8 = 7;
 const FX_ELEM_SOUND: u8 = 10;
+const FX_ELEM_DECAL: u8 = 11;
 const FX_ELEM_RUNNER: u8 = 12;
 
 fn capture_effects(
@@ -1380,6 +1424,34 @@ fn capture_effects(
         .map(|&name| name.to_owned())
         .collect();
     wanted.insert("maps/mp_maps/fx_mp_exp_bomb".to_owned());
+    if let Some(table) = &content.impact_fx {
+        wanted.extend(
+            table.entries[FX_IMPACT_FIRST_EXPLOSION_ROW..]
+                .iter()
+                .flat_map(|entry| entry.nonflesh.iter().chain(&entry.flesh))
+                .filter(|name| !name.is_empty())
+                .cloned(),
+        );
+    }
+    for &load in zones {
+        for asset in load
+            .assets
+            .iter()
+            .filter(|asset| asset.ty == fastfile_t6::AssetType::Weapon)
+        {
+            let Some(weapon) = fastfile_t6::weapon::WeaponView::new(load, asset) else {
+                continue;
+            };
+            use fastfile_t6::weapon::def;
+            wanted.extend(
+                [def::VIEW_FLASH_EFFECT, def::WORLD_FLASH_EFFECT]
+                    .into_iter()
+                    .filter_map(|off| weapon.def_asset_name(off))
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned),
+            );
+        }
+    }
     for load in zones {
         match destructible::effect_names(load) {
             Ok(names) => wanted.extend(names),
@@ -1480,7 +1552,16 @@ fn capture_effect(
             usize::from(raw[FX_ELEM_TYPE + 3]) + 1,
             FX_ELEM_VIS_SAMPLE,
         );
-        let slots: Vec<fastfile_t6::Ptr> = if visual_count > 1 {
+        let slots: Vec<fastfile_t6::Ptr> = if elem_type == FX_ELEM_DECAL {
+            decode_ptr(header_u32(&raw, FX_ELEM_VISUALS as usize).unwrap_or(0)).map_or_else(
+                Vec::new,
+                |arr| {
+                    (0..visual_count as u32 * 2)
+                        .map(|v| arr.at(v * 4))
+                        .collect()
+                },
+            )
+        } else if visual_count > 1 {
             decode_ptr(header_u32(&raw, FX_ELEM_VISUALS as usize).unwrap_or(0))
                 .map_or_else(Vec::new, |arr| {
                     (0..visual_count as u32).map(|v| arr.at(v * 4)).collect()
@@ -1493,7 +1574,7 @@ fn capture_effect(
         let mut visuals = Vec::new();
         for slot in slots {
             let visual = match elem_type {
-                0..=FX_ELEM_LAST_SPRITE => {
+                0..=FX_ELEM_LAST_SPRITE | FX_ELEM_DECAL => {
                     let material = load.asset_in(asset, slot);
                     let name = material.and_then(|m| header_str(load, &m.header, 0));
                     if let (Some(material), Some(name)) = (material, name)
@@ -2089,7 +2170,7 @@ impl ZoneLane for T6Lane {
                         .map(asset_core::WalkLocalMaterialIndex::from_walk)
                 })
                 .ok_or("T6 sky model geometry missing")?;
-                draw.sky_model = Some(asset_world::world_t6::model_mesh(skel)?);
+                draw.sky_model = Some(asset_world::world_t6::model_mesh(&load, model, skel)?);
             }
             report.push(format!(
                 "T6 skybox: name={sky_name:?} captured={}",
@@ -2109,7 +2190,7 @@ impl ZoneLane for T6Lane {
                 let mesh = asset_model::capture_model_skel_t6(*model, |surface| {
                     model_material(*model, surface)
                 })
-                .map(asset_world::world_t6::model_mesh);
+                .map(|skel| asset_world::world_t6::model_mesh(&load, *model, skel));
                 match mesh {
                     Some(Ok(mesh)) => {
                         smodel_mesh.push((*asset, static_model_meshes.len()));
@@ -2364,10 +2445,11 @@ impl ZoneLane for T6Lane {
             let sound = Some(sound_capture.finish(Ok(())));
             let collision = build_clip_collision(&load)?;
             report.push(format!(
-                "T6 collision: {} brushes, {} BSP leaves, {} triangles",
+                "T6 collision: {} brushes, {} BSP leaves, {} triangles, {} static models",
                 collision.brushes.len(),
                 collision.leaves.len(),
-                collision.mesh.tri_indices.len() / 3
+                collision.mesh.tri_indices.len() / 3,
+                collision.static_models.len(),
             ));
             let entities = entity_string(&load)?;
             let entities = asset_world::t6_entities_for_iw4_rules(entities);
@@ -2378,13 +2460,42 @@ impl ZoneLane for T6Lane {
                 .map_err(|e| report.push(format!("T6 light grid: {e}")))
                 .ok();
             let mut smodel_lighting_samples = match &light_grid {
-                Some(grid) => super::helpers::smodel_lighting_samples(
-                    &mut report,
-                    grid,
-                    asset_world::world_t6::static_model_lighting_origins(&load, world_asset)?,
-                    &static_model_instances,
-                    Some(&collision),
-                ),
+                Some(grid) => {
+                    let palette =
+                        asset_world::world_t6::static_model_lighting_palette(&load, world_asset)?;
+                    let origins =
+                        asset_world::world_t6::static_model_lighting_origins(&load, world_asset)?;
+                    let mut authored = Vec::new();
+                    let mut unresolved = Vec::new();
+                    for (slot, origin) in origins {
+                        if static_model_instances.get(slot).is_none_or(Option::is_none) {
+                            continue;
+                        }
+                        match asset_model::model_lighting::t6_smodel_palette_lighting(
+                            &grid.view(),
+                            palette[slot],
+                            slot,
+                            origin,
+                        ) {
+                            Some(sample) => authored.push(sample),
+                            None => unresolved.push((slot, origin)),
+                        }
+                    }
+                    report.push(format!(
+                        "T6 authored static model lighting: {} placements, {} spatial samples",
+                        authored.len(),
+                        unresolved.len()
+                    ));
+                    authored.extend(super::helpers::smodel_lighting_samples(
+                        &mut report,
+                        grid,
+                        unresolved,
+                        &static_model_instances,
+                        Some(&collision),
+                    ));
+                    authored.sort_unstable_by_key(|sample| sample.authored_slot);
+                    authored
+                }
                 None => Vec::new(),
             };
             let mut vertex_lighting =
@@ -2484,6 +2595,7 @@ impl ZoneLane for T6Lane {
                 path: path.to_owned(),
                 ..Default::default()
             };
+            effect_content.impact_fx = capture_impact_table(&image_loads);
             capture_effects(&image_loads, &ipaks, &mut effect_content);
             let mut fx = asset_game::FxCatalog::default();
             let mut effect_refusals = Vec::new();
