@@ -15,11 +15,17 @@ fn now_ms(world: &World) -> i32 {
 fn play(world: &mut World, args: &[Value], looped: bool) -> Result<Value, String> {
     let name = string(args, 0)?;
     let start_ms = now_ms(world);
+    let fullscreen = world
+        .resource::<crate::script::MatchScript>()
+        .dvars
+        .get("cg_cinematicfullscreen")
+        .map_or(true, |v| v != "0");
     let mut runtime = world.resource_mut::<RoundScript>();
     runtime.engine.cinematic = Some(cinematic(
         &runtime.campaign.videos,
         &name,
         looped,
+        fullscreen,
         start_ms,
     )?);
     Ok(Value::Undefined)
@@ -29,6 +35,7 @@ fn cinematic(
     videos: &BTreeMap<String, i32>,
     name: &str,
     looped: bool,
+    fullscreen: bool,
     start_ms: i32,
 ) -> Result<ScriptCinematic, String> {
     let name = name.to_ascii_lowercase();
@@ -38,6 +45,7 @@ fn cinematic(
     Ok(ScriptCinematic {
         name,
         looped,
+        fullscreen,
         start_ms,
         end_ms: (!looped).then(|| start_ms.saturating_add(length_ms)),
     })
@@ -54,12 +62,8 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
     registry.register(Function, "cinematicingameloop", |world, _, args| {
         play(world, args, true)
     });
-    registry.register(Function, "cinematicingameloopresident", |world, _, _| {
-        crate::script::host::registry::unavailable(
-            world,
-            "cinematicingameloopresident",
-            "video on in-world screens is not built",
-        )
+    registry.register(Function, "cinematicingameloopresident", |world, _, args| {
+        play(world, args, true)
     });
     registry.register(Function, "stopcinematicingame", |world, _, args| {
         if !args.is_empty() {
@@ -90,12 +94,14 @@ mod tests {
     #[test]
     fn a_cinematic_plays_for_its_video_length_unless_looped() {
         let videos = BTreeMap::from([("briefing".to_owned(), 1500)]);
-        let once = cinematic(&videos, "Briefing", false, 1000).unwrap();
+        let once = cinematic(&videos, "Briefing", false, true, 1000).unwrap();
         assert_eq!(once.name, "briefing");
+        assert!(once.fullscreen);
         assert!(once.playing(2499));
         assert!(!once.playing(2500));
-        let looped = cinematic(&videos, "briefing", true, 1000).unwrap();
+        let looped = cinematic(&videos, "briefing", true, false, 1000).unwrap();
+        assert!(!looped.fullscreen);
         assert!(looped.playing(i32::MAX));
-        assert!(cinematic(&videos, "missing", false, 0).is_err());
+        assert!(cinematic(&videos, "missing", false, true, 0).is_err());
     }
 }

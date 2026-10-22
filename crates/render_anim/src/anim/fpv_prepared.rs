@@ -1008,7 +1008,12 @@ pub fn prepare_fpv_compositions(inputs: PrepareFpvInputs, mut prepared: ResMut<P
     let Some(lighting) = lighting.as_deref() else {
         return;
     };
-    let deadline = std::time::Instant::now() + PREPARE_FRAME_BUDGET;
+    let budget = if load.as_deref().is_some_and(|p| !p.is_complete()) {
+        std::time::Duration::from_millis(100)
+    } else {
+        PREPARE_FRAME_BUDGET
+    };
+    let deadline = std::time::Instant::now() + budget;
     let done = {
         let Some(job) = prepared.job.as_mut() else {
             return;

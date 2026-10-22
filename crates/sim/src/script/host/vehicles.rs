@@ -534,13 +534,20 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             None => attached.ok_or("vehicle has no attached path")?,
         };
         let origin = node(&mut world.resource_mut::<RoundScript>(), object)?;
-        let speed = campaign::node_speed(&mut world.resource_mut::<RoundScript>(), object);
+        let (speed, accel, decel) = {
+            let mut runtime = world.resource_mut::<RoundScript>();
+            (
+                campaign::node_speed(&mut runtime, object),
+                campaign::node_accel(&mut runtime, object),
+                campaign::node_decel(&mut runtime, object),
+            )
+        };
         let vehicle = heli(world, receiver)?;
         vehicle.path_node = Some(object);
         vehicle.path_running = true;
         let ground = vehicle.ground;
         if ground && let Some(speed) = speed {
-            campaign::take_speed(vehicle, speed);
+            campaign::take_speed(vehicle, speed, accel, decel);
         }
         set_goal(vehicle, origin, !ground);
         Ok(Value::Undefined)
@@ -1208,6 +1215,8 @@ pub(crate) fn advance(world: &mut World) {
             });
             let ground = runtime.vehicles[&id].ground;
             let reached_speed = campaign::node_speed(&mut runtime, reached);
+            let reached_accel = campaign::node_accel(&mut runtime, reached);
+            let reached_decel = campaign::node_decel(&mut runtime, reached);
             let last = match &successor {
                 Ok(Some((next, _))) => {
                     ground && !matches!(next_node(&mut runtime, *next), Ok(Some(_)))
@@ -1215,7 +1224,12 @@ pub(crate) fn advance(world: &mut World) {
                 _ => true,
             };
             if ground && let Some(speed) = reached_speed {
-                campaign::take_speed(runtime.vehicles.get_mut(&id).unwrap(), speed);
+                campaign::take_speed(
+                    runtime.vehicles.get_mut(&id).unwrap(),
+                    speed,
+                    reached_accel,
+                    reached_decel,
+                );
             }
             match successor {
                 Ok(Some((node, goal))) => {

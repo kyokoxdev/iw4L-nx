@@ -157,4 +157,140 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         }
         Ok(Value::Undefined)
     });
+    registry.register(Function, "getkeybinding", |world, _, args| {
+        let cmd = string(args, 0)?;
+        let key = key_for_command(&cmd);
+        let vals = match key {
+            Some(k) => vec![Value::string(k)],
+            None => Vec::new(),
+        };
+        let array = super::super::arrays::new_array(world, vals)?;
+        if let Value::Array(id) = array {
+            let count = if key.is_some() { 1 } else { 0 };
+            world
+                .resource_mut::<RoundScript>()
+                .arrays
+                .get_mut(&id)
+                .unwrap()
+                .insert(
+                    crate::script::ArrayKey::String("count".into()),
+                    Value::Int(count),
+                );
+        }
+        Ok(array)
+    });
+    registry.register(Function, "getcommandfromkey", |_, _, args| {
+        let key = string(args, 0)?;
+        let cmd = command_for_key(&key).unwrap_or("");
+        Ok(Value::string(cmd))
+    });
+    // In retail IW4, friendly chains are deprecated and disabled.
+    registry.register(Method, "setfriendlychain", |world, receiver, _args| {
+        let _ = super::super::natives::engine::entity_id(world, receiver)?;
+        diag::warn!(Sim, "Friendly chains are disabled");
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "enableaimassist", |world, receiver, _| {
+        let _ = super::super::natives::player::player(world, receiver)?;
+        super::super::natives::iw4::set_dvar(world, "aim_assist_enabled", "1");
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "disableaimassist", |world, receiver, _| {
+        let _ = super::super::natives::player::player(world, receiver)?;
+        super::super::natives::iw4::set_dvar(world, "aim_assist_enabled", "0");
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setwatersheeting", |world, receiver, args| {
+        let _ = super::super::natives::player::player(world, receiver)?;
+        let enabled = super::super::args::int(args, 0)? != 0;
+        let duration = super::super::args::optional(args, 1, super::super::args::float)?.unwrap_or(3.0);
+        super::super::natives::iw4::set_dvar(world, "r_watersheetingfx_enable", if enabled { "1" } else { "0" });
+        super::super::natives::iw4::set_dvar(world, "r_watersheetingfx_fadeduration", &duration.to_string());
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "painvisionon", |world, receiver, _| {
+        let _ = super::super::natives::player::player(world, receiver)?;
+        let id = super::super::natives::engine::entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "player_has_red_flashing_overlay", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "painvisionoff", |world, receiver, _| {
+        let _ = super::super::natives::player::player(world, receiver)?;
+        let id = super::super::natives::engine::entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "player_has_red_flashing_overlay", Value::Int(0));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setlookatentity", |world, receiver, args| {
+        let id = super::super::natives::engine::entity_id(world, receiver)?;
+        let target = args.get(0).cloned().unwrap_or(Value::Undefined);
+        world.resource_mut::<RoundScript>().set_object_field(id, "lookat_entity", target);
+        Ok(Value::Undefined)
+    });
+}
+
+fn key_for_command(cmd: &str) -> Option<&'static str> {
+    match cmd.to_ascii_lowercase().as_str() {
+        "+activate" | "+usereload" | "+reload" => Some("BUTTON_X"),
+        "+speed" | "toggleads" => Some("BUTTON_LSHLDR"),
+        "+attack" => Some("BUTTON_RSHLDR"),
+        "+frag" => Some("BUTTON_RTRIG"),
+        "+smoke" => Some("BUTTON_LTRIG"),
+        "+melee" | "+melee_breath" => Some("BUTTON_RSTICK"),
+        "+sprint" | "+breath_sprint" | "+holdbreath" => Some("BUTTON_LSTICK"),
+        "+gostand" | "+moveup" => Some("BUTTON_A"),
+        "+stance" | "+movedown" | "togglecrouch" | "gocrouch" => Some("BUTTON_B"),
+        "weapnext" => Some("BUTTON_Y"),
+        "pause" => Some("BUTTON_START"),
+        _ => None,
+    }
+}
+
+fn command_for_key(key: &str) -> Option<&'static str> {
+    match key.to_ascii_uppercase().as_str() {
+        "BUTTON_START" => Some("pause"),
+        "BUTTON_X" | "F" | "R" => Some("+usereload"),
+        "BUTTON_LSHLDR" | "MOUSE2" => Some("+speed"),
+        "BUTTON_RSHLDR" | "MOUSE1" => Some("+attack"),
+        "BUTTON_RTRIG" | "G" => Some("+frag"),
+        "BUTTON_LTRIG" | "4" => Some("+smoke"),
+        "BUTTON_RSTICK" | "V" => Some("+melee_breath"),
+        "BUTTON_LSTICK" | "SHIFT" => Some("+breath_sprint"),
+        "BUTTON_A" | "SPACE" => Some("+gostand"),
+        "BUTTON_B" | "C" => Some("+stance"),
+        "BUTTON_Y" | "1" => Some("weapnext"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_common_campaign_buttons() {
+        assert_eq!(key_for_command("+usereload"), Some("BUTTON_X"));
+        assert_eq!(key_for_command("+activate"), Some("BUTTON_X"));
+        assert_eq!(key_for_command("+speed"), Some("BUTTON_LSHLDR"));
+        assert_eq!(key_for_command("+attack"), Some("BUTTON_RSHLDR"));
+        assert_eq!(key_for_command("+holdbreath"), Some("BUTTON_LSTICK"));
+        assert_eq!(key_for_command("pause"), Some("BUTTON_START"));
+        assert_eq!(key_for_command("unknown_command"), None);
+
+        assert_eq!(command_for_key("BUTTON_START"), Some("pause"));
+        assert_eq!(command_for_key("BUTTON_X"), Some("+usereload"));
+        assert_eq!(command_for_key("F"), Some("+usereload"));
+        assert_eq!(command_for_key("BUTTON_LSHLDR"), Some("+speed"));
+        assert_eq!(command_for_key("BUTTON_RSTICK"), Some("+melee_breath"));
+        assert_eq!(command_for_key("BUTTON_LSTICK"), Some("+breath_sprint"));
+    }
+
+    #[test]
+    fn registers_campaign_control_builtins() {
+        let mut registry = NativeRegistry::default();
+        register(&mut registry);
+        assert!(registry.get(Method, "setfriendlychain").is_some());
+        assert!(registry.get(Method, "setlookatentity").is_some());
+        assert!(registry.get(Function, "getkeybinding").is_some());
+        assert!(registry.get(Function, "getcommandfromkey").is_some());
+    }
 }

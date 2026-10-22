@@ -26,5 +26,8 @@ perf.workspace = true
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "pcm", "wav", "adpcm", "flac"] }
 cpal = "=0.18.2"
 
+[target.'cfg(target_os = "horizon")'.dependencies]
+platform_nx.workspace = true
+
 [lints]
 workspace = true

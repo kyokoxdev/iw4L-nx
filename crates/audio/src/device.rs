@@ -11,6 +11,8 @@ use crate::render_core::{QUANTUM, RenderShared, SAMPLE_RATE};
 pub(crate) fn supervise(shared: Arc<RenderShared>, shutdown: Arc<AtomicBool>) {
     assets::session_load::use_process_cpus();
     crate::diagnostics::thread("audio-device");
+    #[cfg(target_os = "horizon")]
+    platform_nx::raise_current_thread("audio-device");
     let failed = Arc::new(AtomicU8::new(0));
     let mut backoff = Duration::from_millis(20);
     let mut interrupted_at: Option<std::time::Instant> = None;
@@ -37,7 +39,7 @@ pub(crate) fn supervise(shared: Arc<RenderShared>, shutdown: Arc<AtomicBool>) {
                     if current != callbacks {
                         callbacks = current;
                         last_callback = std::time::Instant::now();
-                    } else if last_callback.elapsed() >= Duration::from_millis(250) {
+                    } else if last_callback.elapsed() >= Duration::from_millis(1000) {
                         failed.store(4, Ordering::Release);
                     }
                 }
@@ -174,6 +176,14 @@ fn build<T: SizedSample + FromSample<f32>>(
     device.build_output_stream(
         config.clone(),
         move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
+            #[cfg(target_os = "horizon")]
+            {
+                static RAISED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !RAISED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    platform_nx::raise_current_thread("audio-device-callback");
+                }
+            }
             shared.device_callbacks.fetch_add(1, Ordering::Release);
             let mut next = || {
                 if position == QUANTUM {

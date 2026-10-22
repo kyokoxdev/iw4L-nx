@@ -793,6 +793,21 @@ pub(crate) fn scripted_native(
         _ => None,
     };
     start_scripted(world, receiver, notify, origin, angles, anim, root)?;
+    if let Some(mode) = args.get(4).and_then(|v| match v {
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    }) {
+        if let Ok(id) = entity_id(world, receiver) {
+            if let Some(brain) = world
+                .resource_mut::<RoundScript>()
+                .campaign
+                .actor_brains
+                .get_mut(&id)
+            {
+                brain.anim_mode = mode.to_ascii_lowercase().into();
+            }
+        }
+    }
     Ok(Value::Undefined)
 }
 
@@ -858,6 +873,8 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         "setanimknoblimitedrestart" => false, true, true, true, false;
         "setanimknoball" => false, true, false, false, true;
         "setanimknoballrestart" => false, true, false, true, true;
+        "setanimknoballlimited" => false, true, true, false, true;
+        "setanimknoballlimitedrestart" => false, true, true, true, true;
         "setflaggedanim" => true, false, false, false, false;
         "setflaggedanimknob" => true, true, false, false, false;
         "setflaggedanimlimited" => true, false, true, false, false;
@@ -868,6 +885,8 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         "setflaggedanimknoblimitedrestart" => true, true, true, true, false;
         "setflaggedanimknoball" => true, true, false, false, true;
         "setflaggedanimknoballrestart" => true, true, false, true, true;
+        "setflaggedanimknoballlimited" => true, true, true, false, true;
+        "setflaggedanimknoballlimitedrestart" => true, true, true, true, true;
     }
     registry.register(Method, "clearanim", |world, receiver, args| {
         let (tree, anim) = anim_value(args, 0)?;
@@ -898,9 +917,39 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             Ok(Value::Undefined)
         })
     });
-    for name in ["animscripted", "startscriptedanim"] {
+    for name in [
+        "animscripted",
+        "startscriptedanim",
+        "animrelative",
+        "animscriptedthirdperson",
+    ] {
         registry.register(Method, name, scripted_native);
     }
+    registry.register(Method, "getanimassettype", |_world, _receiver, _args| {
+        Ok(Value::string("anim"))
+    });
+    registry.register(Method, "dumpanims", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        if let Some(anim) = world
+            .resource::<RoundScript>()
+            .entities
+            .get(&id)
+            .and_then(|e| e.anim.as_ref())
+        {
+            diag::info!(Sim, "dumpanims entity {id} tree: {}", anim.tree_name);
+            for (idx, node) in anim.tree.nodes.iter().enumerate() {
+                let weight = anim.weight(idx as u16);
+                let time = anim.time(idx as u16);
+                if weight > 0.0 || time > 0.0 {
+                    diag::info!(Sim, "  [{idx}] {}: weight={weight}, time={time}", node.name);
+                }
+            }
+        }
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setlookatanimnodes", |_world, _receiver, _args| {
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "stopanimscripted", |world, receiver, _| {
         let id = entity_id(world, receiver)?;
         if let Some(anim) = world
@@ -1050,5 +1099,65 @@ mod tests {
                 .iter()
                 .any(|n| n.clip.as_deref() == Some("walk"))
         );
+    }
+
+    #[test]
+    fn anim_limited_modes_respect_ancestor_boundaries() {
+        let mut anim = EntityAnim::new("t".into(), tree());
+        // Body (node 1) is off initially.
+        assert_eq!(anim.weight(1), 0.0);
+        // Setting idle (node 2) with limited=true does not turn on body.
+        anim.set(
+            2,
+            1.0,
+            0.0,
+            1.0,
+            SetMode {
+                limited: true,
+                ..SetMode::default()
+            },
+            None,
+        );
+        assert_eq!(anim.weight(1), 0.0, "limited mode leaves ancestor weight alone");
+
+        // Setting walk (node 3) with knob_all_to: Some(1) and limited: true
+        anim.set(
+            3,
+            1.0,
+            0.0,
+            1.0,
+            SetMode {
+                knob: true,
+                limited: true,
+                knob_all_to: Some(1),
+                ..SetMode::default()
+            },
+            None,
+        );
+        // Idle should have been cleared
+        assert_eq!(anim.states[2].goal_weight, 0.0);
+        // Walk is active
+        assert_eq!(anim.weight(3), 1.0);
+    }
+
+    #[test]
+    fn anim_methods_registered() {
+        let mut registry = NativeRegistry::default();
+        register(&mut registry);
+        assert!(registry.get(Namespace::Method, "animrelative").is_some());
+        assert!(registry.get(Namespace::Method, "animscriptedthirdperson").is_some());
+        assert!(registry.get(Namespace::Method, "getanimassettype").is_some());
+        assert!(registry.get(Namespace::Method, "dumpanims").is_some());
+        assert!(registry.get(Namespace::Method, "setlookatanimnodes").is_some());
+        assert!(registry.get(Namespace::Method, "setanimknoballlimited").is_some());
+        assert!(registry.get(Namespace::Method, "setanimknoballlimitedrestart").is_some());
+        assert!(registry.get(Namespace::Method, "setflaggedanimknoballlimited").is_some());
+        assert!(registry.get(Namespace::Method, "setflaggedanimknoballlimitedrestart").is_some());
+
+        // Test getanimassettype invocation
+        let mut world = World::new();
+        let get_type = registry.get(Namespace::Method, "getanimassettype").unwrap();
+        let val = get_type(&mut world, &Value::Undefined, &[]).unwrap();
+        assert_eq!(val, Value::string("anim"));
     }
 }

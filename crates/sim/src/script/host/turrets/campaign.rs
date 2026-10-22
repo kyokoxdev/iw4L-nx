@@ -120,6 +120,18 @@ pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
     use super::super::natives::engine::entity_id;
     use crate::script::Namespace::Method;
     registry.register(Method, "useturret", use_turret);
+    registry.register(Method, "restoredefaultdroppitch", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        if let Some(t) = world
+            .resource_mut::<RoundScript>()
+            .engine
+            .turrets
+            .get_mut(&object)
+        {
+            t.drop_pitch = 0.0;
+        }
+        Ok(Value::Undefined)
+    });
     // `setaispread(degrees)` / `setplayerspread(degrees)`: how far an AI
     // gunner's / a manning player's shots scatter.
     registry.register(Method, "setaispread", |world, receiver, args| {
@@ -174,6 +186,29 @@ pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
     registry.register(Method, "getbarrelspinrate", |world, receiver, _| {
         let object = turret_object(world, receiver)?;
         Ok(Value::Float(barrel_spin(world, object)))
+    });
+    registry.register(Method, "setturretanim", |world, receiver, args| {
+        let object = turret_object(world, receiver)?;
+        let anim = super::super::args::arg(args, 0)?.clone();
+        world.resource_mut::<RoundScript>().set_object_field(object, "turret_anim", anim);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setturretcanaidetach", |world, receiver, args| {
+        let object = turret_object(world, receiver)?;
+        let can_detach = super::super::args::optional(args, 0, super::super::args::int)?.unwrap_or(1) != 0;
+        world.resource_mut::<RoundScript>().set_object_field(object, "turret_ai_can_detach", Value::Int(can_detach.into()));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setturretignoregoals", |world, receiver, args| {
+        let object = turret_object(world, receiver)?;
+        let ignore = super::super::args::optional(args, 0, super::super::args::int)?.unwrap_or(1) != 0;
+        world.resource_mut::<RoundScript>().set_object_field(object, "turret_ignore_goals", Value::Int(ignore.into()));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "disableturretdismount", |world, receiver, _| {
+        let object = turret_object(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(object, "turret_dismount_disabled", Value::Int(1));
+        Ok(Value::Undefined)
     });
     registry.register(Method, "startfiring", |world, receiver, _| {
         let object = entity_id(world, receiver)?;
@@ -240,6 +275,12 @@ pub(crate) fn register(registry: &mut crate::script::NativeRegistry) {
             Ok(Value::Undefined)
         },
     );
+    registry.register(Method, "setautorotationdelay", |world, receiver, args| {
+        let object = turret_object(world, receiver)?;
+        let delay = super::super::args::float(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(object, "autorotationdelay", Value::Float(delay));
+        Ok(Value::Undefined)
+    });
 }
 
 /// `actor useturret(turret)`: the turret takes the actor's side and aims at

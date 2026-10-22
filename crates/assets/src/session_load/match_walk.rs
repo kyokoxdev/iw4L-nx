@@ -132,11 +132,15 @@ pub(super) async fn walk_prepared_match(
         common.retained_payloads(),
         common.retained_bytes() as f64 / (1024.0 * 1024.0),
     ));
-    let common_images = hold_image_plan(
-        "common_mp FPV",
-        common.fpv_plan.clone(),
-        load_jobs::open(JobKind::ImageDecode).namespace("iw4"),
-    );
+    let common_images = if asset_transport::campaign_zone_set() {
+        None
+    } else {
+        hold_image_plan(
+            "common_mp FPV",
+            common.fpv_plan.clone(),
+            load_jobs::open(JobKind::ImageDecode).namespace("iw4"),
+        )
+    };
 
     let opened_map = map_open.await;
     if progress.is_canceled() {

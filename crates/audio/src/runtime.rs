@@ -446,6 +446,8 @@ fn control(
 ) {
     assets::session_load::use_process_cpus();
     crate::diagnostics::thread("audio-control");
+    #[cfg(target_os = "horizon")]
+    platform_nx::raise_current_thread("audio-control");
     let diag_anchor = Instant::now();
     let mut diag_last = Instant::now();
     let mut diag_max_pass = Duration::ZERO;

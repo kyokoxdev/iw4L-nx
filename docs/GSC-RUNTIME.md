@@ -56,6 +56,9 @@ after terminator removal. Fingerprints hash IR version 5 and each module's
 `Function` or native `Builtin`), locals (per-function slots) and field names (symbol ids)
 are resolved at load, and `install` binds native slots once.
 UTF-8 and single-byte sources are supported; developer blocks are excluded.
+When implementing missing builtins or resolving signature ambiguities (especially for
+campaign/SP), reference the `default.xex` / `default_mp.xex` recompiled tables in
+`context/externals/mw2-recompiled` rather than guessing types.
 
 ## Language and scheduling
 

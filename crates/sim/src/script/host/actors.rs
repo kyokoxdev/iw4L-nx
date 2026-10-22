@@ -100,7 +100,7 @@ pub(crate) struct ActorBrain {
     thread: Option<u64>,
     hold: Option<Hold>,
     /// `animmode`: anything but `none`/`normal` moves the actor by its root motion.
-    anim_mode: Arc<str>,
+    pub(crate) anim_mode: Arc<str>,
     orient: Orient,
     /// Level time the enemy was last seen.
     enemy_seen_ms: i64,
@@ -3427,11 +3427,7 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         let team = world.resource_mut::<RoundScript>().object_field(id, "team");
         Ok(Value::Int((team == Value::string("axis")).into()))
     });
-    // `makeentitysentient(team, [expendable])`: actors fight the entity as one
-    // of `team`.
-    registry.register(Method, "makeentitysentient", |world, receiver, args| {
-        let id = entity_id(world, receiver)?;
-        let team = super::args::string(args, 0)?;
+    fn make_sentient_target(world: &mut World, id: u64, team: String) -> Result<Value, String> {
         let mut runtime = world.resource_mut::<RoundScript>();
         let actor = runtime
             .entities
@@ -3442,15 +3438,34 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         }
         runtime.campaign.sentients.insert(id, Value::string(&team));
         Ok(Value::Int(1))
-    });
-    registry.register(Method, "freeentitysentient", |world, receiver, _| {
-        let id = entity_id(world, receiver)?;
+    }
+    fn free_sentient_target(world: &mut World, id: u64) -> Result<Value, String> {
         world
             .resource_mut::<RoundScript>()
             .campaign
             .sentients
             .remove(&id);
         Ok(Value::Undefined)
+    }
+    // `makeentitysentient(team, [expendable])`: actors fight the entity as one
+    // of `team`.
+    registry.register(Method, "makeentitysentient", |world, receiver, args| {
+        let id = entity_id(world, receiver)?;
+        let team = super::args::string(args, 0)?;
+        make_sentient_target(world, id, team)
+    });
+    registry.register(Function, "makeentitysentient", |world, _, args| {
+        let id = entity_id(world, super::args::arg(args, 0)?)?;
+        let team = super::args::string(args, 1)?;
+        make_sentient_target(world, id, team)
+    });
+    registry.register(Method, "freeentitysentient", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        free_sentient_target(world, id)
+    });
+    registry.register(Function, "freeentitysentient", |world, _, args| {
+        let id = entity_id(world, super::args::arg(args, 0)?)?;
+        free_sentient_target(world, id)
     });
     registry.register(Function, "issentient", |world, _, args| {
         let sentient = match super::args::arg(args, 0)? {

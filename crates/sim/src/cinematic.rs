@@ -7,6 +7,7 @@ pub struct ScriptCinematic {
     /// Lowercase `video/<name>.bik` stem.
     pub name: String,
     pub looped: bool,
+    pub fullscreen: bool,
     /// Level time it started; replaying the same video is a new cinematic.
     pub start_ms: i32,
     /// `None` while looping.

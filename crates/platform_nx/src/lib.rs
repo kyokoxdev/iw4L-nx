@@ -79,16 +79,33 @@ pub fn pin_current_thread(preferred: i32, mask: u32, name: &str) {
     ));
 }
 
-/// Drops the calling thread to the lowest application priority: on its core
-/// it runs only while every default-priority thread there waits. Horizon does
-/// not time-slice equal priorities, so a long CPU-bound job at default
-/// priority would starve its neighbours.
+/// Drops the calling thread to the lowest application priority allowed by the kernel:
+/// on its core it runs only while every higher- or default-priority thread there waits.
+/// Horizon does not time-slice equal priorities, so background worker jobs must run below
+/// normal application threads (0x3B) and audio/video threads (0x3A).
 pub fn background_current_thread(name: &str) {
     const CUR_THREAD_HANDLE: u32 = 0xFFFF_8000;
-    const LOWEST: u32 = 0x3B;
+    let mut current = 0u32;
     // SAFETY: plain SVC on the calling thread's pseudo-handle.
-    let rc = unsafe { svcSetThreadPriority(CUR_THREAD_HANDLE, LOWEST) };
-    breadcrumb(&format!("thread {name}: priority {LOWEST:#x} rc={rc:#x}"));
+    unsafe {
+        match svcGetThreadPriority(&mut current, CUR_THREAD_HANDLE) {
+            0 => {
+                let mut best_prio = current;
+                let mut last_rc = 0;
+                for prio in (current..=0x3E).rev() {
+                    last_rc = svcSetThreadPriority(CUR_THREAD_HANDLE, prio);
+                    if last_rc == 0 {
+                        best_prio = prio;
+                        break;
+                    }
+                }
+                breadcrumb(&format!("thread {name}: priority {best_prio:#x} rc={last_rc:#x}"));
+            }
+            rc => {
+                breadcrumb(&format!("thread {name}: svcGetThreadPriority failed rc={rc:#x}"));
+            }
+        }
+    };
 }
 
 /// Lifts the calling thread one step above its creation priority. Every

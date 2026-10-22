@@ -1543,11 +1543,14 @@ fn take_uploaded_code_image(
     }
     if index == u32::from(lighting_iw4::TEXTURE_SRC_CODE_LIGHT_ATTENUATION)
         || index == crate::drawsurf::CODE_TEXTURE_OUTDOOR
+        || (0x15..=0x18).contains(&index)
     {
-        let id =
-            catalog_image.ok_or(TextureBindRefusal::CodeImageUnproduced { register, index })?;
-        let view = take_uploaded_material(uploaded, id, register, SamplerTextureDimension::D2)?;
-        return Ok((view, UploadedTextureIdentity::Material(id)));
+        if let Some(id) = catalog_image {
+            let view = take_uploaded_material(uploaded, id, register, SamplerTextureDimension::D2)?;
+            return Ok((view, UploadedTextureIdentity::Material(id)));
+        } else if let Some(Some(Ok(uploaded_view))) = uploaded.material_images.first() {
+            return Ok((uploaded_view.view.clone(), UploadedTextureIdentity::Material(RuntimeImageId(0))));
+        }
     }
     Err(TextureBindRefusal::CodeImageUnproduced { register, index })
 }

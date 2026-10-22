@@ -88,10 +88,15 @@ fn start_shell_common_prepare(
     screen: Res<AppScreen>,
     identity: Res<LaunchIdentity>,
     menus: Option<Res<asset_game::MenuCatalog>>,
+    dvars: Option<Res<frame::UiMenuDvars>>,
     task: Option<Res<ShellCommonTask>>,
     shell: Option<Res<ShellUiImages>>,
 ) {
     if *screen != AppScreen::MainMenu || task.is_some() || shell.is_some() {
+        return;
+    }
+    let is_mp = dvars.as_ref().and_then(|d| d.get("ui_iw4l_mode")) == Some("mp");
+    if !is_mp {
         return;
     }
     let Some(menus) = menus else {
@@ -106,10 +111,59 @@ fn start_shell_common_prepare(
     commands.insert_resource(frame::FrontendContentLoading);
 }
 
+fn evict_mp_on_sp_selection(
+    mut commands: Commands,
+    dvars: Option<Res<frame::UiMenuDvars>>,
+    task: Option<Res<ShellCommonTask>>,
+    shell: Option<Res<ShellUiImages>>,
+    catalog: Option<Res<ClassLoadoutCatalog>>,
+    map_pres: Option<Res<ui::frontend::maps::MapPresentation>>,
+    content_loading: Option<Res<frame::FrontendContentLoading>>,
+) {
+    let mode = dvars.as_ref().and_then(|d| d.get("ui_iw4l_mode"));
+    let is_sp = mode == Some("sp");
+    let is_select = mode == Some("select");
+    let has_mp_assets = task.is_some()
+        || shell.is_some()
+        || map_pres.is_some()
+        || content_loading.is_some()
+        || catalog
+            .as_ref()
+            .is_some_and(|c| c.revision > 0 || !c.primary.is_empty());
+    if (is_sp || is_select) && has_mp_assets {
+        diag::info!(
+            Launch,
+            "evicting multiplayer assets from memory (mode={:?})",
+            mode
+        );
+        if task.is_some() {
+            commands.remove_resource::<ShellCommonTask>();
+        }
+        if shell.is_some() {
+            commands.remove_resource::<ShellUiImages>();
+        }
+        if catalog
+            .as_ref()
+            .is_some_and(|c| c.revision > 0 || !c.primary.is_empty())
+        {
+            commands.insert_resource(ClassLoadoutCatalog::default());
+        }
+        if map_pres.is_some() {
+            commands.remove_resource::<ui::frontend::maps::MapPresentation>();
+        }
+        if content_loading.is_some() {
+            commands.remove_resource::<frame::FrontendContentLoading>();
+        }
+        assets::forget_common();
+        assets::clear_resident_map();
+    }
+}
+
 fn register_shell_common_systems(app: &mut App) {
     app.add_systems(
         Update,
         (
+            evict_mp_on_sp_selection,
             start_shell_common_prepare,
             install_class_catalog,
             adopt_shell_ui_images,
@@ -642,7 +696,6 @@ fn run_menu(
         diag::warn!(Launch, "{error}");
         fatal(&mw2_not_found(&games, steam))
     });
-    let shell_common = assets::load_pool().spawn(assets::load_shell_common(games.clone()));
     let maps = list_mp_map_packs(&games);
     diag::info!(
         Launch,
@@ -688,14 +741,9 @@ fn run_menu(
     ));
     app.insert_resource(PendingFrontend {
         load: spawn_frontend_load(ui_games.clone(), namespace_trees).into(),
-        shell: Some(ShellCommonTask {
-            task: shell_common,
-            perk_table: None,
-            started: std::time::Instant::now(),
-        }),
+        shell: None,
     })
     .insert_resource(frame::FrontendPending)
-    .insert_resource(frame::FrontendContentLoading)
     .add_systems(
         Update,
         install_frontend.run_if(resource_exists::<PendingFrontend>),

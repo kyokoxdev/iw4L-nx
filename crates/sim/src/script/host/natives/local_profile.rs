@@ -1,7 +1,11 @@
-use super::super::args::{arg, kind, string};
+use super::super::args::{arg, int, kind, string};
 use super::player::player;
 use crate::LocalPlayerProfile;
-use crate::script::{Namespace::Method, NativeRegistry, MatchScript, Value};
+use crate::script::{
+    MatchScript,
+    Namespace::{Function, Method},
+    NativeRegistry, Value,
+};
 
 /// Campaign profile fields, lowercase, with the value a fresh profile reads.
 const SP_FIELDS: &[(&str, i32)] = &[
@@ -73,4 +77,48 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
             Ok(Value::Undefined)
         },
     );
+    registry.register(
+        Method,
+        "getplayerintelisfound",
+        |world, receiver, args| {
+            if player(world, receiver)? != 0 {
+                return Ok(Value::Int(0));
+            }
+            let num = int(args, 0)?;
+            let key = format!("intel_{num}");
+            let found = world
+                .resource::<MatchScript>()
+                .sp_profile
+                .get(&key)
+                .is_some_and(|v| v != &Value::Int(0));
+            Ok(Value::Int(found.into()))
+        },
+    );
+    registry.register(
+        Method,
+        "setplayerintelfound",
+        |world, receiver, args| {
+            if player(world, receiver)? != 0 {
+                return Ok(Value::Undefined);
+            }
+            let num = int(args, 0)?;
+            let key = format!("intel_{num}");
+            let mut match_script = world.resource_mut::<MatchScript>();
+            if match_script.sp_profile.get(&key).is_none() {
+                match_script.sp_profile.insert(key, Value::Int(1));
+                let cur = match match_script.sp_profile.get("cheatpoints") {
+                    Some(Value::Int(points)) => *points,
+                    _ => 0,
+                };
+                match_script.sp_profile.insert("cheatpoints".into(), Value::Int(cur + 1));
+            }
+            Ok(Value::Undefined)
+        },
+    );
+    registry.register(Function, "updategamerprofile", |_, _, _| {
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "updategamerprofileall", |_, _, _| {
+        Ok(Value::Undefined)
+    });
 }

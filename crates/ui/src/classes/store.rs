@@ -296,7 +296,7 @@ pub(crate) fn load_class_store(
     identity: Option<Res<frame::LaunchIdentity>>,
     mut file: ResMut<ClassStoreFile>,
     mut store: ResMut<SessionClassStore>,
-    catalog: Res<crate::ClassLoadoutCatalog>,
+    catalog: Option<Res<crate::ClassLoadoutCatalog>>,
 ) {
     if file.loaded {
         return;
@@ -307,6 +307,9 @@ pub(crate) fn load_class_store(
     if identity.artifacts.as_os_str().is_empty() {
         return;
     }
+    let Some(catalog) = catalog else {
+        return;
+    };
     let Some(registry) = catalog.resolver.0.as_deref() else {
         return;
     };
@@ -387,7 +390,7 @@ fn write_class_file(path: &std::path::Path, contents: &str) -> std::io::Result<(
 
 pub(crate) fn save_class_store(
     store: Res<SessionClassStore>,
-    catalog: Res<crate::ClassLoadoutCatalog>,
+    catalog: Option<Res<crate::ClassLoadoutCatalog>>,
     mut file: ResMut<ClassStoreFile>,
 ) {
     if !file.loaded
@@ -398,6 +401,9 @@ pub(crate) fn save_class_store(
     {
         return;
     }
+    let Some(catalog) = catalog else {
+        return;
+    };
     if !store.is_changed() && file.retry_at.is_none() && file.written.is_some() {
         return;
     }

@@ -704,4 +704,25 @@ pub(crate) fn register(registry: &mut NativeRegistry) {
         frame.set_hud_elem_sound_ids(ids);
         Ok(Value::Undefined)
     });
+    registry.register(Method, "setwaypointedgestyle_rotatingicon", |world, receiver, _| {
+        let (_, slot) = slot_of(world, receiver)?;
+        edit(world, slot, |s| {
+            s.elem.elem_type = HE_TYPE_WAYPOINT;
+        });
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setwaypointiconoffscreenonly", |world, receiver, _| {
+        let (_, slot) = slot_of(world, receiver)?;
+        edit(world, slot, |s| {
+            s.elem.elem_type = HE_TYPE_WAYPOINT;
+            s.elem.value = (s.elem.value as i32 | hud_iw4::WAYPOINT_HIDE_OFFSCREEN) as f32;
+        });
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setmotiontrackervisible", |world, receiver, args| {
+        let id = super::natives::engine::entity_id(world, receiver)?;
+        let visible = optional(args, 0, int)?.unwrap_or(1) != 0;
+        world.resource_mut::<RoundScript>().set_object_field(id, "motion_tracker_visible", Value::Int(visible.into()));
+        Ok(Value::Undefined)
+    });
 }

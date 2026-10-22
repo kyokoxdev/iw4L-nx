@@ -968,10 +968,15 @@ fn preflight_match_install(
     identity: Option<&LaunchIdentity>,
     role: frame::RuntimeRole,
 ) -> Result<MatchInstallPlan, InstallRefusal> {
+    let is_sp = asset_transport::campaign_zone_set()
+        || identity
+            .map(|id| asset_transport::GamesRoot(id.games_root.clone()))
+            .as_ref()
+            .is_some_and(|g| asset_transport::is_campaign_level(g, zone));
     if prepared
         .clip
         .as_ref()
-        .is_none_or(|clip| clip.coverage != asset_world::CollisionCoverage::Complete)
+        .is_none_or(|clip| !is_sp && clip.coverage != asset_world::CollisionCoverage::Complete)
     {
         return Err(InstallRefusal::new(
             "Required collision geometry has incomplete query coverage",

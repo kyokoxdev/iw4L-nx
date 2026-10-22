@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::render_core::{QUANTUM, RenderShared};
+use crate::render_core::{QUANTUM, RenderShared, SAMPLE_RATE};
 
 /// Half a second of stereo 48 kHz.
 const CAPACITY: usize = 24_000;
@@ -78,6 +78,27 @@ impl PcmStream {
     /// Frames the mixer has consumed: the playback clock.
     pub fn played_frames(&self) -> u64 {
         self.ring.read.load(Ordering::Acquire)
+    }
+
+    /// Creates a lightweight playback clock handle referencing this stream's position.
+    pub fn clock(&self) -> PcmClock {
+        PcmClock(self.ring.clone())
+    }
+}
+
+/// Playback clock for an active or past PCM stream.
+#[derive(Clone)]
+pub struct PcmClock(Arc<StreamRing>);
+
+impl PcmClock {
+    /// Frames the mixer has consumed.
+    pub fn played_frames(&self) -> u64 {
+        self.0.read.load(Ordering::Acquire)
+    }
+
+    /// Elapsed seconds of consumed audio at `SAMPLE_RATE`.
+    pub fn played_seconds(&self) -> f64 {
+        self.played_frames() as f64 / f64::from(SAMPLE_RATE)
     }
 }
 

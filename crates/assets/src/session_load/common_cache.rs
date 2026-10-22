@@ -248,7 +248,7 @@ impl Drop for FlightGuard {
 }
 
 /// Drops the cached common set; the next load prepares it again.
-pub(super) fn forget_common() {
+pub fn forget_common() {
     COMMON.lock().unwrap_or_else(|poison| poison.into_inner()).take();
 }
 

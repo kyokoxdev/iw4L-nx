@@ -119,12 +119,15 @@ pub(super) fn load_or_decode_mips(
     }
     let bytes = candidate.read()?;
     let mips = decode_iwi_mips(&bytes)?.picmip(PICMIP_MAX);
-    let blob = encode_cache(&mips);
-    let store_at = std::time::Instant::now();
-    if let Err(error) = crate::cache_put("mips", &key, &blob) {
-        diag::warn!(Zone, "mip cache store {key}: {error}");
+    #[cfg(not(target_os = "horizon"))]
+    {
+        let blob = encode_cache(&mips);
+        let store_at = std::time::Instant::now();
+        if let Err(error) = crate::cache_put("mips", &key, &blob) {
+            diag::warn!(Zone, "mip cache store {key}: {error}");
+        }
+        MIP_IO_NS.fetch_add(store_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
-    MIP_IO_NS.fetch_add(store_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
     MIP_MISS.fetch_add(1, Ordering::Relaxed);
     Ok(mips)
 }

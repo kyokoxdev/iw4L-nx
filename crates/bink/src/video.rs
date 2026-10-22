@@ -954,14 +954,46 @@ pub(crate) fn to_rgba(planes: &[Plane], width: usize, height: usize, out: &mut [
         let ys = &y_p.data[row * y_p.stride..][..width];
         let us = &u_p.data[(row >> 1) * u_p.stride..];
         let vs = &v_p.data[(row >> 1) * v_p.stride..];
-        for (x, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let c = (i32::from(ys[x]) - 16) * 298;
-            let d = i32::from(us[x >> 1]) - 128;
-            let e = i32::from(vs[x >> 1]) - 128;
-            px[0] = ((c + 409 * e + 128) >> 8).clamp(0, 255) as u8;
-            px[1] = ((c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255) as u8;
-            px[2] = ((c + 516 * d + 128) >> 8).clamp(0, 255) as u8;
-            px[3] = 255;
+        let y_pairs = ys.as_chunks::<2>().0;
+        let px_pairs = line.as_chunks_mut::<8>().0;
+        for (i, ([y0, y1], px8)) in y_pairs.iter().zip(px_pairs).enumerate() {
+            let d = i32::from(us[i]) - 128;
+            let e = i32::from(vs[i]) - 128;
+            let r_add = 409 * e + 128;
+            let g_sub = 100 * d + 208 * e - 128;
+            let b_add = 516 * d + 128;
+
+            let c0 = (i32::from(*y0) - 16) * 298;
+            px8[0] = ((c0 + r_add) >> 8).clamp(0, 255) as u8;
+            px8[1] = ((c0 - g_sub) >> 8).clamp(0, 255) as u8;
+            px8[2] = ((c0 + b_add) >> 8).clamp(0, 255) as u8;
+            px8[3] = 255;
+
+            let c1 = (i32::from(*y1) - 16) * 298;
+            px8[4] = ((c1 + r_add) >> 8).clamp(0, 255) as u8;
+            px8[5] = ((c1 - g_sub) >> 8).clamp(0, 255) as u8;
+            px8[6] = ((c1 + b_add) >> 8).clamp(0, 255) as u8;
+            px8[7] = 255;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_rgba_matches_reference() {
+        let y = Plane { data: vec![16, 235, 128, 64], stride: 4 };
+        let u = Plane { data: vec![128, 128], stride: 2 };
+        let v = Plane { data: vec![128, 128], stride: 2 };
+        let planes = vec![y, u, v];
+        let mut out = vec![0u8; 16];
+        to_rgba(&planes, 4, 1, &mut out);
+        assert_eq!(out[3], 255);
+        assert_eq!(out[7], 255);
+        assert_eq!(out[11], 255);
+        assert_eq!(out[15], 255);
+        assert_eq!(out[0..4], [0, 0, 0, 255]);
     }
 }

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::World;
 
-use super::super::args::{arg, string, vector};
+use super::super::args::{arg, float, string, vector};
 use super::super::natives::engine::entity_id;
 use super::super::triggers::entity_bounds;
 use super::{
@@ -883,6 +883,17 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         );
         add_badplace(world, args, bounds, 5)
     });
+    registry.register(Function, "badplace_arc", |world, _, args| {
+        let at = vector(args, 2)?;
+        let radius = number(arg(args, 3)?.clone()).unwrap_or(0.0);
+        let height = number(arg(args, 4)?.clone()).unwrap_or(0.0);
+        let bounds = (
+            [at[0] - radius, at[1] - radius, at[2]],
+            [at[0] + radius, at[1] + radius, at[2] + height],
+        );
+        let teams_from = if args.len() > 6 { 7 } else { 5 };
+        add_badplace(world, args, bounds, teams_from)
+    });
     registry.register(Function, "badplace_brush", |world, _, args| {
         let id = entity_id(world, arg(args, 2)?)?;
         let (lo, hi) = entity_bounds(world, id);
@@ -983,6 +994,53 @@ pub(super) fn register(registry: &mut NativeRegistry) {
         let group = group_of(&mut world.resource_mut::<RoundScript>(), id);
         Ok(Value::string(&group))
     });
+    registry.register(Method, "setpotentialthreat", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let threat_ent = entity_id(world, arg(args, 0)?)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "potential_threat", Value::Object(threat_ent));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setcorpseremovetimer", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let seconds = float(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "corpse_remove_timer", Value::Float(seconds));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "disablebreaching", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "breaching_disabled", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "enablebreaching", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "breaching_disabled", Value::Int(0));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "castshadows", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "cast_shadows", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "dontcastshadows", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "cast_shadows", Value::Int(0));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "startragdollfromimpact", |world, receiver, _| {
+        let _ = actor(world, receiver)?;
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "settalktospecies", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let species = string(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "talk_to_species", Value::string(&species));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "makefakeai", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "is_fake_ai", Value::Int(1));
+        Ok(Value::Undefined)
+    });
     registry.register(Method, "findbestcovernode", |world, receiver, _| {
         let id = actor(world, receiver)?;
         let area = goal_area(world, id);
@@ -1076,6 +1134,46 @@ pub(super) fn register(registry: &mut NativeRegistry) {
             .resource_mut::<RoundScript>()
             .set_object_field(id, "goalvolume", Value::Undefined);
         Ok(Value::Undefined)
+    });
+    registry.register(Method, "setfixednodesafevolume", |world, receiver, args| {
+        let id = actor(world, receiver)?;
+        let vol = args.get(0).cloned().unwrap_or(Value::Undefined);
+        world.resource_mut::<RoundScript>().set_object_field(id, "fixednodesafevolume", vol);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "clearfixednodesafevolume", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "fixednodesafevolume", Value::Undefined);
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "startusingheroonlylighting", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "hero_only_lighting", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "startusinglessfrequentlighting", |world, receiver, _| {
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "less_frequent_lighting", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "getdebugeye", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let origin = vector_field(&mut runtime, id, "origin").unwrap_or([0.0; 3]);
+        Ok(Value::Vector([origin[0], origin[1], origin[2] + 60.0]))
+    });
+    registry.register(Method, "getmuzzlesideoffsetpos", |world, receiver, _| {
+        let id = actor(world, receiver)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        let origin = vector_field(&mut runtime, id, "origin").unwrap_or([0.0; 3]);
+        let angles = vector_field(&mut runtime, id, "angles").unwrap_or([0.0; 3]);
+        let axis = math_iw4::angles_to_axis(angles);
+        let side = [
+            origin[0] + axis[1][0] * 12.0,
+            origin[1] + axis[1][1] * 12.0,
+            origin[2] + 40.0,
+        ];
+        Ok(Value::Vector(side))
     });
 }
 

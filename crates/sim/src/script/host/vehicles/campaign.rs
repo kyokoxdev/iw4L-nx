@@ -2,7 +2,7 @@
 //! ground paths over `info_vehicle_node`s. Fork-only; kept out of the parent
 //! file so upstream merges touch it as little as possible.
 
-use super::super::args::{float, string};
+use super::super::args::{float, string, vector};
 use super::super::entities::EntityKind;
 use super::{Heli, MPH, heli, spawn_vehicle, vec_field};
 use crate::script::Namespace::Method;
@@ -14,27 +14,47 @@ pub(super) fn sp_level(world: &World) -> bool {
     !world.resource::<RoundScript>().campaign.nodes.is_empty()
 }
 
-/// A vehicle node's `speed` key, in mph.
-pub(super) fn node_speed(runtime: &mut RoundScript, node: u64) -> Option<f32> {
-    match runtime.object_field(node, "speed") {
-        Value::Int(speed) => Some(speed as f32),
-        Value::Float(speed) => Some(speed),
-        Value::String(speed) => speed.parse().ok(),
+pub(super) fn node_float_field(runtime: &mut RoundScript, node: u64, name: &str) -> Option<f32> {
+    match runtime.object_field(node, name) {
+        Value::Int(val) => Some(val as f32),
+        Value::Float(val) => Some(val),
+        Value::String(val) => val.parse().ok(),
         _ => None,
     }
 }
 
-// ponytail: a node's speed applies with the vehicle's current accel (or the
-// speed itself as accel); node `lookahead` and spline paths are not read.
-pub(super) fn take_speed(vehicle: &mut Heli, mph: f32) {
+/// A vehicle node's `speed` key, in mph.
+pub(super) fn node_speed(runtime: &mut RoundScript, node: u64) -> Option<f32> {
+    node_float_field(runtime, node, "speed")
+}
+
+pub(super) fn node_accel(runtime: &mut RoundScript, node: u64) -> Option<f32> {
+    node_float_field(runtime, node, "script_accel")
+        .or_else(|| node_float_field(runtime, node, "accel"))
+}
+
+pub(super) fn node_decel(runtime: &mut RoundScript, node: u64) -> Option<f32> {
+    node_float_field(runtime, node, "script_decel")
+        .or_else(|| node_float_field(runtime, node, "decel"))
+}
+
+// A node's speed applies with the node's accel/decel or the vehicle's current values.
+pub(super) fn take_speed(
+    vehicle: &mut Heli,
+    mph: f32,
+    accel_mph: Option<f32>,
+    decel_mph: Option<f32>,
+) {
     vehicle.max_speed = mph.max(0.0) * MPH;
     vehicle.path_speed = vehicle.max_speed;
-    if vehicle.accel <= 0.0 {
-        vehicle.accel = vehicle.max_speed.max(MPH);
-    }
-    if vehicle.decel <= 0.0 {
-        vehicle.decel = vehicle.accel;
-    }
+    vehicle.accel = accel_mph.map_or_else(
+        || if vehicle.accel <= 0.0 { vehicle.max_speed.max(MPH) } else { vehicle.accel },
+        |a| a.max(1.0) * MPH,
+    );
+    vehicle.decel = decel_mph.map_or_else(
+        || if vehicle.decel <= 0.0 { vehicle.accel } else { vehicle.decel },
+        |d| d.max(1.0) * MPH,
+    );
 }
 
 /// Vehicle object fields holding a pending `setswitchnode`.
@@ -364,4 +384,122 @@ pub(crate) fn register_sp(registry: &mut NativeRegistry) {
         );
         Ok(Value::Undefined)
     });
+    registry.register(Method, "setvehiclelookattext", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        heli(world, receiver)?;
+        let id = entity_id(world, receiver)?;
+        let text = string(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(
+            id,
+            "vehiclelookattext",
+            Value::string(&text),
+        );
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehicle_turnengineon", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        heli(world, receiver)?;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "engine_on", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehicle_turnengineoff", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        heli(world, receiver)?;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "engine_on", Value::Int(0));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehicle_isphysveh", |world, receiver, _| {
+        heli(world, receiver)?;
+        Ok(Value::Int(0))
+    });
+    registry.register(Method, "vehicle_getbodyvelocity", |world, receiver, _| {
+        let v = heli(world, receiver)?;
+        Ok(Value::Vector(v.velocity))
+    });
+    registry.register(Method, "freevehicle", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "vehicle_active", Value::Int(0));
+        crate::script::runtime::raise(world, Value::Object(id), "freevehicle", Vec::new());
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "getwheelsurface", |_world, _receiver, _args| {
+        Ok(Value::string("dirt"))
+    });
+    registry.register(Method, "vehphys_crash", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "crashed", Value::Int(1));
+        crate::script::runtime::raise(world, Value::Object(id), "crash", Vec::new());
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehphys_launch", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        let vel = vector(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "launch_velocity", Value::Vector(vel));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehphys_disablecrashing", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "crashing_enabled", Value::Int(0));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehphys_enablecrashing", |world, receiver, _| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "crashing_enabled", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehphys_setspeed", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        let spd = float(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "phys_speed", Value::Float(spd));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "vehphys_setconveyorbelt", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        let vel = vector(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "conveyor_velocity", Value::Vector(vel));
+        Ok(Value::Undefined)
+    });
+    registry.register(Method, "setairresistance", |world, receiver, args| {
+        use super::super::natives::engine::entity_id;
+        let id = entity_id(world, receiver)?;
+        let res = float(args, 0)?;
+        world.resource_mut::<RoundScript>().set_object_field(id, "air_resistance", Value::Float(res));
+        Ok(Value::Undefined)
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn take_speed_applies_accel_and_decel() {
+        let mut vehicle = Heli::default();
+        take_speed(&mut vehicle, 45.0, Some(20.0), Some(30.0));
+        assert_eq!(vehicle.max_speed, 45.0 * MPH);
+        assert_eq!(vehicle.path_speed, 45.0 * MPH);
+        assert_eq!(vehicle.accel, 20.0 * MPH);
+        assert_eq!(vehicle.decel, 30.0 * MPH);
+    }
+
+    #[test]
+    fn registers_campaign_vehicle_builtins() {
+        let mut registry = NativeRegistry::default();
+        register_sp(&mut registry);
+        assert!(registry.get(Method, "freevehicle").is_some());
+        assert!(registry.get(Method, "getwheelsurface").is_some());
+        assert!(registry.get(Method, "vehphys_crash").is_some());
+        assert!(registry.get(Method, "vehphys_setspeed").is_some());
+        assert!(registry.get(Method, "vehphys_launch").is_some());
+        assert!(registry.get(Method, "setairresistance").is_some());
+    }
 }

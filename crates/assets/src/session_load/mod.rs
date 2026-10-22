@@ -36,12 +36,12 @@ use common_cache::*;
 use common_walks::*;
 use match_walk::*;
 
-pub use common_cache::{CommonKey, CommonSet, ShellCommon, load_shell_common};
+pub use common_cache::{CommonKey, CommonSet, ShellCommon, forget_common, load_shell_common};
 pub use common_walks::{
     MatchMaterialSeed, apply_match_material_map, load_match_material_catalog,
     load_match_material_seed,
 };
-pub use resident_map::load_prepared_match;
+pub use resident_map::{clear_resident_map, load_prepared_match};
 
 static PROCESS_CPUS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
 
@@ -80,6 +80,8 @@ pub fn load_pool() -> &'static TaskPool {
                 } else if cfg!(target_os = "horizon") {
                     // Off the main thread's core 0; loads overlap a mostly idle render core.
                     set_thread_cpus(&[1, 2]);
+                    #[cfg(target_os = "horizon")]
+                    platform_nx::background_current_thread("iw4l-load");
                 }
             })
             .build()

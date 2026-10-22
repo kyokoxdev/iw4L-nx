@@ -127,6 +127,9 @@ pub(crate) fn route(
     for command in commands.read() {
         match command.name.as_str() {
             "ui_campaign" => {
+                asset_transport::set_campaign_zone_set(true);
+                assets::forget_common();
+                assets::clear_resident_map();
                 *levels = identity
                     .as_ref()
                     .map(|identity| {

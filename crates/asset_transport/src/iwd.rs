@@ -146,6 +146,7 @@ impl IwdIndex {
                         done.lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push((slot, indexed));
+                        std::thread::yield_now();
                     }
                 });
             }
@@ -186,7 +187,7 @@ fn is_iwd_archive(path: &Path) -> bool {
 fn index_image_entries(path: &Path) -> Result<Vec<(String, IwdFile)>, String> {
     let file = std::fs::File::open(path)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-    let archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+    let archive = zip::ZipArchive::new(std::io::BufReader::with_capacity(128 * 1024, file))
         .map_err(|error| format!("cannot index {}: {error}", path.display()))?;
     let reader = Arc::new(Mutex::new(archive));
     let mut entries = Vec::new();
@@ -225,7 +226,7 @@ fn archive_entries(path: &Path) -> Result<Vec<(String, u32, u64)>, String> {
     }
     let file = std::fs::File::open(path)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::with_capacity(128 * 1024, file))
         .map_err(|error| format!("cannot index {}: {error}", path.display()))?;
     (0..archive.len())
         .map(|index| {
@@ -301,7 +302,7 @@ fn index_lane_width() -> usize {
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|lanes| *lanes > 0)
-            .unwrap_or(4)
+            .unwrap_or(if cfg!(target_os = "horizon") { 1 } else { 4 })
     })
 }
 
@@ -331,7 +332,7 @@ impl ArchiveLease {
         let opened_at = std::time::Instant::now();
         let disk = std::fs::File::open(path)
             .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-        let archive = zip::ZipArchive::new(std::io::BufReader::new(disk))
+        let archive = zip::ZipArchive::new(std::io::BufReader::with_capacity(128 * 1024, disk))
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         IWD_DIRECTORY_NS.fetch_add(opened_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
         IWD_DIRECTORY_OPENS.fetch_add(1, Ordering::Relaxed);

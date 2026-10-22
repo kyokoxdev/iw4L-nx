@@ -1109,11 +1109,12 @@ pub fn world_scene_from_draw(
         dyn_ent_instances.len(),
     );
     let assets::MatchMaterials {
-        population: global_materials,
+        population,
         map_ids,
         common_profile_id,
         products_id,
     } = materials;
+    let mut global_materials = std::sync::Arc::unwrap_or_clone(population);
     let Some(mut draw) = world.draw else {
         let mut empty = WorldScene::default();
         empty.sun_sample_size_near = world.policy.sun_sample_size_near;
@@ -1145,8 +1146,8 @@ pub fn world_scene_from_draw(
 
     let exact_material_images = global_materials
         .images
-        .iter()
-        .map(|image| image.decoded.clone())
+        .iter_mut()
+        .map(|image| image.decoded.take())
         .collect::<Vec<_>>();
     let exact_material_common = global_materials
         .images

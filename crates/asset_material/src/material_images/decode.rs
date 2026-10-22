@@ -259,12 +259,28 @@ pub(super) fn decode_iwi_mips_with(bytes: &[u8], keep_bc5: bool) -> Result<Decod
         return single();
     }
 
-    let mut levels = Vec::with_capacity(ranges.len());
-    for (level_start, level_end, w, h) in ranges {
+    let downscale_levels = if cfg!(target_os = "horizon") {
+        let mut skip = 0;
+        while skip + 1 < ranges.len()
+            && (header.width >> skip > 256 || header.height >> skip > 256)
+        {
+            skip += 1;
+        }
+        skip
+    } else {
+        0
+    };
+    let (final_w, final_h) = (
+        (header.width >> downscale_levels).max(1),
+        (header.height >> downscale_levels).max(1),
+    );
+
+    let mut levels = Vec::with_capacity(ranges.len() - downscale_levels);
+    for (level_start, level_end, w, h) in &ranges[downscale_levels..] {
         match load_mip_level_with(
-            &bytes[level_start..level_end],
-            w,
-            h,
+            &bytes[*level_start..*level_end],
+            *w,
+            *h,
             header.format,
             keep_bc5,
         ) {
@@ -273,8 +289,8 @@ pub(super) fn decode_iwi_mips_with(bytes: &[u8], keep_bc5: bool) -> Result<Decod
         }
     }
     Ok(DecodedMips::from_levels(
-        header.width,
-        header.height,
+        final_w,
+        final_h,
         storage,
         levels,
     ))

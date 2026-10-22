@@ -19,6 +19,9 @@ iw4l.community.*.tmp
 /switch/crash_report/
 /switch/boot.txt
 /switch/logs/
+*.nacp
+*.nro
+*.elf
 .direnv/
 result
 result-*

@@ -172,6 +172,7 @@ pub struct MenuItem {
     pub mouse_enter: Vec<String>,
     pub on_focus: Vec<String>,
     pub cover: bool,
+    pub tex_coords: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]

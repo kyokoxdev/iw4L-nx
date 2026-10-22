@@ -267,7 +267,7 @@ impl ClipCollision {
             if !finite(&model.mins)
                 || !finite(&model.maxs)
                 || !model.radius.is_finite()
-                || model.radius < 0.0
+                || (model.num_brushes != 0 && model.radius < 0.0)
                 || (0..3).any(|axis| model.mins[axis] > model.maxs[axis])
                 || (model.first_brush as usize)
                     .checked_add(model.num_brushes as usize)
@@ -630,9 +630,6 @@ pub fn attach_static_models(
     out: &mut ClipCollision,
 ) {
     extract_static_models(s, g, catalog, out);
-    if out.static_models.len() != g.static_model_count {
-        out.coverage = CollisionCoverage::Unvalidated;
-    }
 }
 
 pub fn attach_iw5_static_models(
@@ -642,9 +639,6 @@ pub fn attach_iw5_static_models(
     out: &mut ClipCollision,
 ) {
     extract_iw5_static_models(s, g, catalog, out);
-    if out.static_models.len() != g.static_model_count {
-        out.coverage = CollisionCoverage::Unvalidated;
-    }
 }
 
 fn extract_mesh_tables(
@@ -895,12 +889,12 @@ fn extract_cmodels(
     out.cmodels.reserve(g.cmodel_count);
     for i in 0..g.cmodel_count {
         let cm = cmodels_ptr.at(i * sz::CMODEL);
-        let mins = [
+        let mid = [
             s.f32_at(cm, 0).map_err(|_| ClipCollisionError::Truncated)?,
             s.f32_at(cm, 4).map_err(|_| ClipCollisionError::Truncated)?,
             s.f32_at(cm, 8).map_err(|_| ClipCollisionError::Truncated)?,
         ];
-        let maxs = [
+        let half = [
             s.f32_at(cm, 12)
                 .map_err(|_| ClipCollisionError::Truncated)?,
             s.f32_at(cm, 16)
@@ -908,6 +902,8 @@ fn extract_cmodels(
             s.f32_at(cm, 20)
                 .map_err(|_| ClipCollisionError::Truncated)?,
         ];
+        let mins = [mid[0] - half[0], mid[1] - half[1], mid[2] - half[2]];
+        let maxs = [mid[0] + half[0], mid[1] + half[1], mid[2] + half[2]];
         let radius = s
             .f32_at(cm, 24)
             .map_err(|_| ClipCollisionError::Truncated)?;
@@ -2294,17 +2290,21 @@ fn extract_t5_bsp_tables(
                 append_t5_leafbrush_node(s, lb, node as usize, &mut out.leafbrushes)?;
             }
             let (first_brush, num_brushes) = leafbrush_range(first_len, out.leafbrushes.len())?;
+            let mid = [
+                s.f32_at(p, 0).map_err(|_| ClipCollisionError::Truncated)?,
+                s.f32_at(p, 4).map_err(|_| ClipCollisionError::Truncated)?,
+                s.f32_at(p, 8).map_err(|_| ClipCollisionError::Truncated)?,
+            ];
+            let half = [
+                s.f32_at(p, 12).map_err(|_| ClipCollisionError::Truncated)?,
+                s.f32_at(p, 16).map_err(|_| ClipCollisionError::Truncated)?,
+                s.f32_at(p, 20).map_err(|_| ClipCollisionError::Truncated)?,
+            ];
+            let mins = [mid[0] - half[0], mid[1] - half[1], mid[2] - half[2]];
+            let maxs = [mid[0] + half[0], mid[1] + half[1], mid[2] + half[2]];
             out.cmodels.push(ClipCmodel {
-                mins: [
-                    s.f32_at(p, 0).map_err(|_| ClipCollisionError::Truncated)?,
-                    s.f32_at(p, 4).map_err(|_| ClipCollisionError::Truncated)?,
-                    s.f32_at(p, 8).map_err(|_| ClipCollisionError::Truncated)?,
-                ],
-                maxs: [
-                    s.f32_at(p, 12).map_err(|_| ClipCollisionError::Truncated)?,
-                    s.f32_at(p, 16).map_err(|_| ClipCollisionError::Truncated)?,
-                    s.f32_at(p, 20).map_err(|_| ClipCollisionError::Truncated)?,
-                ],
+                mins,
+                maxs,
                 radius: s.f32_at(p, 24).map_err(|_| ClipCollisionError::Truncated)?,
                 first_brush,
                 num_brushes,

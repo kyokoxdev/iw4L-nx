@@ -310,15 +310,19 @@ fn approve_map_load(
         if campaign {
             diag::info!(
                 World,
-                "match load: `{}` is a campaign level; campaign zone set",
+                "match load: `{}` is a campaign level; campaign zone set and dropping common/resident",
                 request.zone
             );
+            crate::session_load::forget_common();
+            crate::session_load::clear_resident_map();
         }
         let trees = asset_transport::NamespaceTrees::discover(&games);
         let have =
             frame::AssetFamilies::from_families(trees.present().map(|(ns, _)| ns.as_str())).0;
         let selection =
-            if *role == frame::RuntimeRole::Client || !request.load_key.match_key.is_none() {
+            if campaign {
+                Ok(frame::AssetFamilies::iw4())
+            } else if *role == frame::RuntimeRole::Client || !request.load_key.match_key.is_none() {
                 server_families
                     .as_deref()
                     .copied()

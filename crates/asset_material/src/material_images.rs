@@ -86,6 +86,9 @@ pub fn decode_material_color_maps(
                 slot.decoded = Some(wrap_payload(&payload, wrap));
                 slot.decoded_variant = variant;
                 slot.common_owned = false;
+                if !slot.payload.is_empty() {
+                    slot.payload = Arc::new(Vec::new());
+                }
                 stats.decoded += 1;
             }
             ImageOutcome::Missing { gap } => {
@@ -175,6 +178,9 @@ pub fn decode_images_for_keys(
             slot.decoded = Some(wrap_payload(&payload, wrap));
             slot.decoded_variant = variant;
             slot.common_owned = false;
+            if !slot.payload.is_empty() {
+                slot.payload = Arc::new(Vec::new());
+            }
             n += 1;
         }
     }
@@ -421,13 +427,39 @@ fn decode_requests_in_parallel(
     if work.is_empty() {
         return Vec::new();
     }
+    if pool.thread_num() <= 1 {
+        let mut out = Vec::with_capacity(work.len());
+        for (i, &(image_index, request)) in work.iter().enumerate() {
+            if stage.is_canceled() {
+                out.push(ImageOutcome::Missing {
+                    gap: "image decode canceled: load retargeted".to_owned(),
+                });
+                continue;
+            }
+            let outcome = decode_one_request(images, index, image_index, request);
+            if let ImageOutcome::Decoded {
+                payload,
+                shared: false,
+                ..
+            } = &outcome
+            {
+                stage.add_bytes(payload.bytes());
+            }
+            out.push(outcome);
+            stage.advance(1);
+            if i % 16 == 0 {
+                std::thread::yield_now();
+            }
+        }
+        return out;
+    }
     let chunk_size = work.len().div_ceil(pool.thread_num().max(1)).clamp(1, 64);
 
     pool.scope(|scope| {
         for chunk in work.chunks(chunk_size) {
             scope.spawn(async move {
                 let mut out = Vec::with_capacity(chunk.len());
-                for &(image_index, request) in chunk {
+                for (i, &(image_index, request)) in chunk.iter().enumerate() {
                     if stage.is_canceled() {
                         out.push(ImageOutcome::Missing {
                             gap: "image decode canceled: load retargeted".to_owned(),
@@ -448,6 +480,9 @@ fn decode_requests_in_parallel(
                     }
                     out.push(outcome);
                     stage.advance(1);
+                    if cfg!(target_os = "horizon") && i % 4 == 0 {
+                        std::thread::yield_now();
+                    }
                 }
                 out
             });

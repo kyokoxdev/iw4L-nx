@@ -627,7 +627,11 @@ pub fn lower_pass_to_wgsl(
         return Err(Sm3WgslError::MissingColourOutput);
     }
 
-    let mut source = String::from("enable wgpu_binding_array;\n");
+    let mut source = if !abi.bound_slots && !abi.samplers.is_empty() {
+        String::from("enable wgpu_binding_array;\n")
+    } else {
+        String::new()
+    };
     source.push_str("struct Sm3ConstantArena { c: array<vec4<f32>> }\n");
     source.push_str("@group(0) @binding(0) var<storage, read> sm3_constants: Sm3ConstantArena;\n");
     if vertex_plan.uses_relative_float {
@@ -2058,8 +2062,110 @@ fn component_name(component: u8) -> char {
 }
 
 #[cfg(test)]
-mod srgb_write_tests {
+mod tests {
     use super::*;
+    use crate::abi::{ConstantSlot, Semantic, VaryingLink, VertexInput};
+    use crate::decode_sm3_program;
+
+    fn words(tokens: &[u32]) -> Vec<u8> {
+        tokens.iter().flat_map(|token| token.to_le_bytes()).collect()
+    }
+
+    fn sample_programs() -> (crate::ir::Sm3ProgramIr, crate::ir::Sm3ProgramIr) {
+        let vertex = words(&[
+            0xFFFE_0300, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0000,
+            0xE00F_0000, 0x0200_0001, 0xE00F_0000, 0xA0E4_0000, 0x0000_FFFF,
+        ]);
+        let pixel = words(&[0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0xA0E4_0000, 0x0000_FFFF]);
+        (
+            decode_sm3_program(&vertex, ShaderStage::Vertex).unwrap(),
+            decode_sm3_program(&pixel, ShaderStage::Pixel).unwrap(),
+        )
+    }
+
+    #[test]
+    fn bound_slots_omits_wgpu_binding_array_extension() {
+        let (vertex, pixel) = sample_programs();
+        let position = Semantic {
+            usage: 0,
+            usage_index: 0,
+        };
+        let constant = ConstantSlot {
+            register: 0,
+            program_defined: false,
+        };
+        let abi = PassLoweringAbi {
+            vertex_inputs: vec![VertexInput {
+                register: Sm3Register {
+                    file: Sm3RegisterFile::Input,
+                    index: 0,
+                },
+                location: Some(0),
+                decl_type: Some(DeclType::Float4),
+                semantic: position,
+            }],
+            position: VaryingLink {
+                semantic: position,
+                vertex_register: Sm3Register {
+                    file: Sm3RegisterFile::Output,
+                    index: 0,
+                },
+                pixel_register: None,
+                location: 0,
+            },
+            varyings: Vec::new(),
+            vertex_constants: vec![constant],
+            pixel_constants: vec![constant],
+            samplers: Vec::new(),
+            alpha_tests: Vec::new(),
+            bound_slots: true,
+            depth_to_colour: false,
+        };
+        let lowered = lower_pass_to_wgsl(&abi, &vertex, &pixel).unwrap();
+        assert!(!lowered.source.contains("enable wgpu_binding_array;"));
+    }
+
+    #[test]
+    fn empty_samplers_omits_wgpu_binding_array_extension() {
+        let (vertex, pixel) = sample_programs();
+        let position = Semantic {
+            usage: 0,
+            usage_index: 0,
+        };
+        let constant = ConstantSlot {
+            register: 0,
+            program_defined: false,
+        };
+        let abi = PassLoweringAbi {
+            vertex_inputs: vec![VertexInput {
+                register: Sm3Register {
+                    file: Sm3RegisterFile::Input,
+                    index: 0,
+                },
+                location: Some(0),
+                decl_type: Some(DeclType::Float4),
+                semantic: position,
+            }],
+            position: VaryingLink {
+                semantic: position,
+                vertex_register: Sm3Register {
+                    file: Sm3RegisterFile::Output,
+                    index: 0,
+                },
+                pixel_register: None,
+                location: 0,
+            },
+            varyings: Vec::new(),
+            vertex_constants: vec![constant],
+            pixel_constants: vec![constant],
+            samplers: Vec::new(),
+            alpha_tests: Vec::new(),
+            bound_slots: false,
+            depth_to_colour: false,
+        };
+        let lowered = lower_pass_to_wgsl(&abi, &vertex, &pixel).unwrap();
+        assert!(!lowered.source.contains("enable wgpu_binding_array;"));
+    }
 
     #[test]
     fn adds_an_encoding_twin_per_fragment_entry() {

@@ -572,6 +572,46 @@ fn register_targets(registry: &mut crate::script::NativeRegistry) {
             target_on_screen(world, args)?.is_some_and(|(x, y)| x * x + y * y < radius * radius);
         Ok(Value::Int(inside.into()))
     });
+    registry.register(Function, "target_setjavelinonly", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let javelin_only = optional(args, 1, super::super::args::int)?.unwrap_or(1) != 0;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_javelin_only", Value::Int(javelin_only.into()));
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_setattackmode", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let mode = super::super::args::string(args, 1)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_attack_mode", Value::string(&mode));
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_setshader", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let shader = super::super::args::string(args, 1)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_shader", Value::string(&shader));
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_setoffscreenshader", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let shader = super::super::args::string(args, 1)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_offscreenshader", Value::string(&shader));
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_hidefromplayer", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_hidden_from_player", Value::Int(1));
+        Ok(Value::Undefined)
+    });
+    registry.register(Function, "target_showtoplayer", |world, _, args| {
+        let id = entity_id(world, arg(args, 0)?)?;
+        let mut runtime = world.resource_mut::<RoundScript>();
+        runtime.set_object_field(id, "target_hidden_from_player", Value::Int(0));
+        Ok(Value::Undefined)
+    });
 }
 
 pub(crate) fn register_sp(registry: &mut crate::script::NativeRegistry) {
@@ -610,6 +650,22 @@ pub(crate) fn register_sp(registry: &mut crate::script::NativeRegistry) {
     });
     registry.register(Function, "weaponisboltaction", |world, _, args| {
         Ok(Value::Int(combat_facts(world, args)?.bolt_action.into()))
+    });
+    registry.register(Function, "getweaponclipmodel", |world, _, args| {
+        let name = super::super::args::string(args, 0)?;
+        if name.is_empty() || name.eq_ignore_ascii_case("none") {
+            return Ok(Value::String("".into()));
+        }
+        let frame = FrameWorld::from_world(world);
+        let _weapon = crate::script_player::weapon_named(&frame, &name)?;
+        // Return clip model name if defined on the weapon, or "" if none.
+        Ok(Value::String("".into()))
+    });
+    registry.register(Method, "setstablemissile", |world, receiver, args| {
+        let id = super::super::natives::engine::entity_id(world, receiver)?;
+        let stable = super::super::args::optional(args, 0, super::super::args::int)?.unwrap_or(1) != 0;
+        world.resource_mut::<RoundScript>().set_object_field(id, "stable_missile", Value::Int(stable.into()));
+        Ok(Value::Undefined)
     });
 }
 

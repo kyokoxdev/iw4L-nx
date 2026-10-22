@@ -275,96 +275,82 @@ impl ZoneLane for Iw4Lane {
         let mut clip_report = Vec::new();
         let mut fx_glass = None;
         let mut dyn_ents = asset_world::DynEntCatalog::default();
-        let materials_side = &mut materials;
 
-        let image_report = crate::session_load::load_pool().scope(|scope| {
-            scope.spawn(async move {
-                decode_map_material_images(
-                    path,
-                    materials_side,
-                    image_stage,
-                    fx_material_keys,
-                    glass_names,
-                )
-            });
-
-            clip = match stream.clip_map() {
-                Some(geometry) => match build_clip_collision(&stream, geometry) {
-                    Ok(mut clip) => {
-                        asset_world::attach_static_models(
-                            &stream,
-                            geometry,
-                            &sink.xmodel_coll,
-                            &mut clip,
-                        );
-                        clip.trigger_models = asset_world::trigger_models(&stream);
-                        clip_report.push(format!(
-                            "trigger models: {} ({} with hulls)",
-                            clip.trigger_models.len(),
-                            clip.trigger_models.iter().filter(|h| !h.is_empty()).count()
-                        ));
-                        clip_report.push(format!(
-                    "clipmap: planes={} brushes={} leaves={} nodes={} cmodels={} verts={} tris={} smodels={}",
-                    geometry.plane_count,
-                    geometry.brush_count,
-                    geometry.leaf_count,
-                    geometry.node_count,
-                    geometry.cmodel_count,
-                    geometry.vert_count,
-                    geometry.tri_count,
-                    clip.static_models.len()
-                ));
-                        clip_report.push(format!(
-                            "clip brushes extracted: {} (player-solid filter at trace time)",
-                            clip.brushes.len()
-                        ));
-                        Some(clip)
-                    }
-                    Err(e) => {
-                        clip_report.push(format!("clipmap extract: {e}"));
-                        None
-                    }
-                },
-                None => {
-                    clip_report.push("clipmap: not reached".into());
+        clip = match stream.clip_map() {
+            Some(geometry) => match build_clip_collision(&stream, geometry) {
+                Ok(mut clip) => {
+                    asset_world::attach_static_models(
+                        &stream,
+                        geometry,
+                        &sink.xmodel_coll,
+                        &mut clip,
+                    );
+                    clip.trigger_models = asset_world::trigger_models(&stream);
+                    clip_report.push(format!(
+                        "trigger models: {} ({} with hulls)",
+                        clip.trigger_models.len(),
+                        clip.trigger_models.iter().filter(|h| !h.is_empty()).count()
+                    ));
+                    clip_report.push(format!(
+                        "clipmap: planes={} brushes={} leaves={} nodes={} cmodels={} verts={} tris={} smodels={}",
+                        geometry.plane_count,
+                        geometry.brush_count,
+                        geometry.leaf_count,
+                        geometry.node_count,
+                        geometry.cmodel_count,
+                        geometry.vert_count,
+                        geometry.tri_count,
+                        clip.static_models.len()
+                    ));
+                    clip_report.push(format!(
+                        "clip brushes extracted: {} (player-solid filter at trace time)",
+                        clip.brushes.len()
+                    ));
+                    Some(clip)
+                }
+                Err(e) => {
+                    clip_report.push(format!("clipmap extract: {e}"));
                     None
                 }
-            };
-            let mut census = asset_world::build_glass_census(&stream, clip.as_ref());
-            if leftover
-                .iter()
-                .any(|(intact, shattered)| !intact.is_empty() || !shattered.is_empty())
-            {
-                census.fx_def_materials = leftover.clone();
+            },
+            None => {
+                clip_report.push("clipmap: not reached".into());
+                None
             }
-            clip_report.push(census.report_line());
-            let named = leftover
-                .iter()
-                .filter(|(a, b)| !a.is_empty() || !b.is_empty())
-                .count();
-            clip_report.push(format!(
+        };
+        let mut census = asset_world::build_glass_census(&stream, clip.as_ref());
+        if leftover
+            .iter()
+            .any(|(intact, shattered)| !intact.is_empty() || !shattered.is_empty())
+        {
+            census.fx_def_materials = leftover.clone();
+        }
+        clip_report.push(census.report_line());
+        let named = leftover
+            .iter()
+            .filter(|(a, b)| !a.is_empty() || !b.is_empty())
+            .count();
+        clip_report.push(format!(
             "fx glass def leftover: defs={} named={} (captured during load_fxworld; OFFSET walk is empty)",
             leftover.len(),
             named
         ));
 
-            fx_glass = asset_world::build_fx_glass_reset(&stream).map(|mut g| {
-                g.def_materials = leftover;
-                g
-            });
-            dyn_ents = match stream.clip_map() {
-                Some(geometry) => asset_world::build_dyn_ent_catalog(
-                    &stream,
-                    geometry,
-                    |slot| map_xmodels.name_at_slot(slot).map(str::to_owned),
-                    |slot| fx.name_at_slot(slot).map(str::to_owned),
-                    |slot| phys_presets.at_slot(slot).cloned(),
-                ),
-                None => asset_world::DynEntCatalog::default(),
-            };
-            clip_stage.done();
+        fx_glass = asset_world::build_fx_glass_reset(&stream).map(|mut g| {
+            g.def_materials = leftover;
+            g
         });
-        report.extend(image_report.into_iter().flatten());
+        dyn_ents = match stream.clip_map() {
+            Some(geometry) => asset_world::build_dyn_ent_catalog(
+                &stream,
+                geometry,
+                |slot| map_xmodels.name_at_slot(slot).map(str::to_owned),
+                |slot| fx.name_at_slot(slot).map(str::to_owned),
+                |slot| phys_presets.at_slot(slot).cloned(),
+            ),
+            None => asset_world::DynEntCatalog::default(),
+        };
+        clip_stage.done();
         report.extend(clip_report);
         let map_content = std::sync::Arc::new(asset_world::build_map_content(
             &stream,
@@ -412,6 +398,15 @@ impl ZoneLane for Iw4Lane {
             drop(stream);
             let arena_bytes = memory.total_bytes();
             drop(memory);
+            let mut materials = materials;
+            let image_report = decode_map_material_images(
+                path,
+                &mut materials,
+                image_stage,
+                fx_material_keys,
+                glass_names,
+            );
+            report.extend(image_report);
             report.push(format!(
                 "s1 arenas walked: map={arena_bytes} ({:.1}MiB) (ZoneMemory freed after the walk; ZoneImage dropped)",
                 arena_bytes as f64 / (1024.0 * 1024.0),
@@ -463,7 +458,7 @@ impl ZoneLane for Iw4Lane {
         ));
         stage.finish_from(&world_draw);
         match world_draw {
-            Ok((draw, map_materials)) => {
+            Ok((draw, mut map_materials)) => {
                 let stage = progress.begin_scoped(StageId::MapAssets, "models", None);
                 let map_models = super::build_static_model_draw(&stream, geometry, map_xmodels);
                 {
@@ -543,6 +538,14 @@ impl ZoneLane for Iw4Lane {
                 drop(stream);
                 let arena_bytes = memory.total_bytes();
                 drop(memory);
+                let image_report = decode_map_material_images(
+                    path,
+                    &mut map_materials,
+                    image_stage,
+                    fx_material_keys,
+                    glass_names,
+                );
+                report.extend(image_report);
                 report.push(format!(
                     "s1 arenas walked: map={arena_bytes} ({:.1}MiB) (ZoneMemory freed after the walk; ZoneImage dropped)",
                     arena_bytes as f64 / (1024.0 * 1024.0),
@@ -708,6 +711,15 @@ impl ZoneLane for Iw4Lane {
                 drop(stream);
                 let arena_bytes = memory.total_bytes();
                 drop(memory);
+                let mut map_materials = asset_material::MaterialCatalog::default();
+                let image_report = decode_map_material_images(
+                    path,
+                    &mut map_materials,
+                    image_stage,
+                    fx_material_keys,
+                    glass_names,
+                );
+                report.extend(image_report);
                 LoadedWorld {
                     scripts,
                     sound: map_sound,

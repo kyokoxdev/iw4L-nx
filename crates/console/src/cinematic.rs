@@ -16,8 +16,8 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::{ConsoleCommand, ConsoleLine, ConsoleRegistry, ConsoleSettings, ConsoleState};
 
 /// RGBA frames decoded ahead; also how far audio leads the picture.
-// ponytail: audio lead = queue depth (~130 ms at 30 fps); decode audio-only packets ahead if a device buffer starves.
-const QUEUE: usize = 3;
+// ponytail: audio lead = queue depth (~260 ms at 30 fps); decode audio-only packets ahead if a device buffer starves.
+const QUEUE: usize = 8;
 
 enum Msg {
     Frame(f64, Vec<u8>),
@@ -32,7 +32,10 @@ pub(crate) struct Cinematic {
     stop: Arc<AtomicBool>,
     image: Handle<Image>,
     root: Entity,
-    /// Wall clock of the first shown frame; video follows it, audio streams freely.
+    clock: Option<audio::PcmClock>,
+    audio_sync: Option<(u64, std::time::Instant)>,
+    last_now: f64,
+    /// Wall clock of the first shown frame; video follows it when audio clock is unavailable.
     started: Option<std::time::Instant>,
     pending: Option<(f64, Vec<u8>)>,
     console_was_open: bool,
@@ -220,7 +223,7 @@ fn start(
     audio: Option<&audio::AudioRuntime>,
     kind: Kind,
 ) -> Result<String, bink::Error> {
-    start_looped(path, commands, images, audio, kind, false)
+    start_looped(path, commands, images, audio, kind, false, true)
 }
 
 fn start_looped(
@@ -230,6 +233,7 @@ fn start_looped(
     audio: Option<&audio::AudioRuntime>,
     kind: Kind,
     looped: bool,
+    fullscreen: bool,
 ) -> Result<String, bink::Error> {
     let bink = bink::Bink::open(path)?;
     let h = *bink.header();
@@ -244,7 +248,7 @@ fn start_looped(
         },
         TextureDimension::D2,
         vec![0; size],
-        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::Rgba8Unorm,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::linear();
@@ -257,6 +261,7 @@ fn start_looped(
                 height: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
+                display: if fullscreen { Display::Flex } else { Display::None },
                 ..default()
             },
             BackgroundColor(Color::BLACK),
@@ -277,11 +282,17 @@ fn start_looped(
     let (recycle, recycle_rx) = std::sync::mpsc::sync_channel(QUEUE + 2);
     let stop = Arc::new(AtomicBool::new(false));
     let stream = h.audio.and(audio).map(audio::AudioRuntime::open_stream);
+    let clock = stream.as_ref().map(audio::PcmStream::clock);
     let thread_stop = stop.clone();
     let again = looped.then(|| path.to_owned());
     std::thread::Builder::new()
         .name("iw4l-bink".into())
         .spawn(move || {
+            #[cfg(target_os = "horizon")]
+            {
+                platform_nx::pin_current_thread(1, 0b010, "iw4l-bink");
+                platform_nx::raise_current_thread("iw4l-bink");
+            }
             decode(
                 bink,
                 again,
@@ -300,6 +311,9 @@ fn start_looped(
         stop,
         image: handle,
         root,
+        clock,
+        audio_sync: None,
+        last_now: 0.0,
         started: None,
         pending: None,
         console_was_open: true,
@@ -448,7 +462,29 @@ pub(crate) fn tick(
                 .any(|p| p.any_just_pressed([GamepadButton::South, GamepadButton::Start])));
     c.console_was_open = console.open;
 
-    let now = c.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+    let raw_now = if let Some(clock) = c.clock.clone() {
+        let frames = clock.played_frames();
+        let instant_now = std::time::Instant::now();
+        if frames > 0 {
+            let (last_frames, last_time) = c.audio_sync.get_or_insert((frames, instant_now));
+            let extra = if *last_frames != frames {
+                *last_frames = frames;
+                *last_time = instant_now;
+                0.0
+            } else {
+                instant_now.duration_since(*last_time).as_secs_f64()
+            };
+            clock.played_seconds() + extra
+        } else if c.started.is_some_and(|t| t.elapsed() > std::time::Duration::from_millis(500)) {
+            c.started.unwrap().elapsed().as_secs_f64()
+        } else {
+            0.0
+        }
+    } else {
+        c.started.map_or(0.0, |t| t.elapsed().as_secs_f64())
+    };
+    c.last_now = c.last_now.max(raw_now);
+    let now = c.last_now;
     let mut newest = None;
     let mut ended = skip;
     loop {
@@ -468,7 +504,10 @@ pub(crate) fn tick(
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    ended = newest.is_none();
+                    ended = match c.kind {
+                        Kind::Load => skippable,
+                        _ => newest.is_none(),
+                    };
                     break;
                 }
             },
@@ -542,6 +581,7 @@ pub(crate) fn sync_script_cinematic(
                 audio.as_deref(),
                 Kind::Script,
                 next.looped,
+                next.fullscreen,
             ) {
                 Ok(info) => diag::info!(Console, "script {info}"),
                 Err(e) => diag::warn!(Console, "cinematic: {e}"),

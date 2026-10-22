@@ -8,6 +8,31 @@ the parent, so a merge meets one-line hooks rather than SP blocks. Upstream's
 `isspawner` and `playsound` stay as they are; `actors::register` runs last and
 replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
 
+## Reference Oracle: `mw2-recompiled`
+
+To accelerate singleplayer implementation, consult the static recompilation
+reference clone located at `context/externals/mw2-recompiled` (see
+`context/externals/README.md` for clean-room interoperability boundaries):
+
+- **GSC builtins & methods (Slice 4):** Retail `default.xex` function and method
+  dispatch tables (`Scr_GetFunction` / `Scr_GetMethod`). Cross-reference
+  missing builtins here instead of guessing parameter types, argument counts, or
+  return values.
+- **`GameWorldSp` & path nodes (Slice 6):**
+  `context/externals/mw2-recompiled/launcher/zone/defs/assets/GameWorldSp.txt`
+  defines the exact field layouts for `PathData`, `pathnode_t`, `nodeTree`
+  spatial KD-trees, and `VehicleTrack`.
+- **Savegame & checkpoints (Slice 2):**
+  `context/externals/mw2-recompiled/docs/saves.md` documents savegame container
+  mounts, `savegame.svg` file IO, and profile blobs.
+- **Disassembly & symbols:**
+  `context/externals/mw2-recompiled/runtime/title.h` and `config/mw2mp_symbols.txt`
+  map identified function addresses and game loops.
+- **Live side-by-side verification:** Run any SP level natively on PC via
+  `MW2_CONSOLE="1:map <level>" ./build/mw2` in the recomp repo to inspect entity
+  states, notifies, and dvar flags whenever a campaign script deadlocks or an AI
+  sequence stalls.
+
 ## What already holds
 
 - `fastfile_iw4` walks every retail SP and Special Ops zone, `GameWorldSp`
@@ -74,8 +99,9 @@ replaces them. Campaign `RoundScript` fields are `RoundScript::campaign`.
    The bootstrap kind is `GameModeKind::Campaign` (no teams, no team spawns;
    the player is placed by `MatchBootstrap::campaign`).
 3. Frontend — done. `iw4l_select` tints its tiles (Special Ops blue,
-   Campaign green, Multiplayer yellow) and shows the focused mode's soldier
-   art (`mw2_main_{co,sp,mp}_image`) behind them (`ui_iw4l_focus`). The
+   Campaign green, Multiplayer yellow) and displays each mode's soldier art
+   (`mw2_main_{co,sp,mp}_image`) properly framed and contained within each
+   tile, highlighting the focused mode (`ui_iw4l_focus`). The
    Campaign tile opens `iw4l_campaign`, the retail-style SP main menu: the
    last campaign level started (`campaign.txt` beside `settings.cfg`, written
    on start and on `missionsuccess`/`changelevel`) as its title, Resume Game,

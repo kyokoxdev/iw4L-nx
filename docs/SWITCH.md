@@ -17,7 +17,7 @@ Needs devkitPro (`devkitA64`, `libnx`, `switch-sdl2`, `switch-mesa`) in
 ```bash
 switch/build.sh build --profile play -p launcher
 nacptool --create "IW4L" "<author>" "0.1.0" iw4l.nacp      # once
-elf2nro target/nx/aarch64-nintendo-switch-newlib/play/iw4l.elf iw4l.nro --nacp=iw4l.nacp
+elf2nro target/nx/aarch64-nintendo-switch-newlib/play/iw4l.elf target/nx/iw4l.nro --nacp=iw4l.nacp
 ```
 
 `switch/build.sh` copies the toolchain's `library/` into
