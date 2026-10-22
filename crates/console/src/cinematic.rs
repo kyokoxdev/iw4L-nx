@@ -16,8 +16,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::{ConsoleCommand, ConsoleLine, ConsoleRegistry, ConsoleSettings, ConsoleState};
 
 /// RGBA frames decoded ahead; also how far audio leads the picture.
-// ponytail: audio lead = queue depth (~260 ms at 30 fps); decode audio-only packets ahead if a device buffer starves.
-const QUEUE: usize = 8;
+const QUEUE: usize = 12;
 
 enum Msg {
     Frame(f64, Vec<u8>),
@@ -290,7 +289,7 @@ fn start_looped(
         .spawn(move || {
             #[cfg(target_os = "horizon")]
             {
-                platform_nx::pin_current_thread(1, 0b010, "iw4l-bink");
+                platform_nx::pin_current_thread(0, 0b101, "iw4l-bink");
                 platform_nx::raise_current_thread("iw4l-bink");
             }
             decode(
@@ -345,6 +344,7 @@ fn decode(
     let frame_time = f64::from(h.fps_den) / f64::from(h.fps_num);
     let mut resample = h.audio.map(|a| Resampler::new(a.rate, a.channels as usize));
     let (mut pcm, mut stereo) = (Vec::new(), Vec::new());
+    let mut spare_rgba = None;
     for index in 0.. {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -376,9 +376,21 @@ fn decode(
                 }
             }
         }
-        let mut rgba = recycle.try_recv().unwrap_or_else(|_| vec![0; size]);
+        let mut rgba = spare_rgba
+            .take()
+            .or_else(|| recycle.try_recv().ok())
+            .unwrap_or_else(|| vec![0; size]);
         bink.rgba(&mut rgba);
-        if frames
+        if stream.is_some() {
+            match frames.try_send(Msg::Frame(f64::from(index) * frame_time, rgba)) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(Msg::Frame(_, returned))) => {
+                    spare_rgba = Some(returned);
+                }
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+            }
+        } else if frames
             .send(Msg::Frame(f64::from(index) * frame_time, rgba))
             .is_err()
         {

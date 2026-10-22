@@ -1,4 +1,9 @@
 use bevy::asset::RenderAssetUsages;
+
+#[cfg(target_os = "horizon")]
+const WORLD_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
+#[cfg(not(target_os = "horizon"))]
+const WORLD_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::default();
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use fastfile_iw4::{GfxWorldGeometry, ZoneStream};
@@ -206,7 +211,7 @@ pub fn build_world_mesh(
 
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
+        WORLD_MESH_USAGE,
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);

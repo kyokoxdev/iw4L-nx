@@ -245,6 +245,9 @@ impl WorldDrawGpuPlan {
                 range_share: Some(Arc::new(Vec::new())),
                 layer_share: Some(Arc::new(vertex_layer)),
                 probe_share: Some(Arc::new(Vec::new())),
+                #[cfg(target_os = "horizon")]
+                decoded_share: None,
+                #[cfg(not(target_os = "horizon"))]
                 decoded_share: Some(Arc::new(vertices)),
             };
             plan.publish_extract_shares();
@@ -298,6 +301,9 @@ impl WorldDrawGpuPlan {
             range_share: Some(Arc::new(surface_ranges)),
             layer_share: Some(Arc::new(vertex_layer)),
             probe_share: Some(Arc::new(vertex_probes)),
+            #[cfg(target_os = "horizon")]
+            decoded_share: None,
+            #[cfg(not(target_os = "horizon"))]
             decoded_share: Some(Arc::new(vertices)),
         };
         plan.publish_extract_shares();

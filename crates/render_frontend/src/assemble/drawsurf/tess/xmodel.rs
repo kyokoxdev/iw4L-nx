@@ -484,15 +484,19 @@ pub fn merge_xmodel_draw_plan(
     merged.surface_ranges.clear();
     merged.concat_layout = true;
 
-    packed.reserve(
-        packed_row_count(bodies.packed_vertices())
-            + packed_row_count(fpv.packed_vertices())
-            + packed_row_count(scripts.packed_vertices())
-            + packed_row_count(missiles.packed_vertices())
-            + packed_row_count(items.packed_vertices())
-            + packed_row_count(fx_models.packed_vertices())
-            + packed_row_count(dynents.packed_vertices()),
-    );
+    let total_packed_rows = packed_row_count(bodies.packed_vertices())
+        + packed_row_count(fpv.packed_vertices())
+        + packed_row_count(scripts.packed_vertices())
+        + packed_row_count(missiles.packed_vertices())
+        + packed_row_count(items.packed_vertices())
+        + packed_row_count(fx_models.packed_vertices())
+        + packed_row_count(dynents.packed_vertices());
+    if let Err(error) = packed.try_reserve(total_packed_rows) {
+        diag::warn!(
+            World,
+            "xmodel tess packed try_reserve({total_packed_rows}) refused: {error}; incremental growth active"
+        );
+    }
     let mut packed_ok = true;
     let mut admitted = 0u8;
     let append_started = Instant::now();
@@ -861,7 +865,7 @@ fn recopy_concat_packed_bank(
 ) {
     let (_, expected) = concat_packed_layout(admitted, &owners);
     packed.clear();
-    packed.reserve(expected);
+    let _ = packed.try_reserve(expected);
     for owner in &owners {
         if admitted & owner.admit != 0 {
             append_packed_source(packed, packed_ok, owner.payload, owner.decoded_n);

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::render_core::{QUANTUM, RenderShared, SAMPLE_RATE};
 
-/// Half a second of stereo 48 kHz.
-const CAPACITY: usize = 24_000;
+/// Three seconds of stereo 48 kHz (~1.15 MB, prevents starvation during level loading).
+const CAPACITY: usize = 144_000;
 
 pub(crate) struct StreamRing {
     samples: Box<[AtomicU32]>,

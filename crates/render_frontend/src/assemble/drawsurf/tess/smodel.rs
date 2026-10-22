@@ -463,7 +463,15 @@ pub fn pack_smodel_meshes(
         mark_collision_missing,
         mark_collision_unavailable,
     );
-    plan.decoded_share = Some(Arc::new(vertices));
+    #[cfg(target_os = "horizon")]
+    {
+        plan.decoded_share = None;
+        drop(vertices);
+    }
+    #[cfg(not(target_os = "horizon"))]
+    {
+        plan.decoded_share = Some(Arc::new(vertices));
+    }
     plan.index_share = Some(Arc::new(indices));
     plan.range_share = Some(Arc::new(surface_ranges));
     let mut vert_ranges =

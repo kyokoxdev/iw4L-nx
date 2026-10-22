@@ -2,6 +2,12 @@ use std::collections::HashMap;
 
 use asset_iw4::size as sz;
 use bevy::asset::RenderAssetUsages;
+
+#[cfg(target_os = "horizon")]
+const WORLD_DRAW_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
+#[cfg(not(target_os = "horizon"))]
+const WORLD_DRAW_MESH_USAGE: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
@@ -1057,7 +1063,7 @@ fn make_mesh(
 ) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        WORLD_DRAW_MESH_USAGE,
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);

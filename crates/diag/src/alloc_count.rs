@@ -101,13 +101,13 @@ fn env_key_present(key_nul: &[u8]) -> bool {
 
 unsafe extern "C" {
     fn getenv(name: *const core::ffi::c_char) -> *mut core::ffi::c_char;
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "horizon"))]
     fn malloc_trim(pad: usize) -> core::ffi::c_int;
 }
 
 pub fn release_freed_heap() -> std::time::Duration {
     let at = std::time::Instant::now();
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "horizon"))]
     {
         unsafe { malloc_trim(0) };
     }

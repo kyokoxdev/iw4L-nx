@@ -6,6 +6,12 @@ use asset_iw4::size as sz;
 pub use asset_model::{ModelKind, model_kind};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+
+#[cfg(target_os = "horizon")]
+const MODEL_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
+#[cfg(not(target_os = "horizon"))]
+const MODEL_MESH_USAGE: RenderAssetUsages =
+    RenderAssetUsages::MAIN_WORLD.union(RenderAssetUsages::RENDER_WORLD);
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use fastfile_iw4::{GfxWorldGeometry, Ptr, XModelGeometry, ZoneError, ZonePtr, ZoneStream};
 use lighting_iw4::GFX_STATIC_MODEL_DRAW_INST_FLAGS;
@@ -987,7 +993,7 @@ fn decode_iw4_xsurfaces(
 
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            MODEL_MESH_USAGE,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -1221,7 +1227,7 @@ fn decode_t5_xsurfaces(
 
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            MODEL_MESH_USAGE,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -1357,7 +1363,7 @@ pub fn build_iw5_xmodel_mesh(
 
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            MODEL_MESH_USAGE,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
