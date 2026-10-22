@@ -1008,7 +1008,7 @@ pub fn prepare_fpv_compositions(inputs: PrepareFpvInputs, mut prepared: ResMut<P
     let Some(lighting) = lighting.as_deref() else {
         return;
     };
-    let budget = if load.as_deref().is_some_and(|p| !p.is_complete()) {
+    let budget = if load.is_some() {
         std::time::Duration::from_millis(100)
     } else {
         PREPARE_FRAME_BUDGET

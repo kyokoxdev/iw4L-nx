@@ -1,7 +1,9 @@
 use super::decode::{DecodedMips, MipStorage, decode_iwi_mips};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[allow(dead_code)]
 const MIP_CACHE_FORMAT: u32 = 2;
+#[allow(dead_code)]
 const MIP_MAGIC: &[u8; 8] = b"IWL1MIPS";
 static MIP_HIT: AtomicU64 = AtomicU64::new(0);
 static MIP_MISS: AtomicU64 = AtomicU64::new(0);
@@ -15,6 +17,7 @@ pub fn mip_cache_cost() -> (u64, u64, f64) {
     )
 }
 
+#[allow(dead_code)]
 fn encode_cache(mips: &DecodedMips) -> Vec<u8> {
     let mut out = Vec::with_capacity(28 + 4 * mips.level_sizes().len() + mips.payload().len());
     out.extend_from_slice(MIP_MAGIC);
@@ -40,6 +43,7 @@ fn encode_cache(mips: &DecodedMips) -> Vec<u8> {
     out
 }
 
+#[allow(dead_code)]
 fn decode_cache(bytes: &[u8]) -> Option<DecodedMips> {
     if bytes.len() < 28 || &bytes[..8] != MIP_MAGIC {
         return None;
@@ -80,6 +84,7 @@ fn decode_cache(bytes: &[u8]) -> Option<DecodedMips> {
     DecodedMips::from_packed(width, height, storage, packed, sizes)
 }
 
+#[allow(dead_code)]
 fn read_cached_mips(key: &str, io_at: std::time::Instant) -> Option<DecodedMips> {
     let hit = crate::cache_get("mips", key)?;
     MIP_IO_NS.fetch_add(io_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -107,27 +112,32 @@ fn mip_cache_key(crc: u32, size: u64, entry: &str) -> String {
 pub(super) fn load_or_decode_mips(
     candidate: &asset_transport::IwdFile,
 ) -> Result<DecodedMips, String> {
-    let key = mip_cache_key(candidate.crc32(), candidate.size(), candidate.entry());
-    let io_at = std::time::Instant::now();
-    if let Some(mips) = read_cached_mips(&key, io_at) {
-        return Ok(mips);
+    #[cfg(target_os = "horizon")]
+    {
+        let bytes = candidate.read()?;
+        return decode_iwi_mips(&bytes).map(|mips| mips.picmip(PICMIP_MAX));
     }
-
-    let _flight = crate::cache_flight("mips", &key);
-    if let Some(mips) = read_cached_mips(&key, std::time::Instant::now()) {
-        return Ok(mips);
-    }
-    let bytes = candidate.read()?;
-    let mips = decode_iwi_mips(&bytes)?.picmip(PICMIP_MAX);
     #[cfg(not(target_os = "horizon"))]
     {
+        let key = mip_cache_key(candidate.crc32(), candidate.size(), candidate.entry());
+        let io_at = std::time::Instant::now();
+        if let Some(mips) = read_cached_mips(&key, io_at) {
+            return Ok(mips);
+        }
+
+        let _flight = crate::cache_flight("mips", &key);
+        if let Some(mips) = read_cached_mips(&key, std::time::Instant::now()) {
+            return Ok(mips);
+        }
+        let bytes = candidate.read()?;
+        let mips = decode_iwi_mips(&bytes)?.picmip(PICMIP_MAX);
         let blob = encode_cache(&mips);
         let store_at = std::time::Instant::now();
         if let Err(error) = crate::cache_put("mips", &key, &blob) {
             diag::warn!(Zone, "mip cache store {key}: {error}");
         }
         MIP_IO_NS.fetch_add(store_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        MIP_MISS.fetch_add(1, Ordering::Relaxed);
+        Ok(mips)
     }
-    MIP_MISS.fetch_add(1, Ordering::Relaxed);
-    Ok(mips)
 }

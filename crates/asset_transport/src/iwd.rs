@@ -10,7 +10,6 @@ pub struct IwdFile {
     entry: String,
     crc32: u32,
     size: u64,
-    reader: Arc<Mutex<OpenArchive>>,
 }
 
 impl IwdFile {
@@ -189,7 +188,13 @@ fn index_image_entries(path: &Path) -> Result<Vec<(String, IwdFile)>, String> {
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
     let archive = zip::ZipArchive::new(std::io::BufReader::with_capacity(128 * 1024, file))
         .map_err(|error| format!("cannot index {}: {error}", path.display()))?;
-    let reader = Arc::new(Mutex::new(archive));
+    parked()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(path.to_path_buf())
+        .or_default()
+        .push(archive);
+    PARKED_N.fetch_add(1, Ordering::Relaxed);
     let mut entries = Vec::new();
     for (exact, crc32, size) in archive_entries(path)? {
         let normalized = exact.replace('\\', "/");
@@ -209,7 +214,6 @@ fn index_image_entries(path: &Path) -> Result<Vec<(String, IwdFile)>, String> {
                 entry: exact,
                 crc32,
                 size,
-                reader: reader.clone(),
             },
         ));
     }
@@ -370,10 +374,11 @@ static IWD_DIRECTORY_OPENS: AtomicU64 = AtomicU64::new(0);
 static IWD_INFLATE_NS: AtomicU64 = AtomicU64::new(0);
 
 fn read_indexed_entry(file: &IwdFile, limit: Option<usize>) -> Result<Vec<u8>, String> {
-    let mut archive = file
-        .reader
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut lease = ArchiveLease::take(&file.archive)?;
+    let archive = lease
+        .archive
+        .as_mut()
+        .expect("lease holds its reader until drop");
     let inflate_at = std::time::Instant::now();
     let mut entry = archive.by_name(&file.entry).map_err(|error| {
         format!(

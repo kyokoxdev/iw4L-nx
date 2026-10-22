@@ -120,6 +120,10 @@ pub(super) async fn walk_prepared_match(
         report: mut common_report,
         localize_report,
     } = common.products.clone();
+    #[cfg(target_os = "horizon")]
+    {
+        super::forget_common();
+    }
     let clone_ms = cloning.elapsed().as_secs_f32() * 1000.0;
     let iw5_mat_n = iw5_materials.materials.len();
     common_report.append(&mut donor_report);

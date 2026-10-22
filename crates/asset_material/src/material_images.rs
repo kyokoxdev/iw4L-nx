@@ -602,7 +602,13 @@ fn prepare_payload(
             ),
         });
     }
-    if let Some(cubemap) = index.decode_cubemap_if_skybox(name, source.map_type) {
+    let might_be_cubemap = source.map_type == 5
+        || name.contains("sky")
+        || name.contains("sun")
+        || name.contains("moon");
+    if might_be_cubemap
+        && let Some(cubemap) = index.decode_cubemap_if_skybox(name, source.map_type)
+    {
         return match cubemap {
             Ok((size, faces)) => Ok(PreparedPayload::cubemap(size, faces)),
             Err(error) => Err(ImageOutcome::Unsupported {

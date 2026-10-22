@@ -26,12 +26,7 @@ pub fn load(pair: RuntimeShaderPair, abi: &PassLoweringAbi) -> Option<PassWgsl> 
     let started = std::time::Instant::now();
     let mut pack = pack().lock().ok()?;
     let pack = pack.as_mut()?;
-    let bytes = pack.read(key).or_else(|| {
-        // Entries from the file-per-entry cache move into the pack once.
-        let bytes = assets::cache_get("wgsl", &format!("{key:016x}"))?;
-        let _ = pack.append(key, &bytes);
-        Some(bytes)
-    });
+    let bytes = pack.read(key);
     IO_NS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     let module = decode(&bytes?)?;
     HIT.fetch_add(1, Ordering::Relaxed);
