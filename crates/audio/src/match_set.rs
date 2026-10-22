@@ -210,12 +210,23 @@ fn queue_match_clips(
         if zone != identity.zone {
             return;
         }
-        for emitter in bank.0.createfx_loop_sounds(ns, zone) {
-            aliases += 1;
-            request_named(clips, &bank.0, ns, &emitter.soundalias, &mut set);
+        if !cfg!(target_os = "horizon") {
+            for emitter in bank.0.createfx_loop_sounds(ns, zone) {
+                aliases += 1;
+                request_named(clips, &bank.0, ns, &emitter.soundalias, &mut set);
+            }
         }
     }
-    if let Some(identity) = identity.as_deref() {
+    let is_sp = asset_transport::campaign_zone_set()
+        || identity.as_ref().is_some_and(|id| {
+            asset_transport::is_campaign_level(
+                &asset_transport::GamesRoot(id.games_root.clone()),
+                &id.zone,
+            )
+        });
+    if !is_sp
+        && let Some(identity) = identity.as_deref()
+    {
         let (allies, axis) = crate::match_voices::voice_prefixes_for_zone(
             catalog.as_deref(),
             Some(bank.as_ref()),
@@ -265,27 +276,32 @@ fn queue_match_clips(
         let (ns, alias) = crate::aliases::match_ui_alias(namespace.namespace, alias);
         request_named(clips, &bank.0, ns, alias, &mut set);
     }
-    let mut breath_policies = HashSet::new();
-    for weapon in 1..=weapons.registry().len() as u32 {
-        if weapons
-            .registry()
-            .bind_published_row(weapon)
-            .ok()
-            .and_then(|weapon| weapon.hud_facts())
-            .is_some_and(|facts| facts.can_hold_breath)
-            && let Some(policy) = weapons.registry().semantic_policy_of(weapon)
-            && breath_policies.insert((policy.cue_namespace.namespace(), policy.breath_cues))
-        {
-            let ns = policy.cue_namespace.namespace();
-            for alias in policy.breath_cues.aliases() {
-                aliases += 1;
-                request_named(clips, &bank.0, ns, alias, &mut set);
+    // Switch: On Horizon, heap is shared with GPU and limited to 3105MB.
+    // Breath cues and type-10 effects prepare on demand on background worker
+    // when played, rather than pre-decoding hundreds of clips into uncompressed PCM.
+    if !cfg!(target_os = "horizon") {
+        let mut breath_policies = HashSet::new();
+        for weapon in 1..=weapons.registry().len() as u32 {
+            if weapons
+                .registry()
+                .bind_published_row(weapon)
+                .ok()
+                .and_then(|weapon| weapon.hud_facts())
+                .is_some_and(|facts| facts.can_hold_breath)
+                && let Some(policy) = weapons.registry().semantic_policy_of(weapon)
+                && breath_policies.insert((policy.cue_namespace.namespace(), policy.breath_cues))
+            {
+                let ns = policy.cue_namespace.namespace();
+                for alias in policy.breath_cues.aliases() {
+                    aliases += 1;
+                    request_named(clips, &bank.0, ns, alias, &mut set);
+                }
             }
         }
-    }
-    for alias in &type10.0 {
-        aliases += 1;
-        request_fx_type10(clips, &bank.0, alias, &mut set);
+        for alias in &type10.0 {
+            aliases += 1;
+            request_fx_type10(clips, &bank.0, alias, &mut set);
+        }
     }
     if !set.missing.is_empty() {
         let names: Vec<&str> = set.missing.iter().map(String::as_str).collect();

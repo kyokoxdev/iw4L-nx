@@ -137,37 +137,50 @@ impl WorldDrawGpuPlan {
         );
         let vertex_layer = scene.retained_vertex_layer.clone();
         let n = scene.retained_positions.len();
-        let mut vertices = Vec::with_capacity(n);
-        for i in 0..n {
-            vertices.push(WorldVertex {
-                position: scene.retained_positions[i],
-                normal: scene
-                    .retained_normals
-                    .get(i)
-                    .copied()
-                    .unwrap_or([0.0, 0.0, 1.0]),
-                tangent: scene
-                    .retained_tangents
-                    .get(i)
-                    .copied()
-                    .unwrap_or([1.0, 0.0, 0.0, 1.0]),
-                color: scene.retained_colors.get(i).copied().unwrap_or([1.0; 4]),
-                uv0: scene
-                    .retained_texture_uvs
-                    .get(i)
-                    .copied()
-                    .unwrap_or([0.0; 2]),
-                uv1: scene
-                    .retained_lightmap_uvs
-                    .get(i)
-                    .copied()
-                    .unwrap_or([0.0; 2]),
-            });
-        }
+        #[cfg(not(target_os = "horizon"))]
+        let vertices = {
+            let mut vertices = Vec::with_capacity(n);
+            for i in 0..n {
+                vertices.push(WorldVertex {
+                    position: scene.retained_positions[i],
+                    normal: scene
+                        .retained_normals
+                        .get(i)
+                        .copied()
+                        .unwrap_or([0.0, 0.0, 1.0]),
+                    tangent: scene
+                        .retained_tangents
+                        .get(i)
+                        .copied()
+                        .unwrap_or([1.0, 0.0, 0.0, 1.0]),
+                    color: scene.retained_colors.get(i).copied().unwrap_or([1.0; 4]),
+                    uv0: scene
+                        .retained_texture_uvs
+                        .get(i)
+                        .copied()
+                        .unwrap_or([0.0; 2]),
+                    uv1: scene
+                        .retained_lightmap_uvs
+                        .get(i)
+                        .copied()
+                        .unwrap_or([0.0; 2]),
+                });
+            }
+            vertices
+        };
 
         scene.retained_tangents.clear();
         scene.retained_colors.clear();
         scene.retained_texture_uvs.clear();
+        #[cfg(target_os = "horizon")]
+        {
+            scene.retained_positions.clear();
+            scene.retained_normals.clear();
+            scene.retained_lightmap_uvs.clear();
+            scene.retained_positions.shrink_to_fit();
+            scene.retained_normals.shrink_to_fit();
+            scene.retained_lightmap_uvs.shrink_to_fit();
+        }
 
         let mut materials = Vec::new();
         let mut batch_to_mat = vec![u32::MAX; scene.batches.len()];
@@ -235,7 +248,7 @@ impl WorldDrawGpuPlan {
         }
 
         let Some(cull) = scene.cull.as_ref() else {
-            let upload_pending = !vertices.is_empty();
+            let upload_pending = n > 0;
             let mut plan = Self {
                 packed_vertices,
                 surface_material: Vec::new(),
@@ -290,8 +303,8 @@ impl WorldDrawGpuPlan {
             .collect();
 
         let vertex_probes =
-            vertex_probes(vertices.len(), &indices, &surface_ranges, &surface_sampler_inputs);
-        let upload_pending = !vertices.is_empty() && !indices.is_empty();
+            vertex_probes(n, &indices, &surface_ranges, &surface_sampler_inputs);
+        let upload_pending = n > 0 && !indices.is_empty();
         let mut plan = Self {
             packed_vertices,
             surface_material,

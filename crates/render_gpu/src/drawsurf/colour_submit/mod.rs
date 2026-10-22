@@ -1982,21 +1982,6 @@ impl PrepareCost {
     }
 }
 
-#[derive(Default)]
-struct WorldRunGather {
-    indices: Vec<u32>,
-    ranges: Vec<(u32, u32)>,
-
-    index_gaps: u32,
-}
-
-fn empty_world_run_gather(ranges: Vec<(u32, u32)>, index_gaps: u32) -> WorldRunGather {
-    WorldRunGather {
-        indices: Vec::new(),
-        ranges,
-        index_gaps,
-    }
-}
 
 fn world_submit_ranges_for_pass<'a>(
     geometry: &'a ExactColourGeometry,
@@ -2009,13 +1994,16 @@ fn world_submit_ranges_for_pass<'a>(
     }
 }
 
-fn gather_world_run_indices(
+pub(super) fn gather_world_run_indices_into(
     hits: impl IntoIterator<Item = (u16, u64, super::SurfaceSamplerInputs)>,
     src_indices: &[u32],
     src_ranges: &[(u32, u32)],
-) -> WorldRunGather {
-    let mut ranges = vec![(0, 0); src_ranges.len()];
-    let mut indices = Vec::new();
+    ranges: &mut Vec<(u32, u32)>,
+    indices: &mut Vec<u32>,
+) -> u32 {
+    ranges.clear();
+    ranges.resize(src_ranges.len(), (0, 0));
+    indices.clear();
     let mut prev: Option<(u64, super::SurfaceSamplerInputs, u32)> = None;
     let mut index_gaps = 0u32;
     for (surf, key, samplers) in hits {
@@ -2046,11 +2034,7 @@ fn gather_world_run_indices(
         }
         prev = Some((key, samplers, start.saturating_add(count)));
     }
-    WorldRunGather {
-        indices,
-        ranges,
-        index_gaps,
-    }
+    index_gaps
 }
 
 fn colour_tech_at(
@@ -2403,7 +2387,7 @@ fn world_material_sorted(packed: u64) -> u16 {
     dpvs_iw4::GfxDrawSurf { packed }.material_sorted_index()
 }
 
-struct WorldPretessLayout {
+pub(super) struct WorldPretessLayout {
     key: WorldPretessKey,
     index: Option<Buffer>,
     ranges: Vec<(u32, u32)>,
@@ -2413,10 +2397,11 @@ struct WorldPretessLayout {
 }
 
 #[derive(Resource, Default)]
-struct CameraWorldPretess {
-    layout: Option<WorldPretessLayout>,
-
-    epoch: u64,
+pub(super) struct CameraWorldPretess {
+    pub(super) layout: Option<WorldPretessLayout>,
+    pub(super) epoch: u64,
+    pub(super) scratch_indices: Vec<u32>,
+    pub(super) scratch_ranges: Vec<(u32, u32)>,
 }
 
 impl CameraWorldPretess {

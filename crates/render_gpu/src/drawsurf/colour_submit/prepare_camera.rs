@@ -22,8 +22,8 @@ use super::{
     SmodelCacheGpu, SpecializedRenderPipelines, UnsupportedStateCensus, Vec3, Vec4, ViewTarget,
     With, WorldPretessLayout, as_u32, bind_world_packed_rows, bsp_draw_source, bsp_kind_index,
     build_colour_row_plan, colour_census_clock, colour_census_ms, colour_draw_at, colour_pack_key,
-    colour_tech_at, draw_surf_list_work_colour, empty_world_run_gather, exec_tables,
-    execution_binds_code_texture, floatz, gather_world_run_indices, is_viewmodel_colour_draw,
+    colour_tech_at, draw_surf_list_work_colour, exec_tables,
+    execution_binds_code_texture, floatz, gather_world_run_indices_into, is_viewmodel_colour_draw,
     material_refusal_class, pack_sun_shadow_frontend, publish_this_frame_spot_shadow_views,
     publish_this_frame_sun_shadow_view, record_pipeline_not_ready, smodel_skinned,
     spot_rt_for_light, spot_shadow_view_missing, submit_refusal_class, submit_refusal_family,
@@ -302,16 +302,20 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
     let world_ib_skip = pretess.layout.as_ref().is_some_and(|layout| {
         layout.key == pretess_key && (layout.index.is_some() || layout.logical_index_count == 0)
     });
-    let gathered = if world_ib_skip {
-        empty_world_run_gather(Vec::new(), {
-            pretess
-                .layout
-                .as_ref()
-                .map(|layout| layout.index_gaps)
-                .unwrap_or(0)
-        })
+    let index_gaps = if world_ib_skip {
+        pretess
+            .layout
+            .as_ref()
+            .map(|layout| layout.index_gaps)
+            .unwrap_or(0)
     } else {
-        let gathered = gather_world_run_indices(
+        let reuse_layout = pretess.layout.take();
+        if let Some(old) = reuse_layout.as_ref() {
+            if pretess.scratch_ranges.is_empty() {
+                pretess.scratch_ranges = old.ranges.clone();
+            }
+        }
+        let gaps = gather_world_run_indices_into(
             bind_world_packed_rows(colour, light, emissive, &pack_plan.world_rows).filter_map(
                 |row| {
                     let row = row?;
@@ -321,19 +325,22 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
             ),
             &geometry.world_cpu_indices,
             &geometry.world_surface_ranges,
+            &mut pretess.scratch_ranges,
+            &mut pretess.scratch_indices,
         );
-        let reuse = pretess.layout.take().and_then(|layout| layout.index);
-        let index = world_pretess_dest_ib(device, queue, reuse, gathered.indices.as_slice());
+        let reuse_buf = reuse_layout.and_then(|layout| layout.index);
+        let index = world_pretess_dest_ib(device, queue, reuse_buf, pretess.scratch_indices.as_slice());
         pretess.epoch = pretess.epoch.wrapping_add(1);
+        let logical_index_count = as_u32(pretess.scratch_indices.len());
         pretess.layout = Some(WorldPretessLayout {
             key: pretess_key,
             index,
-            ranges: gathered.ranges.clone(),
-            index_gaps: gathered.index_gaps,
-            logical_index_count: as_u32(gathered.indices.len()),
+            ranges: pretess.scratch_ranges.clone(),
+            index_gaps: gaps,
+            logical_index_count,
             epoch: pretess.epoch,
         });
-        gathered
+        gaps
     };
 
     if pack_plan_rebuilt || !world_ib_skip {
@@ -348,7 +355,7 @@ pub(super) fn prepare_camera_colour(lane: CameraLane<'_>) {
         );
     }
     if census_on {
-        census.frame.world_index_gaps = Some(gathered.index_gaps);
+        census.frame.world_index_gaps = Some(index_gaps);
         census.frame.world_run_indices_n = Some(pretess.logical_index_count());
         census.frame.world_ib_skip = Some(u32::from(world_ib_skip));
     }

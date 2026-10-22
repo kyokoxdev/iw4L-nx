@@ -3,7 +3,7 @@ use bevy::asset::RenderAssetUsages;
 #[cfg(target_os = "horizon")]
 const WORLD_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::RENDER_WORLD;
 #[cfg(not(target_os = "horizon"))]
-const WORLD_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::default();
+const WORLD_MESH_USAGE: RenderAssetUsages = RenderAssetUsages::all();
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use fastfile_iw4::{GfxWorldGeometry, ZoneStream};

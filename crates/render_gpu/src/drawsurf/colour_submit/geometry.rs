@@ -8,6 +8,7 @@ use bevy::render::render_resource::{Buffer, BufferDescriptor, BufferInitDescript
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use render_frame::{CODE_MESH_INDEX_CAP, CODE_MESH_VERT_CAP, CODE_MESH_VERT_STRIDE};
 use render_material::MaterialGenerationId;
+use std::sync::Arc;
 
 #[derive(Resource, Default)]
 pub(super) struct ExactColourGeometry {
@@ -20,16 +21,16 @@ pub(super) struct ExactColourGeometry {
     /// Reflection probe per world vertex (`u32`), for the probe-array variant.
     pub(super) world_probe: Option<Buffer>,
     pub(super) world_index: Option<Buffer>,
-    pub(super) world_surface_ranges: Vec<(u32, u32)>,
+    pub(super) world_surface_ranges: Arc<Vec<(u32, u32)>>,
     pub(super) world_vertex_count: usize,
     pub(super) world_layer_count: usize,
     pub(super) world_index_count: usize,
 
-    pub(super) world_cpu_indices: Vec<u32>,
+    pub(super) world_cpu_indices: Arc<Vec<u32>>,
     pub(super) smodel_vertex: Option<Buffer>,
     pub(super) smodel_vertex_lighting: Option<Buffer>,
     pub(super) smodel_index: Option<Buffer>,
-    pub(super) smodel_surface_ranges: Vec<(u32, u32)>,
+    pub(super) smodel_surface_ranges: Arc<Vec<(u32, u32)>>,
     pub(super) smodel_vertex_count: usize,
     pub(super) smodel_index_count: usize,
     pub(super) smodel_cached_vertex: Option<Buffer>,
@@ -112,13 +113,11 @@ pub(super) fn upload_exact_geometry(
     if geometry.world_cpu_indices.is_empty()
         && !source.world().static_geometry.world_indices.is_empty()
     {
-        geometry
-            .world_cpu_indices
-            .clone_from(source.world().static_geometry.world_indices.as_ref());
+        geometry.world_cpu_indices =
+            Arc::clone(&source.world().static_geometry.world_indices);
         if geometry.world_surface_ranges.is_empty() {
-            geometry
-                .world_surface_ranges
-                .clone_from(source.world().static_geometry.world_surface_ranges.as_ref());
+            geometry.world_surface_ranges =
+                Arc::clone(&source.world().static_geometry.world_surface_ranges);
         }
     }
     let empty_source = source.world().static_geometry.world_vertices.is_empty()
@@ -151,15 +150,15 @@ pub(super) fn upload_exact_geometry(
         geometry.world_effect = None;
         geometry.world_probe = None;
         geometry.world_index = None;
-        geometry.world_cpu_indices.clear();
-        geometry.world_surface_ranges.clear();
+        geometry.world_cpu_indices = Arc::default();
+        geometry.world_surface_ranges = Arc::default();
         geometry.world_vertex_count = source.world().static_geometry.world_vertices.len();
         geometry.world_layer_count = source.world().static_geometry.world_layer.len();
         geometry.world_index_count = source.world().static_geometry.world_indices.len();
         geometry.smodel_vertex = None;
         geometry.smodel_vertex_lighting = None;
         geometry.smodel_index = None;
-        geometry.smodel_surface_ranges.clear();
+        geometry.smodel_surface_ranges = Arc::default();
         geometry.smodel_vertex_count = source.world().static_geometry.smodel_vertices.len();
         geometry.smodel_index_count = source.world().static_geometry.smodel_indices.len();
         geometry.smodel_cached_vertex = None;
@@ -205,12 +204,10 @@ pub(super) fn upload_exact_geometry(
                 ),
                 usage: BufferUsages::INDEX,
             }));
-            geometry
-                .world_surface_ranges
-                .clone_from(source.world().static_geometry.world_surface_ranges.as_ref());
-            geometry
-                .world_cpu_indices
-                .clone_from(source.world().static_geometry.world_indices.as_ref());
+            geometry.world_surface_ranges =
+                Arc::clone(&source.world().static_geometry.world_surface_ranges);
+            geometry.world_cpu_indices =
+                Arc::clone(&source.world().static_geometry.world_indices);
         }
         if !source.world().static_geometry.world_layer.is_empty() {
             geometry.world_layer = Some(device.create_buffer_with_data(&BufferInitDescriptor {
@@ -253,13 +250,8 @@ pub(super) fn upload_exact_geometry(
                 ),
                 usage: BufferUsages::INDEX,
             }));
-            geometry.smodel_surface_ranges.clone_from(
-                source
-                    .world()
-                    .static_geometry
-                    .smodel_surface_ranges
-                    .as_ref(),
-            );
+            geometry.smodel_surface_ranges =
+                Arc::clone(&source.world().static_geometry.smodel_surface_ranges);
         }
     }
     geometry.generation = source.world().generation;
