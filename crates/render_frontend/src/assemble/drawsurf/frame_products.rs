@@ -1502,7 +1502,10 @@ pub(crate) fn execute_sun_product(
         .map(|plan| plan.range_rows())
         .unwrap_or(&[]);
     let world_ranges = world_plan.surface_ranges();
-    let world_verts = world_plan.decoded_vertices().len() as u32;
+    let world_verts = world_plan.decoded_share.as_ref().map_or_else(
+        || world_plan.vertex_share.as_ref().map_or(0, |v| v.len() as u32),
+        |s| s.len() as u32,
+    );
     let smodel_ranges = smodel_plan.surface_ranges();
     let xmodel_topology = xmodel_plan
         .as_ref()
@@ -1637,7 +1640,12 @@ pub(crate) fn bake_spot_shadow_casters(
             .unwrap_or(&[]),
         world_plan
             .as_ref()
-            .map(|p| p.decoded_vertices().len() as u32)
+            .map(|p| {
+                p.decoded_share.as_ref().map_or_else(
+                    || p.vertex_share.as_ref().map_or(0, |v| v.len() as u32),
+                    |s| s.len() as u32,
+                )
+            })
             .unwrap_or(0),
         smodel_plan
             .as_ref()

@@ -73,11 +73,13 @@ impl WorldDrawGpuPlan {
                 }
             }
         };
-        if vertices.len() != self.decoded_vertices().len() {
-            return Err(WorldVertexRefusal::VertexCountMismatch {
-                packed: vertices.len(),
-                decoded: self.decoded_vertices().len(),
-            });
+        if let Some(share) = self.decoded_share.as_ref() {
+            if vertices.len() != share.len() {
+                return Err(WorldVertexRefusal::VertexCountMismatch {
+                    packed: vertices.len(),
+                    decoded: share.len(),
+                });
+            }
         }
         Ok(vertices)
     }
@@ -429,7 +431,7 @@ pub(crate) fn build_world_draw_gpu_plan(
         World,
         "world drawsurf tess plan: batches={} verts={} indices={} materials={} retail_vb={} surface_inputs={}/{} probe/lightmap (material execution deferred to Colour product); mark_clip_verts pos={} lmap={} nrm={}",
         scene.batches.len(),
-        plan.decoded_vertices().len(),
+        plan.decoded_vertices().len().max(plan.vertex_share.as_ref().map_or(0, |v| v.len())),
         plan.indices().len(),
         plan.materials.len(),
         exact_vertex_status,

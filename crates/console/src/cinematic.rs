@@ -344,7 +344,6 @@ fn decode(
     let frame_time = f64::from(h.fps_den) / f64::from(h.fps_num);
     let mut resample = h.audio.map(|a| Resampler::new(a.rate, a.channels as usize));
     let (mut pcm, mut stereo) = (Vec::new(), Vec::new());
-    let mut spare_rgba = None;
     for index in 0.. {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -376,25 +375,18 @@ fn decode(
                 }
             }
         }
-        let mut rgba = spare_rgba
-            .take()
-            .or_else(|| recycle.try_recv().ok())
-            .unwrap_or_else(|| vec![0; size]);
+        let mut rgba = recycle.try_recv().unwrap_or_else(|_| vec![0; size]);
         bink.rgba(&mut rgba);
-        if stream.is_some() {
-            match frames.try_send(Msg::Frame(f64::from(index) * frame_time, rgba)) {
-                Ok(()) => {}
-                Err(std::sync::mpsc::TrySendError::Full(Msg::Frame(_, returned))) => {
-                    spare_rgba = Some(returned);
+        let mut msg = Msg::Frame(f64::from(index) * frame_time, rgba);
+        while !stop.load(Ordering::Relaxed) {
+            match frames.try_send(msg) {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TrySendError::Full(returned)) => {
+                    msg = returned;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                Err(std::sync::mpsc::TrySendError::Full(_)) => {}
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
             }
-        } else if frames
-            .send(Msg::Frame(f64::from(index) * frame_time, rgba))
-            .is_err()
-        {
-            return;
         }
     }
 }
@@ -469,9 +461,16 @@ pub(crate) fn tick(
         && !console.open
         && skippable
         && (keys.any_just_pressed([KeyCode::Escape, KeyCode::Enter, KeyCode::Space])
-            || pads
-                .iter()
-                .any(|p| p.any_just_pressed([GamepadButton::South, GamepadButton::Start])));
+            || pads.iter().any(|p| {
+                p.any_just_pressed([
+                    GamepadButton::South,
+                    GamepadButton::East,
+                    GamepadButton::West,
+                    GamepadButton::North,
+                    GamepadButton::Start,
+                    GamepadButton::Select,
+                ])
+            }));
     c.console_was_open = console.open;
 
     let raw_now = if let Some(clock) = c.clock.clone() {
@@ -516,10 +515,7 @@ pub(crate) fn tick(
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    ended = match c.kind {
-                        Kind::Load => skippable,
-                        _ => newest.is_none(),
-                    };
+                    ended = newest.is_none();
                     break;
                 }
             },

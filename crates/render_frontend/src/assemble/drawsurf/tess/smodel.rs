@@ -126,11 +126,13 @@ impl SmodelGpuPlan {
                 }
             }
         };
-        if vertices.len() != self.decoded_vertices().len() {
-            return Err(PackedVertexRefusal::VertexCountMismatch {
-                packed: vertices.len(),
-                decoded: self.decoded_vertices().len(),
-            });
+        if let Some(share) = self.decoded_share.as_ref() {
+            if vertices.len() != share.len() {
+                return Err(PackedVertexRefusal::VertexCountMismatch {
+                    packed: vertices.len(),
+                    decoded: share.len(),
+                });
+            }
         }
         Ok(vertices)
     }
@@ -840,7 +842,7 @@ pub(crate) fn build_smodel_gpu_plan(
         World,
         "static models: {} authored slots; retained verts={} indices={} mats={}",
         slot_count,
-        plan.decoded_vertices().len(),
+        plan.decoded_vertices().len().max(plan.packed_share.as_ref().map_or(0, |v| v.len())),
         plan.indices().len(),
         plan.materials.len(),
     );

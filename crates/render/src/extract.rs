@@ -838,13 +838,19 @@ pub fn extract_geometry(
         .map(|stats| stats.g0_world_surfs.clone())
         .unwrap_or_default();
     let generation = runtime.catalog.generation_id();
-    let world_v = world
-        .as_ref()
-        .map_or(0, |plan| plan.decoded_vertices().len());
+    let world_v = world.as_ref().map_or(0, |plan| {
+        plan.decoded_share.as_ref().map_or_else(
+            || plan.vertex_share.as_ref().map_or(0, |v| v.len()),
+            |s| s.len(),
+        )
+    });
     let world_i = world.as_ref().map_or(0, |plan| plan.indices().len());
-    let smodel_v = smodel
-        .as_ref()
-        .map_or(0, |plan| plan.decoded_vertices().len());
+    let smodel_v = smodel.as_ref().map_or(0, |plan| {
+        plan.decoded_share.as_ref().map_or_else(
+            || plan.packed_share.as_ref().map_or(0, |v| v.len()),
+            |s| s.len(),
+        )
+    });
     let smodel_i = smodel.as_ref().map_or(0, |plan| plan.indices().len());
     let overlay_gpu_wait = spawn_job.as_ref().is_some_and(|job| job.overlay_gpu_wait);
     let skip_world_smodel = overlay_gpu_wait
