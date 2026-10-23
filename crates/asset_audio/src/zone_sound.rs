@@ -251,6 +251,11 @@ pub enum ZoneSoundOrigin {
     AudioOnly,
 }
 
+pub fn clear_sound_store() {
+    let mut slots = store().slots.lock().unwrap_or_else(|e| e.into_inner());
+    slots.clear();
+}
+
 pub fn ensure_zone_sound(path: &Path) -> (Stored, ZoneSoundOrigin) {
     let key = store_key(path);
     let store = store();

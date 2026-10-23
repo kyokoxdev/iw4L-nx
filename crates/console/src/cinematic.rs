@@ -16,6 +16,9 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::{ConsoleCommand, ConsoleLine, ConsoleRegistry, ConsoleSettings, ConsoleState};
 
 /// RGBA frames decoded ahead; also how far audio leads the picture.
+#[cfg(target_os = "horizon")]
+const QUEUE: usize = 4;
+#[cfg(not(target_os = "horizon"))]
 const QUEUE: usize = 12;
 
 enum Msg {
@@ -289,7 +292,7 @@ fn start_looped(
         .spawn(move || {
             #[cfg(target_os = "horizon")]
             {
-                platform_nx::pin_current_thread(0, 0b101, "iw4l-bink");
+                platform_nx::pin_current_thread(1, 0b110, "iw4l-bink");
                 platform_nx::raise_current_thread("iw4l-bink");
             }
             decode(

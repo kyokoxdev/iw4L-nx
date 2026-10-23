@@ -119,7 +119,7 @@ pub(super) async fn walk_prepared_match(
             },
         report: mut common_report,
         localize_report,
-    } = common.products.clone();
+    } = common.take_or_clone_products();
     #[cfg(target_os = "horizon")]
     {
         super::forget_common();
@@ -162,17 +162,20 @@ pub(super) async fn walk_prepared_match(
                 asset_core::ZoneGame::Iw5 => iw5_shared_surfaces,
                 _ => shared_surfaces,
             };
-            (
-                lane(game).load_world(
-                    &path,
-                    &image,
-                    &progress,
-                    shared_surfaces,
-                    material_seed,
-                    &common_film_visions,
-                ),
-                Some(asset_core::AssetNamespace::from_zone_game(game)),
-            )
+            let loaded = lane(game).load_world(
+                &path,
+                &image,
+                &progress,
+                shared_surfaces,
+                material_seed,
+                &common_film_visions,
+            );
+            drop(image);
+            #[cfg(target_os = "horizon")]
+            {
+                diag::release_freed_heap();
+            }
+            (loaded, Some(asset_core::AssetNamespace::from_zone_game(game)))
         }
         Err(gap) => {
             return (MatchLoadOutcome::Refused(gap), Some(common));
@@ -635,6 +638,10 @@ pub(super) async fn walk_prepared_match(
         match decoded {
             Ok(n) => report.push(format!("tracer beam images after absorb: {n} decoded")),
             Err(error) => report.push(format!("tracer beam images after absorb: {error}")),
+        }
+        #[cfg(target_os = "horizon")]
+        {
+            diag::release_freed_heap();
         }
     }
     let unique: std::collections::BTreeSet<String> = common_tracers
@@ -1175,6 +1182,10 @@ fn decode_fx_colour_maps(
         match decoded {
             Ok(n) => report.push(format!("fx elem 2d images after absorb: {n} decoded")),
             Err(error) => report.push(format!("fx elem 2d images after absorb: {error}")),
+        }
+        #[cfg(target_os = "horizon")]
+        {
+            diag::release_freed_heap();
         }
     }
     let nocolor: Vec<(usize, String)> = fx

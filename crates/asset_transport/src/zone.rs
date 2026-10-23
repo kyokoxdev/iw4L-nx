@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -225,10 +224,8 @@ fn flight_for(key: &ZoneSourceKey) -> Arc<Mutex<()>> {
 
 pub fn open_zone(path: impl AsRef<Path>) -> Result<ZoneImage, ZoneOpenError> {
     let path = path.as_ref();
-    let result = std::fs::read(path)
-        .map_err(ZoneOpenError::Io)
-        .and_then(|bytes| parse_zone_image(&bytes));
-    let image = result.map_err(|source| ZoneOpenError::AtPath {
+    let mut bytes = std::fs::read(path).map_err(ZoneOpenError::Io)?;
+    let image = parse_zone_image_mut(&mut bytes).map_err(|source| ZoneOpenError::AtPath {
         path: path.to_owned(),
         source: Box::new(source),
     })?;
@@ -247,14 +244,19 @@ fn select_iw4_table(image: &[u8]) -> Result<WireAssetTable<'_>, ZoneOpenError> {
 }
 
 pub fn parse_zone_image(bytes: &[u8]) -> Result<ZoneImage, ZoneOpenError> {
+    let mut copy = bytes.to_vec();
+    parse_zone_image_mut(&mut copy)
+}
+
+pub fn parse_zone_image_mut(bytes: &mut [u8]) -> Result<ZoneImage, ZoneOpenError> {
     if bytes.len() < 12 {
         return Err(ZoneOpenError::Truncated);
     }
     let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
     match version {
-        fastfile_iw4::ZONE_VERSION_PC => parse_iw4_zone_image(bytes),
+        fastfile_iw4::ZONE_VERSION_PC => parse_iw4_zone_image_mut(bytes),
         fastfile_t5::ZONE_VERSION_PC => parse_t5_zone_image(bytes),
-        fastfile_iw5::ZONE_VERSION_PC => parse_iw5_zone_image(bytes),
+        fastfile_iw5::ZONE_VERSION_PC => parse_iw5_zone_image_mut(bytes),
         fastfile_t6::ZONE_VERSION_PC if bytes.starts_with(fastfile_t6::MAGIC_SIGNED) => {
             let image = parse_t6_zone_image(bytes).map_err(ZoneOpenError::T6)?;
             Ok(ZoneImage {
@@ -290,16 +292,19 @@ fn inflate_zone(bytes: &[u8]) -> Result<Vec<u8>, ZoneOpenError> {
     }
 }
 
-fn parse_iw4_zone_image(bytes: &[u8]) -> Result<ZoneImage, ZoneOpenError> {
+fn parse_iw4_zone_image_mut(bytes: &mut [u8]) -> Result<ZoneImage, ZoneOpenError> {
     let header = parse_iw4_header(bytes).map_err(ZoneOpenError::Iw4Header)?;
-    let body = &bytes[fastfile_iw4::FILE_PREAMBLE_LEN..];
+    let body = &mut bytes[fastfile_iw4::FILE_PREAMBLE_LEN..];
 
-    let compressed: Cow<'_, [u8]> = match header.signing {
-        Iw4Signing::Unsigned => Cow::Borrowed(body),
-        Iw4Signing::Signed => Cow::Owned(dechunk_authed(body)?),
+    let compressed: &[u8] = match header.signing {
+        Iw4Signing::Unsigned => body,
+        Iw4Signing::Signed => {
+            let len = dechunk_authed_in_place(body)?;
+            &body[..len]
+        }
     };
 
-    let image = inflate_zone(&compressed)?;
+    let image = inflate_zone(compressed)?;
 
     if image.len() < fastfile_iw4::XFILE_HEADER_LEN {
         return Err(ZoneOpenError::Truncated);
@@ -333,15 +338,18 @@ fn parse_t5_zone_image(bytes: &[u8]) -> Result<ZoneImage, ZoneOpenError> {
     })
 }
 
-fn parse_iw5_zone_image(bytes: &[u8]) -> Result<ZoneImage, ZoneOpenError> {
+fn parse_iw5_zone_image_mut(bytes: &mut [u8]) -> Result<ZoneImage, ZoneOpenError> {
     let header = fastfile_iw5::parse_file_header(bytes).map_err(ZoneOpenError::Iw5Header)?;
-    let body = &bytes[fastfile_iw5::FILE_PREAMBLE_LEN..];
-    let compressed: Cow<'_, [u8]> = match header.signing {
-        Iw5Signing::Unsigned => Cow::Borrowed(body),
-        Iw5Signing::Signed => Cow::Owned(dechunk_authed(body)?),
+    let body = &mut bytes[fastfile_iw5::FILE_PREAMBLE_LEN..];
+    let compressed: &[u8] = match header.signing {
+        Iw5Signing::Unsigned => body,
+        Iw5Signing::Signed => {
+            let len = dechunk_authed_in_place(body)?;
+            &body[..len]
+        }
     };
 
-    let image = inflate_zone(&compressed)?;
+    let image = inflate_zone(compressed)?;
 
     if image.len() < fastfile_iw5::XFILE_HEADER_LEN {
         return Err(ZoneOpenError::Truncated);
@@ -355,26 +363,28 @@ fn parse_iw5_zone_image(bytes: &[u8]) -> Result<ZoneImage, ZoneOpenError> {
     })
 }
 
-fn dechunk_authed(body: &[u8]) -> Result<Vec<u8>, ZoneOpenError> {
+fn dechunk_authed_in_place(body: &mut [u8]) -> Result<usize, ZoneOpenError> {
     if body.len() < 8 || &body[0..8] != MAGIC_AUTH_HEADER {
         return Err(ZoneOpenError::BadAuthHeader);
     }
 
-    let mut pos = AUTHED_CHUNK_SIZE;
-    let mut out = Vec::with_capacity(body.len());
+    let mut read_pos = AUTHED_CHUNK_SIZE;
+    let mut write_pos = 0usize;
     let mut chunk_in_group = 0usize;
 
-    while pos < body.len() {
-        let end = (pos + AUTHED_CHUNK_SIZE).min(body.len());
+    while read_pos < body.len() {
+        let end = (read_pos + AUTHED_CHUNK_SIZE).min(body.len());
+        let chunk_len = end - read_pos;
 
         if chunk_in_group != 0 {
-            out.extend_from_slice(&body[pos..end]);
+            body.copy_within(read_pos..end, write_pos);
+            write_pos += chunk_len;
         }
-        pos = end;
+        read_pos = end;
         chunk_in_group = (chunk_in_group + 1) % (AUTHED_CHUNKS_PER_GROUP + 1);
     }
 
-    Ok(out)
+    Ok(write_pos)
 }
 
 pub struct ZoneMemory {

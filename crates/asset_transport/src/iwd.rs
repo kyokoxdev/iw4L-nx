@@ -295,6 +295,9 @@ type OpenArchive = zip::ZipArchive<std::io::BufReader<std::fs::File>>;
 
 static PARKED: OnceLock<Mutex<HashMap<PathBuf, Vec<OpenArchive>>>> = OnceLock::new();
 
+#[cfg(target_os = "horizon")]
+const PARKED_LIMIT: usize = 16;
+#[cfg(not(target_os = "horizon"))]
 const PARKED_LIMIT: usize = 256;
 
 static PARKED_N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

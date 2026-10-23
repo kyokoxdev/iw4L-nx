@@ -927,6 +927,7 @@ pub struct PrepareFpvInputs<'w> {
     tess: Res<'w, TessMaterials>,
     lighting: Option<Res<'w, WorldModelLightingAtlas>>,
     load: Option<Res<'w, assets::MapLoadProcess>>,
+    briefing: Option<Res<'w, frame::LoadCinematicPlaying>>,
 }
 
 pub fn prepare_fpv_compositions(inputs: PrepareFpvInputs, mut prepared: ResMut<PreparedFpv>) {
@@ -937,6 +938,7 @@ pub fn prepare_fpv_compositions(inputs: PrepareFpvInputs, mut prepared: ResMut<P
         tess,
         lighting,
         load,
+        briefing,
     } = inputs;
     let (Some(weapons), Some(fpv_meshes), Some(xanims)) = (weapons, fpv_meshes, xanims) else {
         if prepared.table.is_some() || prepared.job.is_some() {
@@ -1008,7 +1010,7 @@ pub fn prepare_fpv_compositions(inputs: PrepareFpvInputs, mut prepared: ResMut<P
     let Some(lighting) = lighting.as_deref() else {
         return;
     };
-    let budget = if load.is_some() {
+    let budget = if load.is_some() && briefing.is_none() {
         std::time::Duration::from_millis(100)
     } else {
         PREPARE_FRAME_BUDGET

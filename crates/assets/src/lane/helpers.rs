@@ -82,12 +82,7 @@ impl MapXModelCatalog {
             Some(materials),
             &self.shared_surfaces,
         )
-        .map(|mut skel| {
-            if cfg!(target_os = "horizon")
-                && let Err(error) = skel.spill_geometry()
-            {
-                diag::warn!(Zone, "map xmodel spill {name}: {error}; kept resident");
-            }
+        .map(|skel| {
             MapXModelSceneAsset::Iw4(std::sync::Arc::new(skel))
         })
         .unwrap_or(MapXModelSceneAsset::Unavailable {

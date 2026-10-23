@@ -1598,14 +1598,7 @@ impl AssetLinkSink for CommonWalkSink {
                     geometry,
                     Some(&self.materials),
                 )
-                .map(|mut skel| {
-                    // A match draws a fraction of common_mp's models; on Switch
-                    // the rest wait on the SD card instead of the shared heap.
-                    if cfg!(target_os = "horizon")
-                        && let Err(error) = skel.spill_geometry()
-                    {
-                        diag::warn!(Zone, "xmodel spill {name}: {error}; kept resident");
-                    }
+                .map(|skel| {
                     std::sync::Arc::new(skel)
                 });
                 if let Some(skel) = &skel {

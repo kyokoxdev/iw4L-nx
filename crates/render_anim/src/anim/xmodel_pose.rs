@@ -241,9 +241,14 @@ pub(crate) fn meshes_from_blended(
     let DecodedSkel { positions, normals } = decoded?;
     let surface_count = skel.surface_vertex_ranges.len();
     if surface_count == 0 {
+        let usages = if cfg!(target_os = "horizon") {
+            RenderAssetUsages::RENDER_WORLD
+        } else {
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
+        };
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            usages,
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -313,9 +318,14 @@ pub(crate) fn meshes_from_blended(
         } else {
             Vec::new()
         };
+        let usages = if cfg!(target_os = "horizon") {
+            RenderAssetUsages::RENDER_WORLD
+        } else {
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
+        };
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            usages,
         );
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_POSITION,

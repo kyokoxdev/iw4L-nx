@@ -325,16 +325,30 @@ fn decode_wavelet_iwi(
     }
     bits.check_landing().map_err(wavelet_error)?;
     d3d_levels.reverse();
-    let mut levels = Vec::with_capacity(d3d_levels.len());
-    for (i, d3d) in d3d_levels.iter().enumerate() {
+    let downscale_levels = if cfg!(target_os = "horizon") {
+        let mut skip = 0;
+        while skip + 1 < d3d_levels.len()
+            && (width >> skip > 256 || height >> skip > 256)
+        {
+            skip += 1;
+        }
+        skip
+    } else {
+        0
+    };
+    let final_w = (width >> downscale_levels).max(1);
+    let final_h = (height >> downscale_levels).max(1);
+
+    let mut levels = Vec::with_capacity(d3d_levels.len() - downscale_levels);
+    for (i, d3d) in d3d_levels.iter().enumerate().skip(downscale_levels) {
         let w = (width >> i).max(1);
         let h = (height >> i).max(1);
         let (_, _, rgba) = load_mip_level(d3d, w, h, pixel_format)?;
         levels.push(rgba);
     }
     Ok(DecodedMips::from_levels(
-        width,
-        height,
+        final_w,
+        final_h,
         MipStorage::Rgba8,
         levels,
     ))

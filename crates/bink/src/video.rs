@@ -949,6 +949,18 @@ fn idct(block: &mut [i32; 64]) {
 
 /// BT.601 limited-range YUV 4:2:0 → RGBA8 into `out` (`width * height * 4`).
 pub(crate) fn to_rgba(planes: &[Plane], width: usize, height: usize, out: &mut [u8]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        to_rgba_neon(planes, width, height, out);
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        to_rgba_scalar(planes, width, height, out);
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn to_rgba_scalar(planes: &[Plane], width: usize, height: usize, out: &mut [u8]) {
     let (y_p, u_p, v_p) = (&planes[0], &planes[1], &planes[2]);
     for (row, line) in out.chunks_exact_mut(width * 4).take(height).enumerate() {
         let ys = &y_p.data[row * y_p.stride..][..width];
@@ -974,6 +986,147 @@ pub(crate) fn to_rgba(planes: &[Plane], width: usize, height: usize, out: &mut [
             px8[5] = ((c1 - g_sub) >> 8).clamp(0, 255) as u8;
             px8[6] = ((c1 + b_add) >> 8).clamp(0, 255) as u8;
             px8[7] = 255;
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn to_rgba_neon_row(
+    y_ptr: *const u8,
+    u_ptr: *const u8,
+    v_ptr: *const u8,
+    mut out_ptr: *mut u8,
+    width: usize,
+) {
+    use core::arch::aarch64::*;
+
+    unsafe {
+        let chunks8 = width / 8;
+        let v128_s32 = vdupq_n_s32(128);
+        let v16_s32 = vdupq_n_s32(16);
+        let v298_s32 = vdupq_n_s32(298);
+        let v409_s32 = vdupq_n_s32(409);
+        let v100_s32 = vdupq_n_s32(100);
+        let v208_s32 = vdupq_n_s32(208);
+        let v516_s32 = vdupq_n_s32(516);
+        let alpha = vdup_n_u8(255);
+
+        for i in 0..chunks8 {
+            let y_raw = vld1_u8(y_ptr.add(i * 8));
+            // U and V: 4 bytes for 8 Y pixels (since 4:2:0 chroma is subsampled by 2)
+            let u_4 = *(u_ptr.add(i * 4) as *const [u8; 4]);
+            let v_4 = *(v_ptr.add(i * 4) as *const [u8; 4]);
+
+            // Duplicate each chroma byte: [u0, u0, u1, u1, u2, u2, u3, u3]
+            let u_dup_arr = [u_4[0], u_4[0], u_4[1], u_4[1], u_4[2], u_4[2], u_4[3], u_4[3]];
+            let v_dup_arr = [v_4[0], v_4[0], v_4[1], v_4[1], v_4[2], v_4[2], v_4[3], v_4[3]];
+            let u_raw = vld1_u8(u_dup_arr.as_ptr());
+            let v_raw = vld1_u8(v_dup_arr.as_ptr());
+
+            // Split into low 4 and high 4 pixels
+            // Convert u8 -> u16 -> s32
+            let y_u16 = vmovl_u8(y_raw);
+            let u_u16 = vmovl_u8(u_raw);
+            let v_u16 = vmovl_u8(v_raw);
+
+            let y_s32_low = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(y_u16)));
+            let y_s32_high = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(y_u16)));
+
+            let u_s32_low = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(u_u16)));
+            let u_s32_high = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(u_u16)));
+
+            let v_s32_low = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v_u16)));
+            let v_s32_high = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v_u16)));
+
+            // d = u - 128, e = v - 128
+            let d_low = vsubq_s32(u_s32_low, v128_s32);
+            let d_high = vsubq_s32(u_s32_high, v128_s32);
+
+            let e_low = vsubq_s32(v_s32_low, v128_s32);
+            let e_high = vsubq_s32(v_s32_high, v128_s32);
+
+            // c = (y - 16) * 298
+            let c_low = vmulq_s32(vsubq_s32(y_s32_low, v16_s32), v298_s32);
+            let c_high = vmulq_s32(vsubq_s32(y_s32_high, v16_s32), v298_s32);
+
+            // r = (c + 409 * e + 128) >> 8
+            let r_low = vshrq_n_s32(vaddq_s32(vaddq_s32(c_low, vmulq_s32(v409_s32, e_low)), v128_s32), 8);
+            let r_high = vshrq_n_s32(vaddq_s32(vaddq_s32(c_high, vmulq_s32(v409_s32, e_high)), v128_s32), 8);
+
+            // g = (c - (100 * d + 208 * e - 128)) >> 8 = (c - 100 * d - 208 * e + 128) >> 8
+            let g_low = vshrq_n_s32(
+                vaddq_s32(vsubq_s32(vsubq_s32(c_low, vmulq_s32(v100_s32, d_low)), vmulq_s32(v208_s32, e_low)), v128_s32),
+                8,
+            );
+            let g_high = vshrq_n_s32(
+                vaddq_s32(vsubq_s32(vsubq_s32(c_high, vmulq_s32(v100_s32, d_high)), vmulq_s32(v208_s32, e_high)), v128_s32),
+                8,
+            );
+
+            // b = (c + 516 * d + 128) >> 8
+            let b_low = vshrq_n_s32(vaddq_s32(vaddq_s32(c_low, vmulq_s32(v516_s32, d_low)), v128_s32), 8);
+            let b_high = vshrq_n_s32(vaddq_s32(vaddq_s32(c_high, vmulq_s32(v516_s32, d_high)), v128_s32), 8);
+
+            // Saturate into u8: s32 -> u16 -> u8
+            let r_u16_low = vqmovun_s32(r_low);
+            let r_u16_high = vqmovun_s32(r_high);
+            let r_u8 = vqmovn_u16(vcombine_u16(r_u16_low, r_u16_high));
+
+            let g_u16_low = vqmovun_s32(g_low);
+            let g_u16_high = vqmovun_s32(g_high);
+            let g_u8 = vqmovn_u16(vcombine_u16(g_u16_low, g_u16_high));
+
+            let b_u16_low = vqmovun_s32(b_low);
+            let b_u16_high = vqmovun_s32(b_high);
+            let b_u8 = vqmovn_u16(vcombine_u16(b_u16_low, b_u16_high));
+
+            let rgba = uint8x8x4_t(r_u8, g_u8, b_u8, alpha);
+            vst4_u8(out_ptr, rgba);
+            out_ptr = out_ptr.add(32);
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn to_rgba_neon(planes: &[Plane], width: usize, height: usize, out: &mut [u8]) {
+    let (y_p, u_p, v_p) = (&planes[0], &planes[1], &planes[2]);
+    let chunks8_pixels = (width / 8) * 8;
+    for (row, line) in out.chunks_exact_mut(width * 4).take(height).enumerate() {
+        let y_row = &y_p.data[row * y_p.stride..];
+        let u_row = &u_p.data[(row >> 1) * u_p.stride..];
+        let v_row = &v_p.data[(row >> 1) * v_p.stride..];
+
+        unsafe {
+            to_rgba_neon_row(y_row.as_ptr(), u_row.as_ptr(), v_row.as_ptr(), line.as_mut_ptr(), width);
+        }
+
+        // Remainder scalar fallback if width not multiple of 8
+        if chunks8_pixels < width {
+            let ys = &y_row[chunks8_pixels..width];
+            let us = &u_row[chunks8_pixels / 2..];
+            let vs = &v_row[chunks8_pixels / 2..];
+            let y_pairs = ys.as_chunks::<2>().0;
+            let px_pairs = line[chunks8_pixels * 4..].as_chunks_mut::<8>().0;
+            for (i, ([y0, y1], px8)) in y_pairs.iter().zip(px_pairs).enumerate() {
+                let d = i32::from(us[i]) - 128;
+                let e = i32::from(vs[i]) - 128;
+                let r_add = 409 * e + 128;
+                let g_sub = 100 * d + 208 * e - 128;
+                let b_add = 516 * d + 128;
+
+                let c0 = (i32::from(*y0) - 16) * 298;
+                px8[0] = ((c0 + r_add) >> 8).clamp(0, 255) as u8;
+                px8[1] = ((c0 - g_sub) >> 8).clamp(0, 255) as u8;
+                px8[2] = ((c0 + b_add) >> 8).clamp(0, 255) as u8;
+                px8[3] = 255;
+
+                let c1 = (i32::from(*y1) - 16) * 298;
+                px8[4] = ((c1 + r_add) >> 8).clamp(0, 255) as u8;
+                px8[5] = ((c1 - g_sub) >> 8).clamp(0, 255) as u8;
+                px8[6] = ((c1 + b_add) >> 8).clamp(0, 255) as u8;
+                px8[7] = 255;
+            }
         }
     }
 }

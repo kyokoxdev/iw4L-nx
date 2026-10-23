@@ -315,6 +315,7 @@ fn approve_map_load(
             );
             crate::session_load::forget_common();
             crate::session_load::clear_resident_map();
+            asset_audio::clear_sound_store();
         }
         let trees = asset_transport::NamespaceTrees::discover(&games);
         let have =

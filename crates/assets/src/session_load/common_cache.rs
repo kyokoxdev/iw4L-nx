@@ -131,7 +131,7 @@ pub struct CommonSet {
     pub(super) ui_images: asset_material::UiImagePublication,
     pub(super) id: u64,
     pub(super) key: CommonKey,
-    pub(super) products: CommonProducts,
+    pub(super) products: std::sync::Mutex<Option<CommonProducts>>,
     editor_weapons: asset_game::EditorWeaponCatalog,
     donor_images: async_lock::OnceCell<Vec<KeptImages>>,
     donor_plans: std::sync::Mutex<Option<Vec<(&'static str, HeldImagePlan)>>>,
@@ -143,6 +143,16 @@ pub struct CommonSet {
 }
 
 impl CommonSet {
+    pub(super) fn take_or_clone_products(&self) -> CommonProducts {
+        let mut slot = self.products.lock().unwrap_or_else(|poison| poison.into_inner());
+        if cfg!(target_os = "horizon") || asset_transport::campaign_zone_set() {
+            if let Some(products) = slot.take() {
+                return products;
+            }
+        }
+        slot.as_ref().expect("common products unavailable").clone()
+    }
+
     pub(super) fn start_donor_images(self: &Arc<Self>) {
         let Some(plans) = self
             .donor_plans
@@ -356,22 +366,22 @@ pub async fn load_shell_common(games: asset_transport::GamesRoot) -> ShellCommon
             table.rows
         ));
     }
+    let products_guard = common.products.lock().unwrap_or_else(|poison| poison.into_inner());
+    let products = products_guard.as_ref().expect("common products unavailable");
     ShellCommon {
-        player_defaults_config: common
-            .products
+        player_defaults_config: products
             .scripts
             .config("mp/stats_init.cfg")
             .map(str::to_owned),
-        challenges: common
-            .products
+        challenges: products
             .scripts
             .tables()
             .get("mp/allchallengestable.csv")
             .cloned(),
-        player_schemas: common.products.scripts.schemas().clone(),
+        player_schemas: products.scripts.schemas().clone(),
         ui_images: common.ui_images.clone(),
         weapons,
-        strings: common.products.strings.clone(),
+        strings: products.strings.clone(),
         tables: common.cac_tables.clone(),
         report,
     }
@@ -929,7 +939,7 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
         editor_weapons: preview_weapons,
         id: NEXT_COMMON_PROFILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         key,
-        products: CommonProducts {
+        products: std::sync::Mutex::new(Some(CommonProducts {
             scripts,
             t5_scene_models,
             material_seed,
@@ -977,7 +987,7 @@ async fn prepare_common(key: CommonKey) -> Arc<CommonSet> {
             },
             report: common_report,
             localize_report,
-        },
+        })),
         donor_images: async_lock::OnceCell::new(),
         donor_plans: std::sync::Mutex::new(Some(
             [

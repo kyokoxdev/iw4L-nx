@@ -10,6 +10,9 @@ mod video;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver};
 
 #[derive(Debug)]
 pub enum Error {
@@ -57,9 +60,15 @@ pub struct Header {
 const FLAG_ALPHA: u32 = 0x0010_0000;
 const AUD_STEREO: u16 = 0x2000;
 const AUD_DCT: u16 = 0x1000;
+const PREFETCH_CAPACITY: usize = 90;
+
+struct Prefetch {
+    rx: Receiver<Result<Vec<u8>, std::io::Error>>,
+    stop: Arc<AtomicBool>,
+}
 
 pub struct Bink {
-    file: File,
+    file: Option<File>,
     header: Header,
     /// `(offset, size)` per frame.
     index: Vec<(u64, u32)>,
@@ -68,6 +77,15 @@ pub struct Bink {
     audio: Option<audio::Audio>,
     tracks: usize,
     packet: Vec<u8>,
+    prefetch: Option<Prefetch>,
+}
+
+impl Drop for Bink {
+    fn drop(&mut self) {
+        if let Some(prefetch) = &self.prefetch {
+            prefetch.stop.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Bink {
@@ -141,7 +159,7 @@ impl Bink {
             audio: audio_track.map(|(a, _)| a),
         };
         Ok(Self {
-            file,
+            file: Some(file),
             video: video::Video::new(
                 width as usize,
                 height as usize,
@@ -154,6 +172,7 @@ impl Bink {
             next: 0,
             tracks,
             packet: Vec::new(),
+            prefetch: None,
         })
     }
 
@@ -161,16 +180,65 @@ impl Bink {
         &self.header
     }
 
+    fn ensure_prefetch(&mut self) -> Result<(), Error> {
+        if self.prefetch.is_some() || self.next >= self.index.len() {
+            return Ok(());
+        }
+        let Some(mut file) = self.file.take() else {
+            return Ok(());
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_reader = stop.clone();
+        let (tx, rx) = sync_channel::<Result<Vec<u8>, std::io::Error>>(PREFETCH_CAPACITY);
+        let remaining_index = self.index[self.next..].to_vec();
+
+        std::thread::Builder::new()
+            .name("iw4l-bink-io".into())
+            .spawn(move || {
+                for (offset, size) in remaining_index {
+                    if stop_reader.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut buf = vec![0u8; size as usize];
+                    let res = file
+                        .seek(SeekFrom::Start(offset))
+                        .and_then(|_| file.read_exact(&mut buf));
+                    match res {
+                        Ok(()) => {
+                            if tx.send(Ok(buf)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(Error::Io)?;
+
+        self.prefetch = Some(Prefetch { rx, stop });
+        Ok(())
+    }
+
     /// Decodes the next frame; its audio (first track, interleaved, at the
     /// track's own rate) is appended to `audio`. `false` once past the end.
     pub fn next_frame(&mut self, audio: &mut Vec<f32>) -> Result<bool, Error> {
-        let Some(&(offset, size)) = self.index.get(self.next) else {
+        if self.next >= self.index.len() {
             return Ok(false);
+        }
+        self.ensure_prefetch()?;
+        let packet = match &self.prefetch {
+            Some(prefetch) => match prefetch.rx.recv() {
+                Ok(Ok(buf)) => buf,
+                Ok(Err(e)) => return Err(Error::Io(e)),
+                Err(_) => return Ok(false),
+            },
+            None => return Ok(false),
         };
         self.next += 1;
-        self.packet.resize(size as usize, 0);
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.read_exact(&mut self.packet)?;
+        self.packet = packet;
 
         let mut at = 0usize;
         for track in 0..self.tracks {
