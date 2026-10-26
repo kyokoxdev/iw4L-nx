@@ -275,6 +275,10 @@ impl EntityAnim {
         Some(!looping && self.time(node) >= 1.0)
     }
 
+    pub(crate) fn node_clip_name(&self, node: u16) -> Option<&str> {
+        self.tree.nodes.get(node as usize).map(|n| n.name.as_ref())
+    }
+
     pub(crate) fn time(&self, node: u16) -> f32 {
         self.states[node as usize].time
     }

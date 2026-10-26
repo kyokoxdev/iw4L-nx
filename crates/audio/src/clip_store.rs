@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::media::PcmBuffer;
 use crate::media_queue::{ClipJob, MediaJobQueue, MediaPriority, QueueRefusal};
-use crate::pcm::decode_audio_bytes;
+use crate::pcm::decode_audio_owned;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ClipKey {
@@ -947,7 +947,11 @@ fn prepare_streamed(
     decode: asset_audio::StreamedDecodePolicy,
 ) -> Result<PcmBuffer, ClipError> {
     let iwd = iwd.ok_or(ClipError::Read)?;
-    let rel = format!("{dir}/{name}");
+    let rel = if dir.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{dir}/{name}")
+    };
     let bytes: Vec<u8> = match iwd.read_sound(ns, &rel) {
         Some(Ok(bytes)) => bytes,
         Some(Err(e)) => {
@@ -968,7 +972,7 @@ fn prepare_streamed(
     {
         crate::pcm::t5_stream::decode(&bytes)
     } else {
-        decode_audio_bytes(&bytes)
+        crate::pcm::decode_audio_owned(bytes)
     };
     pcm.map_err(ClipError::from)
 }

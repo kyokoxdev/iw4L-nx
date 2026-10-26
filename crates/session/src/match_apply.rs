@@ -3,6 +3,7 @@ use asset_world::{ClipCollision, SpawnPoint};
 use assets::{
     LoadingScreen, MatchLoadAbort, MatchType10SoundHints, PreparedDestructibleDeath,
     PreparedFpvMeshes, PreparedMatchReady, PreparedWeapons, PreparedXAnims,
+    clear_resident_map, forget_common,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -711,6 +712,10 @@ pub fn apply_prepared_match(
             "match preparation: {:.1}ms on the main thread (scene handoff, sim boot, catalogs)",
             install_started.elapsed().as_secs_f32() * 1000.0
         );
+        clear_resident_map();
+        forget_common();
+        asset_transport::clear_parked_archives();
+        diag::release_freed_heap();
         if let Some(resumed) = sim.restore_campaign_checkpoint(&zone) {
             sim = resumed;
             sim.world_objects_mut()
@@ -969,10 +974,14 @@ fn preflight_match_install(
     role: frame::RuntimeRole,
 ) -> Result<MatchInstallPlan, InstallRefusal> {
     let is_sp = asset_transport::campaign_zone_set()
+        || mode_selection.is_some_and(|m| m.kind() == gamemode_iw4::GameModeKind::Campaign)
         || identity
             .map(|id| asset_transport::GamesRoot(id.games_root.clone()))
             .as_ref()
             .is_some_and(|g| asset_transport::is_campaign_level(g, zone));
+    if is_sp {
+        asset_transport::set_campaign_zone_set(true);
+    }
     if prepared
         .clip
         .as_ref()
@@ -1935,7 +1944,7 @@ fn install_clip_and_player(
         classes,
         bot_classes,
         seed: 0,
-        kind: if asset_transport::campaign_zone_set() {
+        kind: if asset_transport::campaign_zone_set() || kind == gamemode_iw4::GameModeKind::Campaign {
             gamemode_iw4::GameModeKind::Campaign
         } else {
             kind
@@ -1956,7 +1965,7 @@ fn install_clip_and_player(
         allow_debug_actions,
         intermission_view,
         airstrike_height,
-        campaign: asset_transport::campaign_zone_set(),
+        campaign: asset_transport::campaign_zone_set() || kind == gamemode_iw4::GameModeKind::Campaign,
         ..Default::default()
     }) {
         diag::info!(Sim, "bootstrap: {err}");

@@ -17,7 +17,11 @@ pub(crate) enum DecodeError {
 }
 
 pub(crate) fn decode_audio_bytes(bytes: &[u8]) -> Result<PcmBuffer, DecodeError> {
-    if let Some(pcm) = riff_pcm(bytes) {
+    decode_audio_owned(bytes.to_vec())
+}
+
+pub(crate) fn decode_audio_owned(bytes: Vec<u8>) -> Result<PcmBuffer, DecodeError> {
+    if let Some(pcm) = riff_pcm(&bytes) {
         return pcm;
     }
     use symphonia::core::audio::SampleBuffer;
@@ -28,7 +32,7 @@ pub(crate) fn decode_audio_bytes(bytes: &[u8]) -> Result<PcmBuffer, DecodeError>
     use symphonia::core::probe::Hint;
 
     let _input = DecodeReservation::reserve(bytes.len()).map_err(DecodeError::Pcm)?;
-    let cursor = std::io::Cursor::new(bytes.to_vec());
+    let cursor = std::io::Cursor::new(bytes);
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
     let probed = symphonia::default::get_probe()
         .format(

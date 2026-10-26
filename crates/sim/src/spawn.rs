@@ -92,6 +92,8 @@ pub struct HostCheats(pub bool);
 pub struct HostGameModeSelection(GameModeKind);
 
 impl HostGameModeSelection {
+    pub const CAMPAIGN: Self = Self(GameModeKind::Campaign);
+
     pub const ALL: [Self; 8] = [
         Self(GameModeKind::FreeForAll),
         Self(GameModeKind::Domination),

@@ -113,7 +113,7 @@ impl DecodedMips {
         })
     }
     /// Drop top mips until both sides fit `max`, as IW4's `r_picmip` does.
-    /// A single-level image is kept whole.
+    /// On Horizon, single-level images exceeding `max` are downscaled to reduce VRAM pressure.
     pub(super) fn picmip(mut self, max: u32) -> Self {
         let mut skip = 0;
         while skip + 1 < self.level_sizes.len()
@@ -121,14 +121,56 @@ impl DecodedMips {
         {
             skip += 1;
         }
-        if skip == 0 {
+        if skip > 0 {
+            let bytes: usize = self.level_sizes[..skip].iter().map(|&n| n as usize).sum();
+            self.packed = self.packed[bytes..].to_vec();
+            self.level_sizes.drain(..skip);
+            self.width = (self.width >> skip).max(1);
+            self.height = (self.height >> skip).max(1);
             return self;
         }
-        let bytes: usize = self.level_sizes[..skip].iter().map(|&n| n as usize).sum();
-        self.packed = self.packed[bytes..].to_vec();
-        self.level_sizes.drain(..skip);
-        self.width = (self.width >> skip).max(1);
-        self.height = (self.height >> skip).max(1);
+        if self.level_sizes.len() == 1 && (self.width > max || self.height > max) {
+            #[cfg(target_os = "horizon")]
+            {
+                let backup_width = self.width;
+                let backup_height = self.height;
+                let backup_storage = self.storage;
+                let backup_packed = self.packed.clone();
+                let backup_sizes = self.level_sizes.clone();
+                match self.into_top_level_rgba8() {
+                    Ok((w, h, rgba)) => {
+                        let mut cur_w = w;
+                        let mut cur_h = h;
+                        let mut cur_rgba = rgba;
+                        while cur_w > max || cur_h > max {
+                            let (nw, nh, downscaled) = downscale_rgba8_half(cur_w, cur_h, &cur_rgba);
+                            cur_w = nw;
+                            cur_h = nh;
+                            cur_rgba = downscaled;
+                        }
+                        if cur_rgba.len() >= backup_packed.len() && backup_storage != MipStorage::Rgba8 {
+                            return DecodedMips {
+                                width: backup_width,
+                                height: backup_height,
+                                storage: backup_storage,
+                                packed: backup_packed,
+                                level_sizes: backup_sizes,
+                            };
+                        }
+                        return DecodedMips::single(cur_w, cur_h, cur_rgba);
+                    }
+                    Err(_) => {
+                        return DecodedMips {
+                            width: backup_width,
+                            height: backup_height,
+                            storage: backup_storage,
+                            packed: backup_packed,
+                            level_sizes: backup_sizes,
+                        };
+                    }
+                }
+            }
+        }
         self
     }
 
@@ -165,6 +207,36 @@ impl DecodedMips {
         };
         Ok((self.width, self.height, pixels))
     }
+}
+
+#[cfg(target_os = "horizon")]
+fn downscale_rgba8_half(width: u32, height: u32, pixels: &[u8]) -> (u32, u32, Vec<u8>) {
+    let nw = (width / 2).max(1) as usize;
+    let nh = (height / 2).max(1) as usize;
+    let w = width as usize;
+    let h = height as usize;
+    let mut out = vec![0u8; nw * nh * 4];
+    for y in 0..nh {
+        let sy0 = y * 2;
+        let sy1 = (sy0 + 1).min(h.saturating_sub(1));
+        let row0 = sy0 * w * 4;
+        let row1 = sy1 * w * 4;
+        let out_row = y * nw * 4;
+        for x in 0..nw {
+            let sx0 = x * 2 * 4;
+            let sx1 = ((x * 2 + 1).min(w.saturating_sub(1))) * 4;
+            let p00 = &pixels[row0 + sx0..row0 + sx0 + 4];
+            let p01 = &pixels[row0 + sx1..row0 + sx1 + 4];
+            let p10 = &pixels[row1 + sx0..row1 + sx0 + 4];
+            let p11 = &pixels[row1 + sx1..row1 + sx1 + 4];
+            let out_idx = out_row + x * 4;
+            out[out_idx] = ((u32::from(p00[0]) + u32::from(p01[0]) + u32::from(p10[0]) + u32::from(p11[0])) / 4) as u8;
+            out[out_idx + 1] = ((u32::from(p00[1]) + u32::from(p01[1]) + u32::from(p10[1]) + u32::from(p11[1])) / 4) as u8;
+            out[out_idx + 2] = ((u32::from(p00[2]) + u32::from(p01[2]) + u32::from(p10[2]) + u32::from(p11[2])) / 4) as u8;
+            out[out_idx + 3] = ((u32::from(p00[3]) + u32::from(p01[3]) + u32::from(p10[3]) + u32::from(p11[3])) / 4) as u8;
+        }
+    }
+    (nw as u32, nh as u32, out)
 }
 
 #[derive(Clone, Copy)]
@@ -227,10 +299,11 @@ pub(super) fn decode_iwi_mips_with(bytes: &[u8], keep_bc5: bool) -> Result<Decod
             header.format,
             keep_bc5,
         )?;
-        Ok(match storage {
+        let mips = match storage {
             MipStorage::Rgba8 => DecodedMips::single(w, h, pixels),
             other => DecodedMips::single_compressed(w, h, other, pixels),
-        })
+        };
+        Ok(mips)
     };
     let count = mip_level_count(header.width, header.height);
     if count <= 1 {

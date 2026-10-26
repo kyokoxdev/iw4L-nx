@@ -797,15 +797,28 @@ fn entity_string_iw5<'a>(s: &'a fastfile_iw5::ZoneStream<'_>) -> Option<&'a str>
 }
 
 pub fn parse_intermission_view(text: &str) -> Option<IntermissionView> {
+    let mut fallback = None;
     for entity in parse_entities(text) {
         if entity.classname.as_deref() == Some("mp_global_intermission") {
             return Some(IntermissionView {
                 origin: entity.origin?,
                 angles: entity.angles.unwrap_or([0.0, 0.0, 0.0]),
             });
+        } else if fallback.is_none()
+            && matches!(
+                entity.classname.as_deref(),
+                Some("info_player_start" | "info_player_deathmatch")
+            )
+        {
+            if let Some(origin) = entity.origin {
+                fallback = Some(IntermissionView {
+                    origin,
+                    angles: entity.angles.unwrap_or([0.0, 0.0, 0.0]),
+                });
+            }
         }
     }
-    None
+    fallback
 }
 
 fn parse_spawn_points(text: &str, classnames: &[&str]) -> Vec<SpawnPoint> {

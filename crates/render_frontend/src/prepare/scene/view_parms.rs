@@ -24,6 +24,10 @@ pub(crate) fn stamp_prepared_scene_view(
     subwindow: Res<RSubwindowDvar>,
     hosts: Query<&Transform, With<FlyCamera>>,
     mut lenses: Query<(&Transform, &Projection, &mut Camera), With<FpvLens>>,
+    briefing: Option<Res<frame::LoadCinematicPlaying>>,
+    fullscreen_video: Option<Res<frame::FullscreenCinematicPlaying>>,
+    loading: Option<Res<assets::LoadingScreen>>,
+    spawn: Option<Res<crate::prepare::scene::spawn::WorldSpawnJob>>,
 ) {
     *view = PreparedSceneView::default();
     let Ok(parent) = hosts.single() else {
@@ -32,6 +36,17 @@ pub(crate) fn stamp_prepared_scene_view(
     let Ok((child, projection, mut camera)) = lenses.single_mut() else {
         return;
     };
+    let is_obscured = briefing.is_some()
+        || fullscreen_video.is_some()
+        || loading.is_some()
+        || spawn.as_ref().is_some_and(|j| j.phase == crate::prepare::scene::spawn::WorldSpawnPhase::Gpu);
+    let active = !is_obscured;
+    if camera.is_active != active {
+        camera.is_active = active;
+    }
+    if !active {
+        return;
+    }
     let Projection::Perspective(persp) = projection else {
         return;
     };

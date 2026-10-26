@@ -30,7 +30,25 @@ pub(crate) fn register(app: &mut App) {
         .add_systems(Update, sync_render_resolution);
 }
 
+/// World render scale, `IW4L_RENDER_SCALE` in 0.25..=1. The Switch defaults
+/// to 0.625 (800x450 of 720p), the way the 360/PS3 ports drew below 720p.
+fn render_scale() -> f32 {
+    let default = if cfg!(target_os = "horizon") { 0.625 } else { 1.0 };
+    std::env::var("IW4L_RENDER_SCALE")
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|scale| scale.is_finite())
+        .unwrap_or(default)
+        .clamp(0.25, 1.0)
+}
+
 fn scaled_size(settings: &frame::GameSettings, window: UVec2) -> Option<UVec2> {
+    let scale = render_scale();
+    if scale < 1.0 && window.y > 0 && window.x > 0 {
+        let rows = ((window.y as f32 * scale).round() as u32).max(1);
+        let columns = ((window.x as f32 * scale).round() as u32).max(1);
+        return Some(UVec2::new(columns, rows));
+    }
     let rows = settings.resolution.height;
     if !settings.fullscreen || rows == 0 || window.y == 0 || rows >= window.y {
         return None;
@@ -41,8 +59,14 @@ fn scaled_size(settings: &frame::GameSettings, window: UVec2) -> Option<UVec2> {
 }
 
 fn target_image(size: UVec2) -> Image {
-    let mut image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
+    let format = if cfg!(target_os = "horizon") {
+        TextureFormat::Rgba8Unorm
+    } else {
+        TextureFormat::Rgba8UnormSrgb
+    };
+    let mut image = Image::new_target_texture(size.x, size.y, format, None);
     image.data = None;
+    image.copy_on_resize = false;
     image.sampler = ImageSampler::linear();
     image
 }
@@ -88,14 +112,14 @@ fn sync_render_resolution(
             for entity in presents.iter().chain(nodes.iter()) {
                 commands.entity(entity).despawn();
             }
-        }
-        for (mut camera, mut target, mut projection) in &mut lenses {
-            if !matches!(*target, RenderTarget::Window(WindowRef::Primary)) {
-                *target = RenderTarget::Window(WindowRef::Primary);
-                camera.output_mode = CameraOutputMode::default();
-                // The camera recomputes its target size only for changed windows,
-                // images or projections, not for a replaced target.
-                projection.set_changed();
+            for (mut camera, mut target, mut projection) in &mut lenses {
+                if !matches!(*target, RenderTarget::Window(WindowRef::Primary)) {
+                    *target = RenderTarget::Window(WindowRef::Primary);
+                    camera.output_mode = CameraOutputMode::default();
+                    // The camera recomputes its target size only for changed windows,
+                    // images or projections, not for a replaced target.
+                    projection.set_changed();
+                }
             }
         }
         return;
@@ -105,6 +129,14 @@ fn sync_render_resolution(
         .as_ref()
         .is_none_or(|(current, _)| *current != size)
     {
+        diag::info!(
+            World,
+            "render scale: active size={}x{} -> logical_height={:.1} (scale {:.3})",
+            size.x,
+            size.y,
+            logical_height,
+            size.y as f32 / logical_height.max(1.0),
+        );
         let handle = images.add(target_image(size));
         for entity in &nodes {
             commands.entity(entity).despawn();
@@ -113,15 +145,14 @@ fn sync_render_resolution(
             commands
                 .spawn((
                     PresentCamera,
+                    frame::DisplayEncodedCamera,
                     Camera2d,
                     Camera {
                         order: 1,
                         clear_color: ClearColorConfig::Custom(Color::BLACK),
                         ..default()
                     },
-                    // Msaa stays at its default: 2D cameras on one window share a
-                    // depth texture keyed by target alone, so their sample counts
-                    // must agree with the overlay camera's.
+                    bevy::render::view::Msaa::Off,
                     Tonemapping::None,
                     DebandDither::Disabled,
                 ))

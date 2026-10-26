@@ -583,6 +583,115 @@ fn prepare_unshared(
     })
 }
 
+pub fn is_font_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let bare = lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&lower)
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&lower)
+        .strip_suffix(".iwi")
+        .unwrap_or(&lower);
+    let bare = bare.strip_prefix('~').unwrap_or(bare);
+    let bare = bare.strip_prefix('$').unwrap_or(bare);
+
+    bare.contains("font")
+        || lower.contains("fonts/")
+        || lower.contains("/fonts")
+        || lower.contains("gamefont")
+}
+
+pub fn is_fine_ui_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let bare = lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&lower)
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&lower)
+        .strip_suffix(".iwi")
+        .unwrap_or(&lower);
+    let bare = bare.strip_prefix('~').unwrap_or(bare);
+    let bare = bare.strip_prefix('$').unwrap_or(bare);
+
+    bare.starts_with("reticle")
+        || bare.contains("reticle")
+        || bare.starts_with("crosshair")
+        || bare.contains("crosshair")
+        || bare.starts_with("scopeticks")
+        || bare.contains("scopeticks")
+        || bare.starts_with("compass_ticker")
+}
+
+pub fn is_large_ui_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let bare = lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&lower)
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&lower)
+        .strip_suffix(".iwi")
+        .unwrap_or(&lower);
+    let bare = bare.strip_prefix('~').unwrap_or(bare);
+    let bare = bare.strip_prefix('$').unwrap_or(bare);
+
+    bare.starts_with("loadscreen")
+        || bare.starts_with("preview_")
+        || bare.starts_with("compass_map")
+        || bare.starts_with("minimap_")
+}
+
+pub fn is_ui_or_font_name(name: &str) -> bool {
+    is_font_name(name) || is_ui_name(name)
+}
+
+pub fn is_ui_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let bare = lower
+        .rsplit('/')
+        .next()
+        .unwrap_or(&lower)
+        .rsplit('\\')
+        .next()
+        .unwrap_or(&lower)
+        .strip_suffix(".iwi")
+        .unwrap_or(&lower);
+    let bare = bare.strip_prefix('~').unwrap_or(bare);
+    let bare = bare.strip_prefix('$').unwrap_or(bare);
+
+    is_fine_ui_name(name)
+        || is_large_ui_name(name)
+        || bare.starts_with("ui_")
+        || bare.starts_with("hud_")
+        || bare.starts_with("menu_")
+        || bare.starts_with("compass")
+        || bare.contains("compass")
+        || bare.starts_with("killicon")
+        || bare.starts_with("cardicon")
+        || bare.starts_with("cardtitle")
+        || bare.starts_with("rank_")
+        || bare.starts_with("prestige_")
+        || bare.starts_with("specialty_")
+        || bare.starts_with("overlay_")
+        || bare.starts_with("cursor_")
+        || bare.starts_with("gradient_")
+        || bare.starts_with("hit_direction")
+        || bare.starts_with("damage_feedback")
+        || bare.starts_with("talker_")
+        || bare.starts_with("blood_")
+        || bare.starts_with("progress_bar")
+        || bare.starts_with("objective_")
+        || bare.starts_with("map_location_")
+        || bare == "white"
+        || bare == "black"
+}
+
+
 /// Read and decode one name out of the archives, with nothing wrapped around
 /// the result.
 ///
@@ -616,7 +725,13 @@ fn prepare_payload(
             }),
         };
     }
-    match index.decode(name) {
+    let is_ui = is_ui_or_font_name(name) || is_ui_or_font_name(source.name.as_str());
+    let decoded = if is_ui {
+        index.decode_native(name)
+    } else {
+        index.decode(name)
+    };
+    match decoded {
         Some(Ok(mips)) => Ok(PreparedPayload::mips(mips)),
         Some(Err(error)) => Err(ImageOutcome::Unsupported {
             gap: format!("{}: {error}", source.name),
@@ -777,7 +892,7 @@ fn expand_top_level(decoded: Result<DecodedMips, String>) -> Result<(u32, u32, V
 pub fn decode_menu_background(games_root: &Path) -> Result<Option<(u32, u32, Vec<u8>)>, String> {
     for main in ui_decode_mains(games_root) {
         let index = IwdIndex::open(&main)?;
-        match index.decode("menu_mp_image").map(expand_top_level) {
+        match index.decode_native("menu_mp_image").map(expand_top_level) {
             Some(Ok(image)) => return Ok(Some(image)),
             Some(Err(error)) => {
                 diag::info!(
@@ -840,7 +955,7 @@ pub fn decode_ui_image(
         .chain(std::iter::once(key.name.as_str()))
         .chain(fallback)
     {
-        if let Some(image) = index.decode(candidate) {
+        if let Some(image) = index.decode_native(candidate) {
             return expand_top_level(image).map(Some);
         }
     }
@@ -876,7 +991,7 @@ pub fn decode_ui_image_from_main(
                 .map(|map| format!("loadscreen_mp_{map}"))
         });
     for candidate in std::iter::once(name).chain(fallback.as_deref()) {
-        match index.decode(candidate).map(expand_top_level) {
+        match index.decode_native(candidate).map(expand_top_level) {
             Some(Ok(image)) => return Ok(Some(image)),
             Some(Err(error)) => {
                 diag::warn!(
@@ -932,7 +1047,7 @@ pub fn decode_map_preview(
         format!("loadscreen_{map_name}"),
         format!("preview_{map_name}"),
     ] {
-        match index.decode(&stem).map(expand_top_level) {
+        match index.decode_native(&stem).map(expand_top_level) {
             Some(Ok(image)) => return Ok(Some(image)),
             Some(Err(error)) => {
                 diag::warn!(Zone, "loading: decode {stem}: {error}");
@@ -1086,6 +1201,8 @@ pub fn decode_iwi_texture(
     use_srgb_reads: bool,
 ) -> Result<Image, String> {
     let mips = decode_iwi_mips(bytes)?;
+    #[cfg(target_os = "horizon")]
+    let mips = mips.picmip(256);
     let wrap = WrapRecipe {
         sampler_state,
         is_normal,
@@ -2126,4 +2243,65 @@ fn decode_inline(
         }
     }
     stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_ui_or_font_name() {
+        assert!(is_ui_or_font_name("fonts/gamefonts_normal"));
+        assert!(is_ui_or_font_name("fonts/smallfont"));
+        assert!(is_ui_or_font_name("fonts/bigfont"));
+        assert!(is_ui_or_font_name("fonts/consolefont"));
+        assert!(is_ui_or_font_name("fonts/hudsmallfont"));
+        assert!(is_ui_or_font_name("fonts/hudbigfont"));
+        assert!(is_ui_or_font_name("images/gamefonts_normal.iwi"));
+        assert!(is_ui_or_font_name("images/smallfont.iwi"));
+        assert!(is_ui_or_font_name("ui_button_highlight"));
+        assert!(is_ui_or_font_name("hud_reticle"));
+        assert!(is_ui_or_font_name("reticle_red_dot"));
+        assert!(is_ui_or_font_name("compassping_friendly_mp"));
+        assert!(is_ui_or_font_name("killicon_headshot"));
+        assert!(is_ui_or_font_name("cardicon_prestige"));
+        assert!(is_ui_or_font_name("progress_bar_fill"));
+        assert!(is_ui_or_font_name("white"));
+        assert!(is_ui_or_font_name("$white"));
+
+        assert!(!is_ui_or_font_name("~vehicle_humvee_col"));
+        assert!(!is_ui_or_font_name("~weapon_m4a1_col"));
+        assert!(!is_ui_or_font_name("ground_dirt_col"));
+        assert!(!is_ui_or_font_name("brick_wall_col"));
+    }
+
+    #[test]
+    fn test_is_font_name() {
+        assert!(is_font_name("fonts/gamefonts_normal"));
+        assert!(is_font_name("fonts/smallfont"));
+        assert!(is_font_name("fonts/hudsmallfont"));
+        assert!(is_font_name("images/gamefonts_normal.iwi"));
+        assert!(!is_font_name("hud_reticle"));
+        assert!(!is_font_name("loadscreen_roadkill"));
+    }
+
+    #[test]
+    fn test_is_fine_ui_name() {
+        assert!(is_fine_ui_name("reticle_red_dot"));
+        assert!(is_fine_ui_name("hud_reticle"));
+        assert!(is_fine_ui_name("crosshair_default"));
+        assert!(is_fine_ui_name("compass_ticker"));
+        assert!(!is_fine_ui_name("loadscreen_roadkill"));
+        assert!(!is_fine_ui_name("fonts/smallfont"));
+    }
+
+    #[test]
+    fn test_is_large_ui_name() {
+        assert!(is_large_ui_name("loadscreen_roadkill"));
+        assert!(is_large_ui_name("preview_invasion"));
+        assert!(is_large_ui_name("compass_map_roadkill"));
+        assert!(is_large_ui_name("minimap_estate"));
+        assert!(!is_large_ui_name("fonts/smallfont"));
+        assert!(!is_large_ui_name("reticle_red_dot"));
+    }
 }

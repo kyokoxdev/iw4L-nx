@@ -60,7 +60,10 @@ pub struct Header {
 const FLAG_ALPHA: u32 = 0x0010_0000;
 const AUD_STEREO: u16 = 0x2000;
 const AUD_DCT: u16 = 0x1000;
+#[cfg(target_os = "horizon")]
 const PREFETCH_CAPACITY: usize = 90;
+#[cfg(not(target_os = "horizon"))]
+const PREFETCH_CAPACITY: usize = 180;
 
 struct Prefetch {
     rx: Receiver<Result<Vec<u8>, std::io::Error>>,
@@ -195,6 +198,11 @@ impl Bink {
         std::thread::Builder::new()
             .name("iw4l-bink-io".into())
             .spawn(move || {
+                #[cfg(target_os = "horizon")]
+                {
+                    platform_nx::pin_current_thread(1, 0b110, "iw4l-bink-io");
+                    platform_nx::raise_current_thread("iw4l-bink-io");
+                }
                 for (offset, size) in remaining_index {
                     if stop_reader.load(Ordering::Relaxed) {
                         break;

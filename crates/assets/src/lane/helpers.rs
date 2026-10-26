@@ -20,7 +20,8 @@ use asset_world::{
 #[derive(Default)]
 pub(crate) struct MapXModelCatalog {
     pub shared_surfaces: asset_model::SharedXModelSurfaces,
-    meshes: Vec<ModelMesh>,
+    meshes: Vec<Option<ModelMesh>>,
+    names: Vec<String>,
     direct: HashMap<Ptr, usize>,
     aliases: HashMap<Ptr, Ptr>,
     failed: usize,
@@ -37,14 +38,15 @@ struct T5DestructibleInitial {
 
 impl MapXModelCatalog {
     pub(crate) fn take_named_mesh(&mut self, name: &str) -> Option<ModelMesh> {
-        let index = self.meshes.iter().position(|mesh| mesh.name == name)?;
+        let index = self.names.iter().position(|n| n == name)?;
         self.direct.retain(|_, slot| *slot != index);
         for slot in self.direct.values_mut() {
             if *slot > index {
                 *slot -= 1;
             }
         }
-        Some(self.meshes.remove(index))
+        self.names.remove(index);
+        self.meshes.remove(index)
     }
 
     pub(crate) fn set_capture_zone(&mut self, zone: asset_core::ZoneOwner) {
@@ -89,11 +91,23 @@ impl MapXModelCatalog {
             reason: "IW4 XModel scene skeleton capture failed",
         });
         self.scene_assets.insert(scene_key, scene_asset);
-        let Ok(mesh) = build_xmodel_mesh(stream, geometry, Some(materials)) else {
-            self.failed += 1;
-            return;
+        let is_dynamic_only = matches!(
+            asset_model::model_kind(name),
+            Some(asset_model::ModelKind::Fpv | asset_model::ModelKind::Soldier)
+        );
+        let mesh = if is_dynamic_only {
+            None
+        } else {
+            match build_xmodel_mesh(stream, geometry, Some(materials)) {
+                Ok(mesh) => Some(mesh),
+                Err(_) => {
+                    self.failed += 1;
+                    None
+                }
+            }
         };
         let index = self.meshes.len();
+        self.names.push(name.to_owned());
         self.meshes.push(mesh);
         self.direct.insert(slot, index);
         if let Some(insert_slot) = insert_slot {
@@ -125,7 +139,8 @@ impl MapXModelCatalog {
             });
         self.scene_assets.insert(scene_key, scene_asset);
         let index = self.meshes.len();
-        self.meshes.push(mesh);
+        self.names.push(mesh.name.clone());
+        self.meshes.push(Some(mesh));
         let slot = Ptr {
             block: slot.block,
             offset: slot.offset,
@@ -327,7 +342,8 @@ impl MapXModelCatalog {
             return;
         };
         let index = self.meshes.len();
-        self.meshes.push(mesh);
+        self.names.push(mesh.name.clone());
+        self.meshes.push(Some(mesh));
         let slot = Ptr {
             block: slot.block,
             offset: slot.offset,
@@ -361,7 +377,7 @@ impl MapXModelCatalog {
 
     pub(crate) fn name_at_slot(&self, slot: Ptr) -> Option<&str> {
         let index = self.mesh_index(slot)?;
-        Some(self.meshes[index].name.as_str())
+        self.names.get(index).map(String::as_str)
     }
 
     pub(crate) fn attach_t5_clip_models(
@@ -623,14 +639,17 @@ pub(crate) fn link_model_placements(
     let mut instances: Vec<Option<StaticModelPlacement>> = vec![None; smodel_count];
     let mut script_instances = Vec::with_capacity(scripts.len());
 
-    let mut take_mesh = |source_mesh: usize| -> usize {
+    let mut take_mesh = |source_mesh: usize| -> Option<usize> {
         match remap[source_mesh] {
-            Some(mesh) => mesh,
+            Some(mesh) => Some(mesh),
             None => {
+                if catalog.meshes.get(source_mesh).and_then(Option::as_ref).is_none() {
+                    return None;
+                }
                 let mesh = used.len();
                 remap[source_mesh] = Some(mesh);
                 used.push(source_mesh);
-                mesh
+                Some(mesh)
             }
         }
     };
@@ -641,7 +660,10 @@ pub(crate) fn link_model_placements(
                 gaps += 1;
                 continue;
             };
-            let mesh = take_mesh(source_mesh);
+            let Some(mesh) = take_mesh(source_mesh) else {
+                gaps += 1;
+                continue;
+            };
             let basis = Mat3::from_cols(
                 Vec3::from_array(placement.axis[0]),
                 Vec3::from_array(placement.axis[1]),
@@ -737,11 +759,13 @@ pub(crate) fn link_model_placements(
         });
     }
 
-    let mut meshes = catalog.meshes.into_iter().map(Some).collect::<Vec<_>>();
-    let meshes = used
+    let mut catalog_meshes = catalog.meshes;
+    let mut meshes: Vec<ModelMesh> = used
         .into_iter()
-        .filter_map(|index| meshes.get_mut(index).and_then(Option::take))
+        .filter_map(|index| catalog_meshes.get_mut(index).and_then(Option::take))
         .collect();
+    meshes.shrink_to_fit();
+    drop(catalog_meshes);
     PreparedMapModels {
         static_draw: StaticModelDraw {
             meshes,

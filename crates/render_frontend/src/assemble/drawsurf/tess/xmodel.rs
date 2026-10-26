@@ -1102,7 +1102,16 @@ fn publish_decoded_share(merged: &mut XModelDrawPlan) {
         merged.decoded_share = None;
         return;
     }
-    merged.decoded_share = Some(Arc::new(std::mem::take(&mut merged.vertices)));
+    #[cfg(target_os = "horizon")]
+    {
+        merged.vertices.clear();
+        merged.vertices.shrink_to_fit();
+        merged.decoded_share = None;
+    }
+    #[cfg(not(target_os = "horizon"))]
+    {
+        merged.decoded_share = Some(Arc::new(std::mem::take(&mut merged.vertices)));
+    }
 }
 
 fn packed_row_count(payload: &asset_world::PackedVertexPayload) -> usize {

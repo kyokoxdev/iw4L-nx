@@ -300,6 +300,12 @@ const PARKED_LIMIT: usize = 16;
 #[cfg(not(target_os = "horizon"))]
 const PARKED_LIMIT: usize = 256;
 
+pub fn clear_parked_archives() {
+    let mut map = parked().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.clear();
+    PARKED_N.store(0, Ordering::Relaxed);
+}
+
 static PARKED_N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn index_lane_width() -> usize {
@@ -608,7 +614,7 @@ pub struct IwdSoundIndex {
 }
 
 fn sound_key(relative: &str) -> String {
-    relative.replace('\\', "/").to_ascii_lowercase()
+    relative.trim_start_matches('/').replace('\\', "/").to_ascii_lowercase()
 }
 
 fn sound_rel_from_zip_name(name: &str, language: Option<&str>) -> Option<String> {

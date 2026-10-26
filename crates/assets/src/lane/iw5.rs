@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use super::helpers::{
     decode_reflection_probes, report_ffa_spawns, report_intermission, report_map_models,
@@ -131,7 +132,7 @@ impl ZoneLane for Iw5Lane {
     fn load_world(
         &self,
         path: &Path,
-        image: &ZoneImage,
+        image: Arc<ZoneImage>,
         progress: &LoadProgress,
         shared_surfaces: asset_model::SharedXModelSurfaces,
         material_seed: asset_material::MaterialCatalog,

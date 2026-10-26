@@ -46,10 +46,6 @@ impl Plugin for RenderPreparePlugin {
             .init_resource::<crate::prepare::scene::smodel_geom_cache::LodRampDvar>()
             .init_resource::<crate::prepare::scene::smodel_geom_cache::LodRampSkinnedDvar>()
             .scoped::<crate::prepare::scene::smodel_geom_cache::FrontendWorkerCmds>(frame::MatchScope::Live)
-            .add_systems(
-                Startup,
-                crate::prepare::scene::world_occupancy::init_presenter_quad_mesh,
-            )
             .configure_sets(
                 Update,
                 (

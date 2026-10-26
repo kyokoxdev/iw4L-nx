@@ -1096,7 +1096,7 @@ fn prepare_shadowmap_spot(
         for flush in &work.world_flushes {
             let (start, count) = prim_args_u32_index_span(prim_args_from_world_flush(*flush));
             let Some((start, count)) =
-                world_shadow_zone_span(start, count, geometry.world_cpu_indices.len())
+                world_shadow_zone_span(start, count, geometry.world_index_count)
             else {
                 miss = miss.saturating_add(1);
                 *miss_rows
@@ -1687,7 +1687,7 @@ fn prepare_shadowmap_sun(
         }
         ms_emit += emit_started.elapsed().as_secs_f32() * 1000.0;
         let prepare_started = Instant::now();
-        let src_index_n = geometry.world_cpu_indices.len();
+        let src_index_n = geometry.world_index_count;
         let world_spans: Vec<Option<(u32, u32)>> = work
             .world_flushes
             .iter()

@@ -138,12 +138,17 @@ fn start_match_load(
         );
     }
     *waiting_for_retirement = None;
-    if let Some(error) = request
-        .zone_ff
-        .as_ref()
-        .err()
-        .or_else(|| request.common_mp.as_ref().err())
-    {
+    let is_sp = asset_transport::campaign_zone_set();
+    let error = if is_sp {
+        request.zone_ff.as_ref().err()
+    } else {
+        request
+            .zone_ff
+            .as_ref()
+            .err()
+            .or_else(|| request.common_mp.as_ref().err())
+    };
+    if let Some(error) = error {
         failed.write(MapLoadFailed {
             request_id: request.request_id,
             load_key: request.load_key,
@@ -316,6 +321,7 @@ fn approve_map_load(
             crate::session_load::forget_common();
             crate::session_load::clear_resident_map();
             asset_audio::clear_sound_store();
+            asset_transport::clear_parked_archives();
         }
         let trees = asset_transport::NamespaceTrees::discover(&games);
         let have =
@@ -356,15 +362,28 @@ fn approve_map_load(
             .map(|zone| zone.zone_name.clone())
             .unwrap_or_else(|_| request.zone.clone());
         let zone_ff = found.map(|zone| zone.path);
-        let common_mp = match &zone_ff {
-            Ok(path) => asset_transport::find_runtime_common_mp(&games, path).map(|zone| zone.path),
-            Err(error) => Err(error.clone()),
+        let common_mp = if campaign {
+            match &zone_ff {
+                Ok(path) => asset_transport::find_runtime_common(&games, path)
+                    .map(|zone| zone.path)
+                    .or_else(|_| asset_transport::find_runtime_common_mp(&games, path).map(|zone| zone.path)),
+                Err(error) => Err(error.clone()),
+            }
+        } else {
+            match &zone_ff {
+                Ok(path) => asset_transport::find_runtime_common_mp(&games, path).map(|zone| zone.path),
+                Err(error) => Err(error.clone()),
+            }
         };
-        let error = zone_ff
-            .as_ref()
-            .err()
-            .or_else(|| common_mp.as_ref().err())
-            .cloned();
+        let error = if campaign {
+            zone_ff.as_ref().err().cloned()
+        } else {
+            zone_ff
+                .as_ref()
+                .err()
+                .or_else(|| common_mp.as_ref().err())
+                .cloned()
+        };
         if let Some(error) = error {
             failed.write(MapLoadFailed {
                 request_id: request.request_id,

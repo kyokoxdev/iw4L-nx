@@ -61,6 +61,7 @@ enum Kind {
 fn remove(c: &Cinematic, commands: &mut Commands) {
     commands.entity(c.root).despawn();
     commands.remove_resource::<Cinematic>();
+    commands.remove_resource::<frame::FullscreenCinematicPlaying>();
     match c.kind {
         Kind::Intro(_) => commands.remove_resource::<frame::IntroPlaying>(),
         Kind::Load => commands.remove_resource::<frame::LoadCinematicPlaying>(),
@@ -307,6 +308,9 @@ fn start_looped(
         })
         .map_err(bink::Error::Io)?;
 
+    if fullscreen {
+        commands.insert_resource(frame::FullscreenCinematicPlaying);
+    }
     commands.insert_resource(Cinematic {
         frames: frames.into(),
         recycle,

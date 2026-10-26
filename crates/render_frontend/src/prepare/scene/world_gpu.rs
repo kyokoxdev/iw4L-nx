@@ -245,6 +245,8 @@ pub(crate) fn poll(
             && let Some(stage) = wait.pipelines_stage.take()
         {
             stage.done();
+            diag::release_freed_heap();
+            asset_transport::clear_parked_archives();
         }
     }
     let ready = gpu.is_some_and(|gpu| gpu.live_for(spawn));
@@ -276,6 +278,8 @@ pub(crate) fn poll(
     }
     if let Some(stage) = wait.stage.take() {
         stage.done();
+        diag::release_freed_heap();
+        asset_transport::clear_parked_archives();
     }
     if let Some(stage) = wait.images_stage.take() {
         stage.done();
@@ -399,6 +403,5 @@ pub(crate) fn consume_gpu_load_progress(
         && progress.generation == world_gen
         && progress.warmup.ready == progress.warmup.total
         && progress.waiting_n == 0
-        && progress.working_hits > 0
-        && progress.working_not_ready == 0;
+        && (progress.working_hits == 0 || progress.working_not_ready == 0);
 }

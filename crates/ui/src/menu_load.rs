@@ -133,6 +133,7 @@ pub(crate) fn begin_load_from_session(
         commands.remove_resource::<frame::FrontendContentLoading>();
         assets::forget_common();
         assets::clear_resident_map();
+        asset_transport::clear_parked_archives();
     }
     let (zone, zone_ff, common_mp, zone_alias, loading_title) = resolve_zone(&games, &fact.zone);
     if loading.as_ref().is_some_and(|s| s.title() == loading_title) {
@@ -152,6 +153,14 @@ pub(crate) fn begin_load_from_session(
     class_overlay.0 = false;
     *app_screen = AppScreen::Loading;
     commands.insert_resource(probe);
+    let selected_mode = if is_sp {
+        sim::HostGameModeSelection::CAMPAIGN
+    } else {
+        mode.as_deref()
+            .copied()
+            .unwrap_or_else(sim::HostGameModeSelection::from_env)
+    };
+    commands.insert_resource(selected_mode);
     insert_loading_chrome(
         &mut commands,
         progress,
@@ -159,9 +168,7 @@ pub(crate) fn begin_load_from_session(
         &zone,
         zone_ff,
         fact.request_id,
-        mode.as_deref()
-            .copied()
-            .unwrap_or_else(sim::HostGameModeSelection::from_env),
+        selected_mode,
     );
     diag::info!(
         Ui,
@@ -188,6 +195,7 @@ pub(crate) fn restore_menu_on_return(
     }
     class_overlay.0 = false;
     *app_screen = AppScreen::MainMenu;
+    commands.remove_resource::<sim::HostGameModeSelection>();
 
     dismiss_loading_overlay(&mut commands, chrome.iter(), overlay_cams.iter(), false);
     if maps.0.is_empty() {

@@ -35,6 +35,7 @@ pub use session::{
     DisplayEncodedCamera, FrontendPending, GamePaused, Headless, HostClassLoadouts, HostClassSlot,
     HudDraw, HudInputView, InstalledMatch, IntroPlaying, LaunchIdentity, LaunchReport,
     LifeEndCause, LifeEnded, LifeStartReason, LifeStarted, LoadCinematicPlaying, LocalLoadKey,
+    FullscreenCinematicPlaying,
     LocalSpawnArmed, MapLoadApproved, MapLoadFailed, MatchKey, PresentationContext,
     ReadinessState, RuntimeRole, TeardownReason, UiCamera, UiDraw, UiOverlayInput,
     UiPointerFree, ViewSubject, WorldGeneration, WorldProducts, WorldReadiness, WorldStamp,

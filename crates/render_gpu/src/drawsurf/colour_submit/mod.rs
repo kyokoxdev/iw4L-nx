@@ -2004,6 +2004,10 @@ pub(super) fn gather_world_run_indices_into(
     ranges.clear();
     ranges.resize(src_ranges.len(), (0, 0));
     indices.clear();
+    if indices.capacity() < src_indices.len() {
+        let needed = src_indices.len().saturating_sub(indices.capacity());
+        let _ = indices.try_reserve_exact(needed);
+    }
     let mut prev: Option<(u64, super::SurfaceSamplerInputs, u32)> = None;
     let mut index_gaps = 0u32;
     for (surf, key, samplers) in hits {
@@ -2021,6 +2025,11 @@ pub(super) fn gather_world_run_indices_into(
             prev = None;
             continue;
         };
+        if indices.len().saturating_add(slice.len()) > indices.capacity()
+            && indices.try_reserve(slice.len()).is_err()
+        {
+            break;
+        }
         if let Some((prev_key, prev_samplers, end)) = prev
             && prev_key == key
             && prev_samplers == samplers

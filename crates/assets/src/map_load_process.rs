@@ -74,6 +74,7 @@ impl MapLoadProcess {
             self.progress.record_skipped(StageId::Admission);
         }
         let installed_ms = self.requested_at.elapsed().as_secs_f32() * 1000.0;
+        asset_transport::clear_parked_archives();
         let trim_ms = diag::release_freed_heap().as_secs_f32() * 1000.0;
         let with_trim_ms = self.requested_at.elapsed().as_secs_f32() * 1000.0;
         let rss = asset_transport::process_resident_bytes()

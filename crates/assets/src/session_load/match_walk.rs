@@ -164,13 +164,12 @@ pub(super) async fn walk_prepared_match(
             };
             let loaded = lane(game).load_world(
                 &path,
-                &image,
+                image,
                 &progress,
                 shared_surfaces,
                 material_seed,
                 &common_film_visions,
             );
-            drop(image);
             #[cfg(target_os = "horizon")]
             {
                 diag::release_freed_heap();

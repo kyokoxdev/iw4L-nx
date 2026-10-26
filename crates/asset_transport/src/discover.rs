@@ -663,6 +663,10 @@ pub fn find_runtime_zone(root: &GamesRoot, zone_ff: &Path, zone: &str) -> Result
     }
 }
 
+pub fn find_runtime_common(root: &GamesRoot, zone_ff: &Path) -> Result<ZoneFile, String> {
+    find_runtime_zone(root, zone_ff, "common")
+}
+
 pub fn find_runtime_common_mp(root: &GamesRoot, zone_ff: &Path) -> Result<ZoneFile, String> {
     find_runtime_zone(root, zone_ff, "common_mp")
 }

@@ -1002,7 +1002,11 @@ pub(super) async fn walk_startup_material_zones(
     Vec<asset_world::CapturedLightDef>,
     crate::ScriptSources,
 ) {
-    const STARTUP_ZONES: [&str; 3] = ["code_post_gfx_mp", "localized_code_post_gfx_mp", "patch_mp"];
+    let startup_zones: &[&str] = if asset_transport::campaign_zone_set() {
+        &["code_post_gfx", "patch"]
+    } else {
+        &["code_post_gfx_mp", "localized_code_post_gfx_mp", "patch_mp"]
+    };
     let Some(map_path) = map_path else {
         return (
             MaterialCatalog::default(),
@@ -1014,7 +1018,9 @@ pub(super) async fn walk_startup_material_zones(
     };
     let games = games_root_from_env().ok();
 
-    let opened = STARTUP_ZONES
+    let opened: Vec<_> = startup_zones
+        .iter()
+        .copied()
         .map(|zone| {
             let games = games.clone();
             let map_path = map_path.clone();
@@ -1037,7 +1043,7 @@ pub(super) async fn walk_startup_material_zones(
                 })
             })
         })
-        .into_iter();
+        .collect();
     let mut seed = MaterialCatalog::default();
     let mut report = Vec::new();
     let mut reuse_mat = 0usize;
@@ -1046,7 +1052,7 @@ pub(super) async fn walk_startup_material_zones(
     let mut stats = Vec::new();
     let mut light_defs = Vec::new();
     let mut scripts = crate::ScriptSources::default();
-    for (zone, task) in STARTUP_ZONES.into_iter().zip(opened) {
+    for (&zone, task) in startup_zones.iter().zip(opened) {
         match task.await {
             Ok((path, image)) => {
                 let envelope = peek_zone_version(&path)
@@ -1066,7 +1072,7 @@ pub(super) async fn walk_startup_material_zones(
                 seed = pop.materials;
                 light_defs.extend(pop.light_defs);
                 scripts.overlay(pop.scripts);
-                if zone == "code_post_gfx_mp" {
+                if zone == "code_post_gfx_mp" || zone == "code_post_gfx" {
                     stats = pop.cac_tables;
                 }
                 zones_ok += 1;

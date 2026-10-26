@@ -30,7 +30,9 @@ struct SkinnedSpan {
 }
 
 impl SmodelSkinnedTess {
-    pub(super) fn begin_frame(&mut self) {}
+    pub(super) fn begin_frame(&mut self) {
+        self.forget();
+    }
 
     fn forget(&mut self) {
         self.verts.clear();

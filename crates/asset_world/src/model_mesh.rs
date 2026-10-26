@@ -1083,6 +1083,33 @@ pub fn build_xmodel_mesh(
     })
 }
 
+pub fn inspect_xmodel_mesh_counts(
+    stream: &ZoneStream<'_>,
+    geometry: XModelGeometry,
+) -> Result<(usize, usize, usize), fastfile_iw4::ZoneError> {
+    let mut total_vertices = 0usize;
+    let mut total_triangles = 0usize;
+    let mut total_surfaces = 0usize;
+    for lod in 0..4 {
+        let Some(surfaces) = geometry.lod_xsurfaces[lod] else {
+            continue;
+        };
+        let count = geometry.lod_numsurfs[lod] as usize;
+        if count == 0 {
+            continue;
+        }
+        total_surfaces += count;
+        for surface_index in 0..count {
+            let surface = surfaces.at(surface_index * stream.layout(sz::XSURFACE, 88));
+            let vertex_count = stream.u16_at(surface, 2)? as usize;
+            let tri_count = stream.u16_at(surface, 4)? as usize;
+            total_vertices += vertex_count;
+            total_triangles += tri_count;
+        }
+    }
+    Ok((total_vertices, total_triangles, total_surfaces))
+}
+
 pub fn build_t5_xmodel_mesh(
     stream: &fastfile_t5::ZoneStream<'_>,
     geometry: fastfile_t5::XModelGeometry,

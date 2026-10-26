@@ -1,5 +1,5 @@
 use super::decode::{CubemapFaces, DecodedMips, decode_iwi_cubemap};
-use super::disk_cache::load_or_decode_mips;
+use super::disk_cache::{load_or_decode_mips, load_or_decode_mips_native};
 use crate::ImageVariantId;
 use asset_iw4::{IWI_V8_HEADER_LEN, IwiHeader};
 use std::path::{Path, PathBuf};
@@ -46,7 +46,22 @@ impl IwdIndex {
         let candidates = self.0.image_candidates(name)?;
         let mut first_error = None;
         for candidate in candidates {
-            match load_or_decode_mips(candidate) {
+            match load_or_decode_mips(candidate, name) {
+                Ok(image) => return Some(Ok(image)),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        Some(Err(
+            first_error.unwrap_or_else(|| "empty IWD candidate list".into())
+        ))
+    }
+
+    pub(super) fn decode_native(&self, name: &str) -> Option<Result<DecodedMips, String>> {
+        let candidates = self.0.image_candidates(name)?;
+        let mut first_error = None;
+        for candidate in candidates {
+            match load_or_decode_mips_native(candidate, name) {
                 Ok(image) => return Some(Ok(image)),
                 Err(error) if first_error.is_none() => first_error = Some(error),
                 Err(_) => {}

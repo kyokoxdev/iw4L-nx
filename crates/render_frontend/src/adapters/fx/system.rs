@@ -771,6 +771,12 @@ fn commit_fx_transaction(
             plan.miss_material = plan.miss_material.saturating_add(1);
             continue;
         };
+        if !sprite.viewmodel && !planes.is_empty() {
+            let radius = sprite.size0.max(sprite.size1);
+            if dpvs_iw4::scene_ent_sphere_hides(sprite.origin, radius, planes) {
+                continue;
+            }
+        }
         batches
             .entry((asset_id, sprite.viewmodel))
             .or_default()

@@ -693,7 +693,14 @@ pub(super) fn record_geometry<'a>(
     use super::encode::{RecordGeometry, RecordMesh};
     let mesh = |kind| {
         let (vertex, index) = match kind {
-            ExactTessBind::World => (geometry.world_vertex.as_ref(), pretess.index()),
+            ExactTessBind::World => (
+                geometry.world_vertex.as_ref(),
+                if pretess.layout.is_some() {
+                    pretess.index()
+                } else {
+                    geometry.world_index.as_ref()
+                },
+            ),
             ExactTessBind::Smodel => (
                 geometry.smodel_vertex.as_ref(),
                 geometry.smodel_index.as_ref(),
@@ -737,7 +744,11 @@ pub(super) fn record_geometry<'a>(
         world_layer: geometry.world_layer.as_ref(),
         world_effect: geometry.world_effect.as_ref(),
         world_probe: geometry.world_probe.as_ref(),
-        world_index_count: pretess.logical_index_count(),
+        world_index_count: if let Some(layout) = pretess.layout.as_ref() {
+            layout.logical_index_count
+        } else {
+            u32::try_from(geometry.world_index_count).unwrap_or(u32::MAX)
+        },
         world_layout_epoch: pretess.layout_epoch(),
     }
 }

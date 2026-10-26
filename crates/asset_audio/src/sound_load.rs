@@ -188,6 +188,14 @@ fn sound_sources(games: &GamesRoot, map: &Path) -> (Vec<SoundSource>, Vec<SoundS
         merge: Merge::Missing,
         absent: Absent::Skip,
     };
+    if asset_transport::campaign_zone_set() {
+        let before_map = vec![
+            runtime("code_post_gfx", Merge::Override, Absent::Skip),
+            runtime("patch", Merge::Override, Absent::Skip),
+            runtime("common", Merge::Override, Absent::Gap),
+        ];
+        return (before_map, Vec::new());
+    }
     let before_map = vec![
         runtime("code_post_gfx_mp", Merge::Override, Absent::Skip),
         runtime("localized_code_post_gfx_mp", Merge::Override, Absent::Skip),

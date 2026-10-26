@@ -6,6 +6,7 @@ license.workspace = true
 description = "Bink 1 video and audio decoder for cinematics."
 
 [dependencies]
+platform_nx.workspace = true
 
 [lints]
 workspace = true

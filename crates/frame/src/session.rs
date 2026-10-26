@@ -49,6 +49,10 @@ pub struct IntroPlaying;
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct LoadCinematicPlaying;
 
+/// A fullscreen cinematic (intro, briefing, or script) is currently playing.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct FullscreenCinematicPlaying;
+
 /// The campaign pause menu is open: game time stops on both the server and
 /// client side, and world sound holds.
 #[derive(Resource, Clone, Copy, Debug, Default)]

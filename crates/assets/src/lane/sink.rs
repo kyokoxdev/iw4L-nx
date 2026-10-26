@@ -154,7 +154,7 @@ use asset_game::{FxCatalog, ImpactFxCatalog, WeaponCatalog};
 use asset_material::MaterialCatalog;
 use asset_model::{BodyMeshBuild, FpvMeshBuild, SoldierKit, WorldWeaponBuild, soldier_kits};
 use asset_transport::StageHandle;
-use asset_world::{ModelKind, build_xmodel_mesh, model_kind};
+use asset_world::{ModelKind, inspect_xmodel_mesh_counts, model_kind};
 
 /// Heap each asset type left live on the walk thread: which capture holds the
 /// memory after the zone itself is freed. `walk` spans are top-level and
@@ -2095,22 +2095,26 @@ impl ModelCensus {
             self.unclassified_names.insert(name.to_owned());
             return;
         };
-        let Ok(model) = build_xmodel_mesh(stream, geometry, None) else {
+        let Ok((vertices, triangles, surfaces)) = inspect_xmodel_mesh_counts(stream, geometry) else {
             self.failed += 1;
             return;
         };
+        if surfaces == 0 {
+            self.failed += 1;
+            return;
+        }
         let totals = match kind {
             ModelKind::Fpv => &mut self.fpv,
             ModelKind::Soldier => &mut self.soldier,
             ModelKind::WorldWeapon => return,
         };
         totals.count += 1;
-        totals.vertices += model.vertices;
-        totals.triangles += model.triangles;
-        totals.surfaces += model.surface_count();
-        totals.first_name.get_or_insert(model.name.clone());
+        totals.vertices += vertices;
+        totals.triangles += triangles;
+        totals.surfaces += surfaces;
+        totals.first_name.get_or_insert_with(|| name.to_owned());
         if kind == ModelKind::Soldier {
-            self.soldier_names.push(model.name);
+            self.soldier_names.push(name.to_owned());
         }
     }
 

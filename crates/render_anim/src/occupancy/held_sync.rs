@@ -3,6 +3,7 @@ use frame::ScopeApp;
 use frame::{LaunchReport, LifeEnded, LifeFrontPublished, LifeStarted, ViewSubject};
 use net::{ClientSet, LocalPresentClient, PresentedSnapshot};
 
+use crate::FpvWeaponSlot;
 use crate::anim::fpv_prepared::{FpvOwnerInputs, PreparedFpv};
 use crate::gaps::{RenderGap, RenderGapCause, RenderPresentationGaps};
 use crate::occupancy::fpv_present::{
@@ -167,7 +168,26 @@ pub fn sync_fpv_to_held_weapon(
     else {
         return;
     };
-    if owners.bind(table).is_none() {
+    let Some(bound_table) = owners.bind(table) else {
+        return;
+    };
+    let meta = presented
+        .snapshot()
+        .and_then(|snap| snap.meta.for_client(local.0));
+    let ffa_team = meta.and_then(|m| m.ffa_team);
+    let client_state_team = meta.map(|m| m.client_state_team).unwrap_or(0);
+    let axis = asset_model::kit_assignment_is_axis(client_state_team, ffa_team);
+    if let Ok(FpvWeaponSlot::Refused(cause)) =
+        bound_table.slot(weapon_handle, parent_handle, axis)
+    {
+        for entity in &existing_fpv {
+            commands.entity(entity).try_despawn();
+        }
+        session_vm.0 = None;
+        pending_fpv.0 = None;
+        settled.0 = Some(held);
+        gaps.raise(cause.clone());
+        status.0 = Some(FpvState::Blocked(cause.clone()));
         return;
     }
     let state = match table.gun_index(held) {

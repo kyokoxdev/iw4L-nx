@@ -1735,9 +1735,17 @@ pub(crate) fn apply_player_links(world: &mut World) {
             (_, Some([pitch_min, pitch_max, yaw_min, yaw_max])) => {
                 let pitch = angle_delta(view[0], parent[0]).clamp(pitch_min, pitch_max);
                 let yaw = angle_delta(view[1], parent[1]).clamp(yaw_min, yaw_max);
-                view = [parent[0] + pitch, parent[1] + yaw, view[2]];
+                view = [
+                    parent[0] + pitch,
+                    parent[1] + yaw,
+                    if link.use_tag_angles { parent[2] } else { view[2] },
+                ];
             }
-            _ => {}
+            _ => {
+                if link.use_tag_angles {
+                    view[2] = parent[2];
+                }
+            }
         }
         if let Some(ps) = frame.player_mut(id) {
             for i in 0..3 {

@@ -215,6 +215,7 @@ fn f32x3(values: &VertexAttributeValues) -> Option<&[[f32; 3]]> {
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 fn f32x2(values: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
     match values {
         VertexAttributeValues::Float32x2(v) => Some(v.as_slice()),
@@ -222,6 +223,7 @@ fn f32x2(values: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
     }
 }
 
+#[cfg(not(target_os = "horizon"))]
 fn f32x4(values: &VertexAttributeValues) -> Option<&[[f32; 4]]> {
     match values {
         VertexAttributeValues::Float32x4(v) => Some(v.as_slice()),
@@ -229,52 +231,95 @@ fn f32x4(values: &VertexAttributeValues) -> Option<&[[f32; 4]]> {
     }
 }
 
-fn append_mesh_surface(
-    mesh: &Mesh,
-    vertices: &mut Vec<SmodelVertex>,
-    indices: &mut Vec<u32>,
-    surface_ranges: &mut Vec<(u32, u32)>,
-) -> Option<u32> {
-    let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(f32x3)?;
-    let normals = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).and_then(f32x3);
-    let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).and_then(f32x2);
-    let colors = mesh.attribute(Mesh::ATTRIBUTE_COLOR).and_then(f32x4);
-    let mesh_indices = mesh.indices()?;
-    let index_count = match mesh_indices {
-        Indices::U32(ix) => ix.len(),
-        Indices::U16(ix) => ix.len(),
-    };
-    let n = positions.len();
-    if n == 0 || index_count == 0 {
-        return None;
+#[derive(Default)]
+struct SmodelVertexSink {
+    #[cfg(not(target_os = "horizon"))]
+    vertices: Vec<SmodelVertex>,
+    #[cfg(target_os = "horizon")]
+    count: usize,
+}
+
+impl SmodelVertexSink {
+    fn len(&self) -> usize {
+        #[cfg(not(target_os = "horizon"))]
+        {
+            self.vertices.len()
+        }
+        #[cfg(target_os = "horizon")]
+        {
+            self.count
+        }
     }
-    let indices_in_range = match mesh_indices {
-        Indices::U32(ix) => ix.iter().all(|&index| (index as usize) < n),
-        Indices::U16(ix) => ix.iter().all(|&index| usize::from(index) < n),
-    };
-    if !indices_in_range {
-        return None;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
     }
-    let base = vertices.len() as u32;
-    vertices.reserve(n);
-    for i in 0..n {
-        vertices.push(SmodelVertex {
-            position: positions[i],
-            normal: normals
-                .and_then(|a| a.get(i).copied())
-                .unwrap_or([0.0, 0.0, 1.0]),
-            color: colors.and_then(|a| a.get(i).copied()).unwrap_or([1.0; 4]),
-            uv0: uvs.and_then(|a| a.get(i).copied()).unwrap_or([0.0; 2]),
-        });
+
+    fn truncate(&mut self, len: usize) {
+        #[cfg(not(target_os = "horizon"))]
+        {
+            self.vertices.truncate(len);
+        }
+        #[cfg(target_os = "horizon")]
+        {
+            self.count = self.count.min(len);
+        }
     }
-    let index_start = indices.len() as u32;
-    match mesh_indices {
-        Indices::U32(ix) => indices.extend(ix.iter().map(|&i| base.saturating_add(i))),
-        Indices::U16(ix) => indices.extend(ix.iter().map(|&i| base.saturating_add(u32::from(i)))),
+
+    fn append_surface(
+        &mut self,
+        mesh: &Mesh,
+        indices: &mut Vec<u32>,
+        surface_ranges: &mut Vec<(u32, u32)>,
+    ) -> Option<u32> {
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(f32x3)?;
+        let mesh_indices = mesh.indices()?;
+        let index_count = match mesh_indices {
+            Indices::U32(ix) => ix.len(),
+            Indices::U16(ix) => ix.len(),
+        };
+        let n = positions.len();
+        if n == 0 || index_count == 0 {
+            return None;
+        }
+        let indices_in_range = match mesh_indices {
+            Indices::U32(ix) => ix.iter().all(|&index| (index as usize) < n),
+            Indices::U16(ix) => ix.iter().all(|&index| usize::from(index) < n),
+        };
+        if !indices_in_range {
+            return None;
+        }
+        let base = self.len() as u32;
+        #[cfg(not(target_os = "horizon"))]
+        {
+            let normals = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).and_then(f32x3);
+            let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).and_then(f32x2);
+            let colors = mesh.attribute(Mesh::ATTRIBUTE_COLOR).and_then(f32x4);
+            self.vertices.reserve(n);
+            for i in 0..n {
+                self.vertices.push(SmodelVertex {
+                    position: positions[i],
+                    normal: normals
+                        .and_then(|a| a.get(i).copied())
+                        .unwrap_or([0.0, 0.0, 1.0]),
+                    color: colors.and_then(|a| a.get(i).copied()).unwrap_or([1.0; 4]),
+                    uv0: uvs.and_then(|a| a.get(i).copied()).unwrap_or([0.0; 2]),
+                });
+            }
+        }
+        #[cfg(target_os = "horizon")]
+        {
+            self.count += n;
+        }
+        let index_start = indices.len() as u32;
+        match mesh_indices {
+            Indices::U32(ix) => indices.extend(ix.iter().map(|&i| base.saturating_add(i))),
+            Indices::U16(ix) => indices.extend(ix.iter().map(|&i| base.saturating_add(u32::from(i)))),
+        }
+        let range_idx = surface_ranges.len() as u32;
+        surface_ranges.push((index_start, index_count as u32));
+        Some(range_idx)
     }
-    let range_idx = surface_ranges.len() as u32;
-    surface_ranges.push((index_start, index_count as u32));
-    Some(range_idx)
 }
 
 pub const UNIT_VERTEX_LIGHTING: [u8; 4] = [45, 45, 45, 255];
@@ -294,8 +339,25 @@ pub fn pack_smodel_meshes(
     Vec<Option<usize>>,
 ) {
     let mut plan = SmodelGpuPlan::default();
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut vertices = SmodelVertexSink::default();
+    let total_indices: usize = meshes
+        .iter()
+        .flat_map(|m| m.lod_surfaces.iter().flatten())
+        .filter_map(|s| match s.mesh.indices()? {
+            Indices::U32(ix) => Some(ix.len()),
+            Indices::U16(ix) => Some(ix.len()),
+        })
+        .sum::<usize>()
+        + copies
+            .iter()
+            .filter_map(|copy| meshes.get(copy.mesh))
+            .flat_map(|m| m.lod_surfaces.iter().flatten())
+            .filter_map(|s| match s.mesh.indices()? {
+                Indices::U32(ix) => Some(ix.len()),
+                Indices::U16(ix) => Some(ix.len()),
+            })
+            .sum::<usize>();
+    let mut indices = Vec::with_capacity(total_indices);
     let mut surface_ranges = Vec::new();
 
     let mut mesh_authored: Vec<Vec<Option<assets::MaterialIndex>>> =
@@ -340,9 +402,8 @@ pub fn pack_smodel_meshes(
                 authored_row.push(surface.material);
                 let decoded_before = vertices.len();
                 let packed_off = packed.len() as u32;
-                let Some(range_idx) = append_mesh_surface(
+                let Some(range_idx) = vertices.append_surface(
                     &surface.mesh,
-                    &mut vertices,
                     &mut indices,
                     &mut surface_ranges,
                 ) else {
@@ -468,12 +529,12 @@ pub fn pack_smodel_meshes(
     #[cfg(target_os = "horizon")]
     {
         plan.decoded_share = None;
-        drop(vertices);
     }
     #[cfg(not(target_os = "horizon"))]
     {
-        plan.decoded_share = Some(Arc::new(vertices));
+        plan.decoded_share = Some(Arc::new(vertices.vertices));
     }
+    indices.shrink_to_fit();
     plan.index_share = Some(Arc::new(indices));
     plan.range_share = Some(Arc::new(surface_ranges));
     let mut vert_ranges =
@@ -568,7 +629,7 @@ pub(crate) fn build_smodel_gpu_plan(
     {
         return;
     }
-    let meshes = std::mem::take(&mut scene.static_model_meshes);
+    let mut meshes = std::mem::take(&mut scene.static_model_meshes);
     let mut slot_vertex_lighting = vec![None; slot_count];
     for sample in &scene.smodel_lighting_samples {
         if let Some(slot) = slot_vertex_lighting.get_mut(sample.authored_slot) {
@@ -593,7 +654,13 @@ pub(crate) fn build_smodel_gpu_plan(
         .collect();
     let (mut plan, mesh_authored, mesh_collision, copy_meshes) =
         pack_smodel_meshes(&meshes, &copies);
-    drop(meshes);
+    // Discard all CPU surfaces from static_model_meshes, retaining only LOD metadata
+    // for spot shadow casters:
+    for model in &mut meshes {
+        model.lod_surfaces = Default::default();
+    }
+    meshes.shrink_to_fit();
+    scene.static_model_meshes = meshes;
     let mut slot_mesh = vec![None; slot_count];
     for (&slot, mesh) in copy_slots.iter().zip(&copy_meshes) {
         slot_mesh[slot] = *mesh;

@@ -29,4 +29,26 @@ fi
 export __CARGO_TESTS_ONLY_SRC_ROOT=$STD
 
 cd "$ROOT"
-exec cargo +nightly "$@" -Zjson-target-spec -Zbuild-std=std,panic_abort --target $ROOT/targets/aarch64-nintendo-switch-newlib.json
+cargo +nightly "$@" -Zjson-target-spec -Zbuild-std=std,panic_abort --target $ROOT/targets/aarch64-nintendo-switch-newlib.json
+
+if [ "$1" = "build" ]; then
+    ELF=""
+    case " $* " in
+        *"--profile play"*) ELF="$CARGO_TARGET_DIR/aarch64-nintendo-switch-newlib/play/iw4l.elf" ;;
+        *"--release"*) ELF="$CARGO_TARGET_DIR/aarch64-nintendo-switch-newlib/release/iw4l.elf" ;;
+        *) ELF="$CARGO_TARGET_DIR/aarch64-nintendo-switch-newlib/play/iw4l.elf" ;;
+    esac
+    if [ ! -f "$ELF" ]; then
+        ELF="$CARGO_TARGET_DIR/aarch64-nintendo-switch-newlib/debug/iw4l.elf"
+    fi
+    if [ -f "$ELF" ]; then
+        NACP="$ROOT/iw4l.nacp"
+        if [ ! -f "$NACP" ]; then
+            "$DEVKITPRO/tools/bin/nacptool" --create "IW4L" "IW4L Team" "0.1.0" "$NACP"
+        fi
+        echo "Packaging $CARGO_TARGET_DIR/iw4l.nro from $ELF..."
+        "$DEVKITPRO/tools/bin/elf2nro" "$ELF" "$CARGO_TARGET_DIR/iw4l.nro" --nacp="$NACP"
+        echo "NRO ready at $CARGO_TARGET_DIR/iw4l.nro"
+    fi
+fi
+

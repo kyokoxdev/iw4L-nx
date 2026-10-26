@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use fastfile_iw4::load_zone;
 
@@ -64,7 +65,7 @@ impl ZoneLane for Iw4Lane {
     fn load_world(
         &self,
         path: &Path,
-        image: &ZoneImage,
+        image: Arc<ZoneImage>,
         progress: &LoadProgress,
         shared_surfaces: asset_model::SharedXModelSurfaces,
         material_seed: asset_material::MaterialCatalog,
@@ -398,6 +399,11 @@ impl ZoneLane for Iw4Lane {
             drop(stream);
             let arena_bytes = memory.total_bytes();
             drop(memory);
+            drop(image);
+            #[cfg(target_os = "horizon")]
+            {
+                diag::release_freed_heap();
+            }
             let mut materials = materials;
             let image_report = decode_map_material_images(
                 path,
@@ -538,6 +544,11 @@ impl ZoneLane for Iw4Lane {
                 drop(stream);
                 let arena_bytes = memory.total_bytes();
                 drop(memory);
+                drop(image);
+                #[cfg(target_os = "horizon")]
+                {
+                    diag::release_freed_heap();
+                }
                 let image_report = decode_map_material_images(
                     path,
                     &mut map_materials,
@@ -711,6 +722,11 @@ impl ZoneLane for Iw4Lane {
                 drop(stream);
                 let arena_bytes = memory.total_bytes();
                 drop(memory);
+                drop(image);
+                #[cfg(target_os = "horizon")]
+                {
+                    diag::release_freed_heap();
+                }
                 let mut map_materials = asset_material::MaterialCatalog::default();
                 let image_report = decode_map_material_images(
                     path,

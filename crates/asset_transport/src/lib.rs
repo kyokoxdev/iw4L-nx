@@ -17,7 +17,7 @@ pub use asset_core::ZoneGame;
 pub use discover::{
     GamesRoot, MapPack, ZoneFile, campaign_zone_set, find_mp_zone_file, with_mp_zones, ensure_artifacts_dir,
     find_common_mp_for_envelope, find_common_mp_for_zone, find_game_install,
-    find_localized_common_mp_for_zone, find_runtime_common_mp, find_runtime_zone, find_zone_file,
+    find_localized_common_mp_for_zone, find_runtime_common, find_runtime_common_mp, find_runtime_zone, find_zone_file,
     find_zone_file_version, find_zone_for_tree, folder_holds_game, game_install_root,
     game_root_for_zone, games_content_report, games_root_from_env, games_root_report,
     group_mp_maps, is_campaign_level, list_mp_map_packs, list_mp_maps, list_sp_maps, load_dotenv,
@@ -26,7 +26,7 @@ pub use discover::{
 };
 pub use ipak::{IPak, ipak_name_hash};
 pub use iwd::{
-    IwdFile, IwdIndex, IwdSoundIndex, cached_iwd_dirs, game_main_for_zone, game_mains_by_root,
+    IwdFile, IwdIndex, IwdSoundIndex, cached_iwd_dirs, clear_parked_archives, game_main_for_zone, game_mains_by_root,
     game_mains_under, inflate_deflate, inflate_zlib, installation_revision, iwd_entry_reads,
     iwd_read_cost, read_iwd_named, read_text,
 };

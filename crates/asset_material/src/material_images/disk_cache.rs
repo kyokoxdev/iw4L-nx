@@ -1,4 +1,6 @@
 use super::decode::{DecodedMips, MipStorage, decode_iwi_mips};
+#[cfg(target_os = "horizon")]
+use super::{is_fine_ui_name, is_font_name, is_large_ui_name, is_ui_name};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[allow(dead_code)]
@@ -111,14 +113,33 @@ fn mip_cache_key(crc: u32, size: u64, entry: &str) -> String {
 
 pub(super) fn load_or_decode_mips(
     candidate: &asset_transport::IwdFile,
+    name: &str,
 ) -> Result<DecodedMips, String> {
     #[cfg(target_os = "horizon")]
     {
         let bytes = candidate.read()?;
-        return decode_iwi_mips(&bytes).map(|mips| mips.picmip(PICMIP_MAX));
+        let mips = decode_iwi_mips(&bytes)?;
+        let entry = candidate.entry();
+        if is_font_name(entry) || is_font_name(name) {
+            // Fonts: NEVER clamp or picmip! Keep 100% native resolution for crystal clear text.
+            Ok(mips)
+        } else if is_fine_ui_name(entry) || is_fine_ui_name(name) {
+            // Reticles, scopes, compass ticks: up to 1024 to keep fine 1px lines crisp.
+            Ok(mips.picmip(1024))
+        } else if is_large_ui_name(entry) || is_large_ui_name(name) {
+            // Large loadscreen & overhead minimap images: clamp to 512 to save 12-15 MB RAM each.
+            Ok(mips.picmip(512))
+        } else if is_ui_name(entry) || is_ui_name(name) {
+            // General UI icons, badges, indicators up to 512.
+            Ok(mips.picmip(512))
+        } else {
+            // 3D world geometry, props, models: clamped to 256 for Switch memory budget.
+            Ok(mips.picmip(PICMIP_MAX))
+        }
     }
     #[cfg(not(target_os = "horizon"))]
     {
+        let _ = name;
         let key = mip_cache_key(candidate.crc32(), candidate.size(), candidate.entry());
         let io_at = std::time::Instant::now();
         if let Some(mips) = read_cached_mips(&key, io_at) {
@@ -139,5 +160,34 @@ pub(super) fn load_or_decode_mips(
         MIP_IO_NS.fetch_add(store_at.elapsed().as_nanos() as u64, Ordering::Relaxed);
         MIP_MISS.fetch_add(1, Ordering::Relaxed);
         Ok(mips)
+    }
+}
+
+pub(super) fn load_or_decode_mips_native(
+    candidate: &asset_transport::IwdFile,
+    name: &str,
+) -> Result<DecodedMips, String> {
+    let bytes = candidate.read()?;
+    #[cfg(target_os = "horizon")]
+    {
+        let mips = decode_iwi_mips(&bytes)?;
+        let entry = candidate.entry();
+        if is_font_name(entry) || is_font_name(name) {
+            // Fonts: NEVER clamp or picmip! Keep 100% native resolution for crystal clear text.
+            Ok(mips)
+        } else if is_fine_ui_name(entry) || is_fine_ui_name(name) {
+            Ok(mips.picmip(1024))
+        } else if is_large_ui_name(entry) || is_large_ui_name(name) {
+            // Large loadscreen & overhead minimap images: clamp to 512 to save 12-15 MB RAM each.
+            Ok(mips.picmip(512))
+        } else {
+            // General UI: 512
+            Ok(mips.picmip(512))
+        }
+    }
+    #[cfg(not(target_os = "horizon"))]
+    {
+        let _ = name;
+        decode_iwi_mips(&bytes)
     }
 }

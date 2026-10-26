@@ -930,7 +930,9 @@ pub(crate) fn link_to(
     let delta: [f32; 3] = std::array::from_fn(|i| origin[i] - base[i]);
     // Campaign scenes link the player to a rig before animating it into place:
     // the player rides the tag itself.
-    let snap = tag.is_some() && FrameWorld::from_world(world).bootstrap_ref().campaign;
+    let snap = tag.is_some()
+        && (FrameWorld::from_world(world).bootstrap_ref().campaign
+            || FrameWorld::from_world(world).bootstrap_ref().kind == gamemode_iw4::GameModeKind::Campaign);
     let local = if view == LinkView::WeaponDelta || snap {
         [0.0; 3]
     } else {

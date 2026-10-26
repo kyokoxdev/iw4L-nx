@@ -6,6 +6,7 @@ mod t5;
 mod t6;
 
 use std::path::Path;
+use std::sync::Arc;
 
 pub(crate) use helpers::{
     build_iw5_static_model_draw, build_static_model_draw, build_t5_static_model_draw,
@@ -200,7 +201,7 @@ pub trait ZoneLane: Send + Sync {
     fn load_world(
         &self,
         path: &Path,
-        image: &ZoneImage,
+        image: Arc<ZoneImage>,
         progress: &LoadProgress,
 
         shared_surfaces: asset_model::SharedXModelSurfaces,

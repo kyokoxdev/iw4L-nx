@@ -224,6 +224,7 @@ pub fn spawn_pending_fpv(
     existing_fpv: Query<Entity, With<FpvPlacementRoot>>,
     mut status: ResMut<FpvStatusGap>,
     gaps: Res<RenderPresentationGaps>,
+    mut settled: Option<ResMut<FpvHeldSettled>>,
 ) {
     let SpawnPendingFpvInputs {
         prepared,
@@ -279,11 +280,17 @@ pub fn spawn_pending_fpv(
     let view = match bound_table.slot(request.weapon_handle, request.parent_handle, axis) {
         Ok(FpvWeaponSlot::Ready(view)) => Arc::clone(view),
         Ok(FpvWeaponSlot::Refused(cause)) => {
+            if let Some(settled) = settled.as_deref_mut() {
+                settled.0 = Some(request.weapon_id);
+            }
             gaps.raise(cause.clone());
             status.0 = Some(FpvState::Blocked(cause.clone()));
             return;
         }
         Ok(FpvWeaponSlot::Absent) | Err(_) => {
+            if let Some(settled) = settled.as_deref_mut() {
+                settled.0 = Some(request.weapon_id);
+            }
             let cause = RenderGapCause::FpvGunXModelUnresolved {
                 weapon_id: request.weapon_id,
             };

@@ -1982,7 +1982,7 @@ impl ZoneLane for T6Lane {
     fn load_world(
         &self,
         path: &Path,
-        image: &ZoneImage,
+        image: Arc<ZoneImage>,
         progress: &LoadProgress,
         _shared_surfaces: asset_model::SharedXModelSurfaces,
         material_seed: asset_material::MaterialCatalog,

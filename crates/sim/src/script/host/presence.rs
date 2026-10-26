@@ -416,7 +416,51 @@ fn with_tag_dobj<T>(
     ))
 }
 
+fn tag_world_from_anim(world: &mut World, object: u64, tag: &str) -> Option<glam::Mat4> {
+    let (node, scripted, anim_time) = {
+        let runtime = world.resource::<RoundScript>();
+        let entity = runtime.entities.get(&object)?;
+        let anim = entity.anim.as_ref()?;
+        let scripted = anim.scripted.as_ref()?;
+        (scripted.node, scripted.clone(), anim.time(scripted.node))
+    };
+    let clip = {
+        let runtime = world.resource::<RoundScript>();
+        let entity = runtime.entities.get(&object)?;
+        let anim = entity.anim.as_ref()?;
+        let clip_name = anim.node_clip_name(node)?;
+        runtime.campaign.anim_library.clip(clip_name)?
+    };
+    let track_idx = clip.tracks.iter().position(|t| &*t.name == tag)?;
+    let sampled = clip.sample_track(track_idx, anim_time)?;
+    let axis = math_iw4::angles_to_axis(scripted.angles);
+    let base_rot = glam::Quat::from_array(fx_iw4::axis_to_quat(axis));
+    let tag_trans = glam::Vec3::from(sampled.translation.unwrap_or([0.0; 3]));
+    let tag_rot = glam::Quat::from_array(sampled.rotation.unwrap_or([0.0, 0.0, 0.0, 1.0]));
+
+    let world_trans = glam::Vec3::from(scripted.origin) + base_rot * tag_trans;
+    let world_rot = (base_rot * tag_rot).normalize();
+    Some(glam::Mat4::from_rotation_translation(world_rot, world_trans))
+}
+
 fn tag_lookup(world: &mut World, object: u64, tag: &str) -> Option<Option<[f32; 3]>> {
+    if let Some(matrix) = tag_world_from_anim(world, object, tag) {
+        let (scripted_origin, scripted_rot) = {
+            let runtime = world.resource::<RoundScript>();
+            let entity = runtime.entities.get(&object);
+            let scripted = entity.and_then(|e| e.anim.as_ref()).and_then(|a| a.scripted.as_ref());
+            if let Some(scripted) = scripted {
+                let axis = math_iw4::angles_to_axis(scripted.angles);
+                let rot = glam::Quat::from_array(fx_iw4::axis_to_quat(axis));
+                (glam::Vec3::from(scripted.origin), rot)
+            } else {
+                (glam::Vec3::ZERO, glam::Quat::IDENTITY)
+            }
+        };
+        let world_pos = matrix.w_axis.truncate();
+        let local_pos = scripted_rot.inverse() * (world_pos - scripted_origin);
+        return Some(Some(local_pos.to_array()));
+    }
     with_tag_dobj(world, object, |dobj| {
         Some(dobj.tag_world_pose(tag).map(|(at, _)| {
             dobj.world_from_model
@@ -432,7 +476,8 @@ pub(crate) fn tag_world(
     object: u64,
     tag: &str,
 ) -> Option<([f32; 3], [[f32; 3]; 3])> {
-    let matrix = with_tag_dobj(world, object, |dobj| dobj.tag_world_matrix(tag))?;
+    let matrix = tag_world_from_anim(world, object, tag)
+        .or_else(|| with_tag_dobj(world, object, |dobj| dobj.tag_world_matrix(tag)))?;
     let axis = |v: glam::Vec4| v.truncate().normalize_or_zero().to_array();
     Some((
         matrix.w_axis.truncate().to_array(),

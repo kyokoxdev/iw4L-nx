@@ -2085,6 +2085,9 @@ dependencies = [
 [[package]]
 name = "bink"
 version = "0.1.0"
+dependencies = [
+ "platform_nx",
+]
 
 [[package]]
 name = "binrw"

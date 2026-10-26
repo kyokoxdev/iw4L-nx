@@ -62,7 +62,15 @@ impl<'a> BoundSound<'a> {
             if ns_of(sound.game) != policy.namespace {
                 return Err(SoundBindingRefusal::ForeignMedia);
             }
-            return Ok(Some(BoundSoundMedia::Loaded { index, sound }));
+            if !sound.pcm.bytes().is_empty() {
+                return Ok(Some(BoundSoundMedia::Loaded { index, sound }));
+            }
+            return Ok(Some(BoundSoundMedia::Streamed {
+                namespace: policy.namespace,
+                dir: String::new(),
+                name: sound.name.clone(),
+                decode: policy.streamed_decode(),
+            }));
         }
         Ok(self
             .catalog
