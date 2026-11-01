@@ -37,7 +37,7 @@ pub use image_handles::*;
 pub use list::*;
 pub use lit_draw_method::*;
 pub use material_admit::MaterialProgramAdmit;
-pub use material_compile::MaterialProgramCompile;
+pub use material_compile::{MaterialProgramCompile, compile_generation_headless};
 pub use material_exec::*;
 pub use material_runtime::*;
 pub use pass_color_space::*;

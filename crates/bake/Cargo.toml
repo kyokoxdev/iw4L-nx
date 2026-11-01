@@ -10,6 +10,15 @@ name = "iw4l-bake"
 path = "src/main.rs"
 
 [dependencies]
+asset_core.workspace = true
+asset_material.workspace = true
+asset_transport.workspace = true
+assets.workspace = true
+bevy.workspace = true
+frame.workspace = true
+master_protocol.workspace = true
+render_frontend.workspace = true
+render_gpu.workspace = true
 
 [build-dependencies]
 cc = "1.4"

@@ -120,7 +120,7 @@ mod residency;
 mod skinning;
 mod smodel_skinned;
 
-pub use pipeline::cached_lighting_port_variant;
+pub use pipeline::{bake_colour_pipeline_keys, cached_lighting_port_variant};
 
 fn upload_exact_geometry(
     frame: Res<PublishedRenderFrame>,
@@ -236,7 +236,7 @@ struct ExactConstantArena {
 const COLOUR_PREPARE_LANES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct ExactColourPipelineKey {
+pub struct ExactColourPipelineKey {
     target: TextureFormat,
     depth_format: TextureFormat,
     samples: u32,

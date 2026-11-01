@@ -14,7 +14,12 @@ pub enum Stage {
 }
 
 unsafe extern "C" {
-    fn uam_compile(glsl: *const c_char, stage: c_int, out: *mut *mut u8, out_len: *mut usize) -> c_int;
+    fn uam_compile(
+        glsl: *const c_char,
+        stage: c_int,
+        out: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> c_int;
     fn uam_free(p: *mut u8);
 }
 

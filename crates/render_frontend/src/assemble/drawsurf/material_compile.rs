@@ -669,3 +669,22 @@ impl MaterialProgramCompile {
         );
     }
 }
+
+/// The shader bake's material generation (iw4l-bake): every port the load
+/// compiles and the table admission prepares from them, with no GPU and no
+/// paced main thread.
+pub fn compile_generation_headless(
+    catalog: &Arc<RuntimeMaterialCatalog>,
+) -> Result<(RuntimeProgramRegistry, super::PreparedMaterialTable), String> {
+    let mut compile = MaterialProgramCompile::default();
+    compile.arm(catalog, None);
+    compile.until(catalog, None);
+    let programs = RuntimeProgramRegistry::from_ports(compile.take_ports())
+        .map_err(|cause| format!("{cause:?}"))?;
+    let prepared = super::PreparedMaterialTable::from_catalog(catalog, |pass, vertex_type| {
+        programs
+            .port_for(pass, vertex_type)
+            .map(RuntimeProgramPort::admitted_facts)
+    });
+    Ok((programs, prepared))
+}

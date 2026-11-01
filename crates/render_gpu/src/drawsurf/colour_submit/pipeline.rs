@@ -250,14 +250,51 @@ fn schedule_admitted_pipelines(
     // surfaces) are few, and an unbuilt sky pass left the sky black in play
     // until it compiled.
     let world_emissive_only = cfg!(target_os = "horizon");
+    let keep = |tech: u8, material: render_material::MaterialAssetId, port: &PortId| {
+        use asset_iw4::vertex_decl::{PACKED_VERTEX_TYPE, STATICMODELCACHE_VERTEX_TYPE};
+        if world_emissive_only
+            && (tech != 5
+                || port.vertex_type == PACKED_VERTEX_TYPE
+                || port.vertex_type == STATICMODELCACHE_VERTEX_TYPE
+                || !extracted
+                    .frame
+                    .pipeline_world_materials
+                    .contains(&material.0))
+        {
+            return false;
+        }
+        if tech != 5 && port.vertex_type != PACKED_VERTEX_TYPE {
+            let used = if port.vertex_type == STATICMODELCACHE_VERTEX_TYPE {
+                &extracted.frame.pipeline_smodel_materials
+            } else {
+                &extracted.frame.pipeline_world_materials
+            };
+            return used.contains(&material.0);
+        }
+        true
+    };
+    for_each_scheduled_key(prepared_table, view_sig, keep, |key| {
+        if scheduled.insert(key) {
+            current.push(request_exact_pipeline(registry, pipeline, device, key));
+        }
+    });
+}
+
+/// The keys `schedule_admitted_pipelines` builds before any draw: per view
+/// signature, the lit, shadow-caster and emissive passes, opaque state.
+fn for_each_scheduled_key(
+    prepared_table: &render_material::PreparedMaterialTable,
+    view_sig: &[(TextureFormat, u32)],
+    mut keep: impl FnMut(u8, render_material::MaterialAssetId, &PortId) -> bool,
+    mut emit: impl FnMut(ExactColourPipelineKey),
+) {
     for (main_format, samples) in view_sig.iter().copied() {
         let techs = lighting_iw4::LIT_TECH_NO_SHADOW_DIR_SLOTS
             .into_iter()
             .chain(lighting_iw4::LIT_TECH_NO_SHADOW_LOCAL_SLOTS)
             .chain(lighting_iw4::LIT_TECH_SHADOW_DIR_SLOTS)
             .chain(lighting_iw4::LIT_TECH_SHADOW_SPOT_SLOTS)
-            .chain([super::super::SUN_SHADOW_CASTER_TECH, 5])
-            .filter(|&tech| !world_emissive_only || tech == 5);
+            .chain([super::super::SUN_SHADOW_CASTER_TECH, 5]);
         for tech in techs {
             let shadow = tech == super::super::SUN_SHADOW_CASTER_TECH;
             for (material, prepared_pass) in
@@ -275,33 +312,10 @@ fn schedule_admitted_pipelines(
                     state0.srgb_write,
                 );
                 for port in prepared_pass.port.iter().flatten() {
-                    use asset_iw4::vertex_decl::{
-                        PACKED_VERTEX_TYPE, STATICMODELCACHE_VERTEX_TYPE,
-                    };
-                    if world_emissive_only
-                        && (port.vertex_type == PACKED_VERTEX_TYPE
-                            || port.vertex_type == STATICMODELCACHE_VERTEX_TYPE
-                            || !extracted.frame.pipeline_world_materials.contains(&material.0))
-                    {
+                    if !keep(tech, material, port) {
                         continue;
                     }
-                    if tech != 5 && port.vertex_type != PACKED_VERTEX_TYPE {
-                        let used = if port.vertex_type == STATICMODELCACHE_VERTEX_TYPE {
-                            extracted
-                                .frame
-                                .pipeline_smodel_materials
-                                .contains(&material.0)
-                        } else {
-                            extracted
-                                .frame
-                                .pipeline_world_materials
-                                .contains(&material.0)
-                        };
-                        if !used {
-                            continue;
-                        }
-                    }
-                    let key = ExactColourPipelineKey {
+                    emit(ExactColourPipelineKey {
                         target,
                         depth_format: if shadow {
                             SHADOWMAP_SUN_DEPTH_FORMAT
@@ -316,14 +330,61 @@ fn schedule_admitted_pipelines(
                         mark_mesh: false,
                         forward_z: shadow,
                         probe_array: false,
-                    };
-                    if scheduled.insert(key) {
-                        current.push(request_exact_pipeline(registry, pipeline, device, key));
-                    }
+                    });
                 }
             }
         }
     }
+}
+
+/// Every exact colour pipeline a draw can build for one material generation,
+/// for the shader bake (iw4l-bake): the scheduled keys with no draw-use
+/// filter and no Switch emissive-only cut, plus what draws add on top of
+/// them: the spot shadow target, the mark-mesh and probe-array twins.
+/// Returns the WGSL module count (ports plus probe twins) and the keys.
+pub fn bake_colour_pipeline_keys(
+    prepared_table: &render_material::PreparedMaterialTable,
+    ports: &[crate::AdmittedExactPort],
+    view_sig: &[(TextureFormat, u32)],
+) -> (usize, Vec<ExactColourPipelineKey>) {
+    use asset_iw4::vertex_decl::{PACKED_VERTEX_TYPE, STATICMODELCACHE_VERTEX_TYPE};
+    let probe: HashSet<PortId> = ports
+        .iter()
+        .filter(|port| adapt_admitted_port(port).probe.is_some())
+        .map(crate::AdmittedExactPort::id)
+        .collect();
+    let mut keys = HashSet::new();
+    for_each_scheduled_key(
+        prepared_table,
+        view_sig,
+        |_, _, _| true,
+        |key| {
+            if key.forward_z {
+                keys.insert(ExactColourPipelineKey {
+                    target: exact_colour_target_format(
+                        SHADOWMAP_SPOT_COLOR_FORMAT,
+                        key.state0.srgb_write,
+                    ),
+                    depth_format: SHADOWMAP_SPOT_DEPTH_FORMAT,
+                    ..key
+                });
+            } else if key.port.vertex_type == PACKED_VERTEX_TYPE {
+                keys.insert(ExactColourPipelineKey {
+                    mark_mesh: true,
+                    ..key
+                });
+            } else if key.port.vertex_type != STATICMODELCACHE_VERTEX_TYPE
+                && probe.contains(&key.port)
+            {
+                keys.insert(ExactColourPipelineKey {
+                    probe_array: true,
+                    ..key
+                });
+            }
+            keys.insert(key);
+        },
+    );
+    (ports.len() + probe.len(), keys.into_iter().collect())
 }
 
 /// Exact colour pipelines draws discovered, rebuilt with the load's working

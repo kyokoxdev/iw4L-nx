@@ -759,7 +759,16 @@ dependencies = [
 name = "bake"
 version = "0.1.0"
 dependencies = [
+ "asset_core",
+ "asset_material",
+ "asset_transport",
+ "assets",
+ "bevy",
  "cc",
+ "frame",
+ "master_protocol",
+ "render_frontend",
+ "render_gpu",
 ]
 
 [[package]]

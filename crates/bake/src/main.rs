@@ -1,4 +1,6 @@
+//! iw4l-bake: offline deko3d shader bake (docs/deko3d_implementation_plan.md).
 mod uam;
+mod zones;
 
 /// The DKSH bytes are what devkitPro's `uam` 1.1.0 CLI writes for the GLSL.
 const SELFTEST: [(&str, uam::Stage, &str, &[u8]); 2] = [
@@ -31,10 +33,33 @@ fn selftest() -> Result<(), String> {
     Ok(())
 }
 
+fn bake(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut zones = None;
+    while let Some(arg) = args.next() {
+        let mut value = || args.next().ok_or(format!("{arg} needs a value"));
+        match arg.as_str() {
+            // SAFETY: still single-threaded; the loaders read IW4L_GAMES.
+            "--games" => unsafe { std::env::set_var("IW4L_GAMES", value()?) },
+            "--zones" => zones = Some(value()?.split(',').map(str::to_owned).collect()),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    let games = asset_transport::games_root_from_env()?;
+    // ponytail: MP maps only; SP stems need find_zone_file_version and the
+    // campaign zone set, add with the SP release gate.
+    let zones: Vec<String> = zones.unwrap_or_else(|| asset_transport::list_mp_maps(&games));
+    zones::run(&games, &zones)
+}
+
+const USAGE: &str = "usage: iw4l-bake selftest | iw4l-bake [--games <dir>] [--zones a,b]";
+
 fn main() -> std::process::ExitCode {
-    let result = match std::env::args().nth(1).as_deref() {
-        Some("selftest") => selftest(),
-        _ => Err("usage: iw4l-bake selftest".into()),
+    zones::force_switch_abi();
+    let mut args = std::env::args().skip(1).peekable();
+    let result = if args.peek().map(String::as_str) == Some("selftest") {
+        selftest()
+    } else {
+        bake(args)
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

@@ -112,7 +112,7 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
 - Windows is cross-built from Linux as `x86_64-pc-windows-gnu`.
 - *Done when:* `iw4l-bake selftest` compiles B1's sample GLSL to DKSH on Linux and on Windows (Wine or a real PC), and the output is byte-identical to the devkitPro `uam` CLI.
 
-**B3. Headless zone enumeration.**
+**B3. Headless zone enumeration.** Partly done 2026-11-01: mp_rust gives 5041 modules (ports plus probe twins) and 6633 pipelines in 27 s. The bake loads zones with `load_prepared_match`, and its keys come from the runtime's `for_each_scheduled_key`. Still to do: SP maps; the Switch view signature (the lens default is used for now); and a check that every device-learned key (`exact-demand-v2`) is in the bake set.
 - A new crate, `crates/bake`, with the bin `iw4l-bake`.
 - For each zone from `asset_transport::list_mp_maps` (`discover.rs:785`) and `list_sp_maps` (`:851`), plus the common zones, it runs the real catalog and `MaterialProgramCompile` path. The entry is `material_compile.rs:529`, across every technique × vertex type (`technique_compile_vertex_types`, `:16`).
 - The Switch ABI is forced: `bound_slots=true`, `shader_srgb_write=true`, and the instancing prologue on. Add an explicit `gpu_contract` override so these don't depend on `cfg!(horizon)`.
