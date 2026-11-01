@@ -756,6 +756,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bake"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2768,6 +2775,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "deko3d-sys"
+version = "0.5.0"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4618,7 +4630,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -4643,7 +4655,7 @@ dependencies = [
 [[package]]
 name = "naga-types"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
@@ -7884,7 +7896,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.1",
@@ -7907,7 +7919,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -7940,7 +7952,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7948,7 +7960,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7956,7 +7968,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7964,7 +7976,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -7975,6 +7987,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "cfg_aliases",
+ "deko3d-sys",
  "glow",
  "glutin_wgl_sys",
  "gpu-allocator",
@@ -7993,6 +8006,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "offset-allocator",
  "once_cell",
  "ordered-float",
  "parking_lot",
@@ -8019,7 +8033,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "naga 30.0.1",
  "wgpu-types",
@@ -8028,7 +8042,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "30.0.1"
-source = "git+https://github.com/kyokoxdev/wgpu?rev=4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2#4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2"
+source = "git+https://github.com/kyokoxdev/wgpu?rev=971916920ff2e752cebf43b5cc1cf32a46803f19#971916920ff2e752cebf43b5cc1cf32a46803f19"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",

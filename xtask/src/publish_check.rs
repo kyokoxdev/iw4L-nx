@@ -47,6 +47,9 @@ const EXEMPT: &[&str] = &[
     "Cargo.lock",
     // This gate has to spell the shapes it hunts for.
     "xtask/src/publish_check.rs",
+    // Vendored uam and Mesa: GLSL spec section numbers and GPU instruction
+    // encodings spell addresses.
+    "third_party/uam/",
 ];
 
 fn stray_test(rel: &str, text: &str) -> Option<(usize, &'static str)> {

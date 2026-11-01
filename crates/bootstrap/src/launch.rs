@@ -600,7 +600,13 @@ pub fn run_nx_smoke() {
         clear.0 = Color::hsl((secs * 60.0) % 360.0, 0.6, 0.4);
         *frames += 1;
         if *frames % 300 == 0 {
-            diag::info!(Launch, "smoke: {} frames, {:.1} fps", *frames, *frames as f32 / secs);
+            diag::info!(
+                Launch,
+                "smoke: {} frames, {:.1} fps, {}",
+                *frames,
+                *frames as f32 / secs,
+                platform_nx::heap_line()
+            );
         }
     }
     let mut app = App::new();

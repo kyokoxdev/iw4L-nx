@@ -14,8 +14,8 @@ heap-samples = []
 bevy.workspace = true
 getrandom = "0.4"
 raw-window-handle = "0.6"
-# Unifies into bevy_render's wgpu: the GL backend is the only one on Horizon.
-wgpu = { version = "30", default-features = false, features = ["gles"] }
+# Must be the same wgpu major as bevy_render's.
+wgpu = { version = "30", default-features = false, features = ["gles", "deko3d"] }
 
 [lints]
 workspace = true

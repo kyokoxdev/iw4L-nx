@@ -10,14 +10,14 @@ quinn-proto = { git = "https://github.com/quinn-rs/quinn", rev = "f650e0f213b01e
 libc = { git = "https://github.com/kyokoxdev/libc", rev = "90345107c821d02f17face49295cc4b362176338" }
 # wgpu: static EGL + NWindow surface for the GL backend. The whole family is
 # patched or wgpu-types duplicates.
-wgpu = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-core = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-hal = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-types = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-naga-bridge = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-core-deps-apple = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
-naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "4ae41baa7e10bfc0d393d9281a1f0b20f87b65b2" }
+wgpu = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-core = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-hal = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-types = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-naga-bridge = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-core-deps-apple = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
+naga = { git = "https://github.com/kyokoxdev/wgpu", rev = "971916920ff2e752cebf43b5cc1cf32a46803f19" }
 # bevy_asset: horizon takes the Windows file reader (async-io/rustix have no
 # Horizon backend).
 bevy_asset = { git = "https://github.com/kyokoxdev/iw4l-nx-crate-patches", rev = "b95178f00a6c29540511f59f48ea9228c3d9ea2b" }
@@ -42,6 +42,7 @@ members = [
     "crates/asset_world",
     "crates/assets",
     "crates/bink",
+    "crates/bake",
     "crates/bootstrap",
     "crates/audio",
     "crates/bots",

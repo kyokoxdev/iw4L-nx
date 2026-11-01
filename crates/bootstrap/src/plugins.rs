@@ -144,6 +144,14 @@ pub fn default_plugins_with_quiet_log(mut window: WindowPlugin) -> bevy::app::Pl
     #[cfg(target_os = "horizon")]
     {
         wgpu.features |= WgpuFeatures::DEPTH_CLIP_CONTROL;
+        wgpu.backends = Some(match std::env::var("IW4L_BACKEND").ok().as_deref() {
+            Some("gl") => bevy::render::settings::Backends::GL,
+            Some("deko3d") | None => bevy::render::settings::Backends::DEKO3D,
+            Some(other) => {
+                diag::warn!(Launch, "unknown IW4L_BACKEND={other}; using deko3d");
+                bevy::render::settings::Backends::DEKO3D
+            }
+        });
     }
     let plugins = DefaultPlugins
         .set(window)
