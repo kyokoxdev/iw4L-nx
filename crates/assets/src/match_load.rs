@@ -188,7 +188,9 @@ fn start_match_load(
 
     let families = request.families;
     let games = identity.map(|identity| asset_transport::GamesRoot(identity.games_root.clone()));
+    let shader_zone = zone.clone();
     let task = crate::session_load::load_pool().spawn(async move {
+        crate::install_shader_pack(&shader_zone, "zone");
         let sound_path = zone_ff.clone();
         match load_prepared_match(zone_ff, common_mp, progress.clone(), families).await {
             MatchLoadOutcome::Ready(mut prepared) => {

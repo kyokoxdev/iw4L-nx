@@ -15,7 +15,7 @@ pub(super) struct TemporalScreenPipeline {
 }
 
 impl TemporalScreenPipeline {
-    fn pipeline(&mut self, format: TextureFormat, cache: &PipelineCache) -> CachedRenderPipelineId {
+    pub(super) fn pipeline(&mut self, format: TextureFormat, cache: &PipelineCache) -> CachedRenderPipelineId {
         *self.pipelines.entry(format).or_insert_with(|| {
             cache.queue_render_pipeline(RenderPipelineDescriptor {
                 label: Some("shellshock_screen".into()),

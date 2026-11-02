@@ -308,7 +308,7 @@ struct ExactPostFxGpu {
     grade: Option<super::script_grade::GradeGpu>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum PostFxGpuRefusal {
+pub(super) enum PostFxGpuRefusal {
     VertexLayout,
     EmptyConstantBlock,
     UnsupportedState {
@@ -480,7 +480,7 @@ fn postfx_layouts(film: &ExtractedFilm) -> (BindGroupLayoutDescriptor, BindGroup
     )
 }
 
-fn queue_postfx_pipeline(
+pub(super) fn queue_postfx_pipeline(
     film: &ExtractedFilm,
     cache: &PipelineCache,
 ) -> Result<CachedRenderPipelineId, PostFxGpuRefusal> {
@@ -1058,17 +1058,20 @@ fn draw_postfx(
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct PostFxSet;
 
-pub(super) fn register(app: &mut App) {
-    if app.get_sub_app(RenderApp).is_none() {
-        return;
-    }
-    let shader = app
-        .world_mut()
+pub(super) fn grade_shader(app: &mut App) -> Handle<Shader> {
+    app.world_mut()
         .resource_mut::<Assets<Shader>>()
         .add(Shader::from_wgsl(
             include_str!("script_grade.wgsl"),
             "script_grade.wgsl",
-        ));
+        ))
+}
+
+pub(super) fn register(app: &mut App) {
+    if app.get_sub_app(RenderApp).is_none() {
+        return;
+    }
+    let shader = grade_shader(app);
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
     };

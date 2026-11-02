@@ -249,7 +249,7 @@ fn schedule_admitted_pipelines(
     // Exception: the world's emissive passes (tech 5: the sky, emissive
     // surfaces) are few, and an unbuilt sky pass left the sky black in play
     // until it compiled.
-    let world_emissive_only = cfg!(target_os = "horizon");
+    let world_emissive_only = cfg!(target_os = "horizon") && !render_frame::deko3d_backend();
     let keep = |tech: u8, material: render_material::MaterialAssetId, port: &PortId| {
         use asset_iw4::vertex_decl::{PACKED_VERTEX_TYPE, STATICMODELCACHE_VERTEX_TYPE};
         if world_emissive_only

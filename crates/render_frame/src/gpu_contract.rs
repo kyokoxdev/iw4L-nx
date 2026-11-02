@@ -68,6 +68,15 @@ pub fn bound_slots() -> bool {
     })
 }
 
+/// Switch on the deko3d backend (`IW4L_BACKEND`, default deko3d): no GL context
+/// lock or per-program heap cost, so no compile throttling.
+pub fn deko3d_backend() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(target_os = "horizon") && std::env::var("IW4L_BACKEND").map_or(true, |v| v != "gl")
+    })
+}
+
 /// GL has no sRGB view of a linear texture (`DownlevelFlags::VIEW_FORMATS`),
 /// so `srgb_write` passes draw into the raw view through a shader that encodes
 /// linear to sRGB itself (`d3d9_sm3::with_srgb_write_entries`). Blending then

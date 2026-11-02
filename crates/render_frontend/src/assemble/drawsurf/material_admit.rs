@@ -15,6 +15,35 @@ fn shader_from_generated_wgsl(source: String, path: String) -> Shader {
     Shader::from_wgsl(source, path)
 }
 
+/// The bake's postfx and blood films: what a match admits for this generation,
+/// with every shader supplied up front.
+pub fn film_generation_headless(
+    catalog: Arc<super::RuntimeMaterialCatalog>,
+    programs: RuntimeProgramRegistry,
+    shaders: &mut Assets<Shader>,
+) -> (super::RuntimePostFxResources, Option<super::RuntimeBloodMaterial>) {
+    let mut by_source = std::collections::HashMap::new();
+    let handles = programs
+        .ports()
+        .iter()
+        .map(|port| {
+            let source = port.module().source.as_str();
+            let next = by_source.len();
+            by_source
+                .entry(source.to_owned())
+                .or_insert_with(|| {
+                    shaders.add(shader_from_generated_wgsl(
+                        source.to_owned(),
+                        format!("iw4_exact_colour/bake{next}.wgsl"),
+                    ))
+                })
+                .clone()
+        })
+        .collect();
+    let generation = super::admit_material_generation(catalog, programs, handles);
+    (generation.postfx, generation.blood)
+}
+
 enum PendingShader {
     Generated {
         module: Arc<ValidatedPassWgsl>,

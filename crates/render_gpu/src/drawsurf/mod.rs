@@ -1,5 +1,6 @@
 mod admitted;
 mod backend;
+mod bake;
 mod colour_submit;
 mod depth_range;
 mod draw;
@@ -64,6 +65,7 @@ pub use colour_submit::{
     dump_shader_program_names, dump_sorted_material_names, emit_focused_owner_submit,
     vertex_layouts_from_contract,
 };
+pub use bake::{BakeEnginePipelinesPlugin, BakeFilms};
 pub(crate) use draw::register_drawsurf_render;
 pub use geometry_diagnostic::{ExtractedDiagnosticGeometry, geometry_diagnostic_enabled};
 pub use gpu_resources::*;

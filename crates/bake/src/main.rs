@@ -1,4 +1,5 @@
 //! iw4l-bake: offline deko3d shader bake (docs/deko3d_implementation_plan.md).
+mod engine;
 mod pack;
 mod record;
 mod uam;

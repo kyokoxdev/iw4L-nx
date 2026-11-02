@@ -197,7 +197,7 @@ impl ExactPipelineRegistry {
         // Switch: a GL compile holds the context lock. Jobs on several
         // workers queue on it back to back and starve the render thread for
         // seconds; one pipeline at a time lets each frame in between.
-        if cfg!(target_os = "horizon") {
+        if cfg!(target_os = "horizon") && !render_frame::deko3d_backend() {
             if !self.jobs.is_empty() {
                 return;
             }

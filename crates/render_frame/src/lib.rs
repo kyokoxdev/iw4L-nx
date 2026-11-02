@@ -35,7 +35,7 @@ pub use gpu_contract::{
     TEXTURE_TABLE_2D_CAPACITY, TEXTURE_TABLE_3D_CAPACITY, TEXTURE_TABLE_CUBE_CAPACITY,
     TEXTURE_TABLE_SAMPLER_CAPACITY, WgpuBindLayoutEntry, WgpuBindingKind, WgpuLayoutRefusal,
     WgpuPassLayout, WgpuShaderVisibility, WgpuVertexAttribute, WgpuVertexBufferLayout,
-    WgpuVertexFormat, bound_slots, derive_wgpu_pass_layout, shader_srgb_write,
+    WgpuVertexFormat, bound_slots, deko3d_backend, derive_wgpu_pass_layout, shader_srgb_write,
     texture_table_bind_entries,
 };
 pub use packet::{

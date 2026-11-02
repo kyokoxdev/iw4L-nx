@@ -324,6 +324,12 @@ pub(super) fn register(app: &mut App) {
         .add_systems(RenderStartup, init_pipeline);
 }
 
+pub(super) fn bake_queue(resolve: &ExactFloatZResolve, cache: &PipelineCache) {
+    for multisampled in [false, true] {
+        cache.queue_render_pipeline(resolve.specialize(FloatZBlitKey { multisampled }));
+    }
+}
+
 impl ExactFloatZResolve {
     pub fn view(&self) -> Option<&TextureView> {
         self.target.as_ref().map(|t| &t.view)

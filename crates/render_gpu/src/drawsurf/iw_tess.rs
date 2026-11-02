@@ -118,14 +118,14 @@ struct SavedScreenGpu {
 }
 
 #[derive(Resource)]
-struct IwTessPipeline {
+pub(super) struct IwTessPipeline {
     shader: Handle<Shader>,
     modulate_layout: BindGroupLayoutDescriptor,
     params: Buffer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct IwTessPipelineKey {
+pub(super) struct IwTessPipelineKey {
     target: TextureFormat,
     samples: u32,
     state: Option<render_material::CompiledPassState>,
@@ -824,6 +824,22 @@ fn prepare_hud_blood(
         Some(Err(cause)) => gpu.refuse(cause),
         None => {}
     }
+}
+
+pub(super) fn bake_register(app: &mut App) {
+    super::shellshock_screen::register(app);
+    bevy::asset::embedded_asset!(app, "iw_tess.wgsl");
+    if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+        render_app.add_systems(RenderStartup, init_pipeline);
+    }
+}
+
+pub(super) fn bake_queue(pipeline: &IwTessPipeline, cache: &PipelineCache) {
+    cache.queue_render_pipeline(pipeline.specialize(IwTessPipelineKey {
+        target: TextureFormat::Rgba8Unorm,
+        samples: 1,
+        state: None,
+    }));
 }
 
 pub(super) fn register(app: &mut App) {

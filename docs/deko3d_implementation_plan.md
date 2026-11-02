@@ -134,6 +134,14 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
 - Each specialized pipeline gains an `all_keys()` enumerator used only by the bake.
 - The bake drives these through a host `deko3d-bake` "record" hal device. It is the Noop backend plus B1, and its `create_render_pipeline` emits GLSL to the bake instead of the GPU. Each Bevy pipeline is then specialized for every key.
 - *Done when:* `common.dkpk` holds every engine pipeline. The device check in P2 later confirms that no runtime miss happens in a full menu → match → menu cycle.
+- Breakdown (2026-11-02):
+  - Only inputs that change GLSL matter (module, entry, defs, constants, binding layout). Blend, depth, format and sample count do not, so each key space collapses to a few GLSL variants.
+  - **B4a.** The recording device reports deko3d's features and limits (`record.rs` `deko3d_caps`). Bevy's shader defs follow them.
+  - **B4b. Engine WGSL.** Done 2026-11-02. A headless bevy app (`RenderCreation::Manual` on the recording device, no window, no pipelined rendering) with `render_gpu::BakeEnginePipelinesPlugin`, which registers only the pipelines' own resources and queues floatz (both MSAA values), iw_tess, shellshock and script_grade. Sun effects and geometry_diagnostic are off on Switch, so they are excluded.
+  - **B4c. Bevy.** Done 2026-11-02. UI, sprite and text, Mesh2d+`ColorMaterial` (the presenter) and blit/upscaling, for the keys the game's cameras reach. All of them are `Tonemapping::None`, `DebandDither::Disabled` and `Msaa::Off`. The bare `Camera2d` in `launch.rs` is the display smoke test and draws nothing. Since `hdr` only changes formats, both values of it give the same GLSL.
+  - **B4d. Material-driven postfx.** Done 2026-11-02. Postfx films and hud_blood are SM3 ports admitted per material generation, and only a match builds them, so they go in `<zone>.dkpk` (not common). They go through bevy's pipeline cache like the game, so their GLSL keys match. iw_tess is plain WGSL with no defs, so it moved to B4b.
+  - mp_rust: common 20 pipelines, 24 GLSL; the zone adds 16 pipelines. Hardware P2 still has to confirm no misses.
+  - A headless run can't find these keys: without a surface, bevy skips window views.
 
 **B5. Pack writer and CLI.** Mostly done 2026-11-02. mp_rust bakes twice to identical bytes, after a uam fix: `Instruction::init` now zeroes `sched` (see `third_party/uam/IW4L.md`). Compiles run in one persistent `iw4l-bake uam` worker process per core, since Mesa's context is global; mp_rust takes 55–62 s, down from about 100 s. `--dump` writes the GLSL and DKSH; for TGSI, run devkitPro `uam -t` on the dumped GLSL. Still to do: the all-zone double bake.
 - Format: header `DKPK | format u32 | uam_version | count`, then entries sorted by key `{key u64, glsl_len u32, stage u8, dksh_len u32, dksh bytes, 0x100-aligned}`.
