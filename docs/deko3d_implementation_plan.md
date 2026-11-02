@@ -135,7 +135,7 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
 - The bake drives these through a host `deko3d-bake` "record" hal device. It is the Noop backend plus B1, and its `create_render_pipeline` emits GLSL to the bake instead of the GPU. Each Bevy pipeline is then specialized for every key.
 - *Done when:* `common.dkpk` holds every engine pipeline. The device check in P2 later confirms that no runtime miss happens in a full menu → match → menu cycle.
 
-**B5. Pack writer and CLI.**
+**B5. Pack writer and CLI.** Mostly done 2026-11-02. mp_rust bakes twice to identical bytes, after a uam fix: `Instruction::init` now zeroes `sched` (see `third_party/uam/IW4L.md`). Compiles run in one persistent `iw4l-bake uam` worker process per core, since Mesa's context is global; mp_rust takes 55–62 s, down from about 100 s. `--dump` writes the GLSL and DKSH; for TGSI, run devkitPro `uam -t` on the dumped GLSL. Still to do: the all-zone double bake.
 - Format: header `DKPK | format u32 | uam_version | count`, then entries sorted by key `{key u64, glsl_len u32, stage u8, dksh_len u32, dksh bytes, 0x100-aligned}`.
 - Packs are written atomically (`.tmp` then rename), the same pattern as `artifact_cache.rs:34-76`.
 - Compiles run in parallel across cores. Identical GLSL is compiled once.

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-ELF = ROOT.parent / "target/nx/iw4l.sym.elf"
+ELF = ROOT / "out/iw4l.sym.elf"
 NOISE = re.compile(
     r"^(\?\?|__wrap_|__real_|_malloc|_memalign|_free|_realloc|_calloc|malloc|calloc|realloc|memalign|"
     r"rmutex|__rustc|platform_nx::|<?diag::|<?alloc::|<?core::|<?std::|<\[|<?hashbrown::|<?allocator_api2)"

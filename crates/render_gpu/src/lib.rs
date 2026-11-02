@@ -28,7 +28,7 @@ pub use drawsurf::{
     UploadedViewRefusal, ValidatedPassWgsl, WgpuBindLayoutEntry, WgpuBindingKind,
     WgpuLayoutRefusal, WgpuPassLayout, WgpuShaderVisibility, WgpuVertexAttribute,
     WgpuVertexBufferLayout, WgpuVertexFormat, WorldPipelineWarmup, alpha_test_fragment_entry,
-    bake_colour_pipeline_keys, bind_group_layout_from_entries, cached_lighting_port_variant,
+    bake_build_colour_pipelines, bake_colour_pipeline_keys, bind_group_layout_from_entries, cached_lighting_port_variant,
     code_transpose_matrix_row4, code_transpose_matrix_rows, colour_ports_static,
     colour_world_smodel_static, derive_wgpu_pass_layout, dump_shader_program_names,
     dump_sorted_material_names, emit_focused_owner_submit, geometry_diagnostic_enabled,

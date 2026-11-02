@@ -120,7 +120,7 @@ mod residency;
 mod skinning;
 mod smodel_skinned;
 
-pub use pipeline::{bake_colour_pipeline_keys, cached_lighting_port_variant};
+pub use pipeline::{bake_build_colour_pipelines, bake_colour_pipeline_keys, cached_lighting_port_variant};
 
 fn upload_exact_geometry(
     frame: Res<PublishedRenderFrame>,

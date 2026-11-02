@@ -387,6 +387,29 @@ pub fn bake_colour_pipeline_keys(
     (ports.len() + probe.len(), keys.into_iter().collect())
 }
 
+/// Builds the given keys on `device` through the runtime's registry, for the
+/// shader bake's recording device.
+pub fn bake_build_colour_pipelines(
+    device: &RenderDevice,
+    ports: &[crate::AdmittedExactPort],
+    keys: &[ExactColourPipelineKey],
+) {
+    let mut pipeline = ExactColourPipeline {
+        ports: ports.iter().map(adapt_admitted_port).collect(),
+        ..Default::default()
+    };
+    pipeline.rebuild_index();
+    let mut registry = ExactPipelineRegistry::default();
+    for &key in keys {
+        request_exact_pipeline(&mut registry, &pipeline, device, key);
+    }
+    registry.flush(device);
+    while registry.building_n() > 0 {
+        registry.poll();
+        std::thread::yield_now();
+    }
+}
+
 /// Exact colour pipelines draws discovered, rebuilt with the load's working
 /// set so the overlay holds for them (`drawsurf::learned`). One list for every
 /// map; ports a map never admits are skipped.

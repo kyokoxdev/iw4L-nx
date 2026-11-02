@@ -59,7 +59,7 @@ pub use colour_submit::{
     CODE_TEXTURE_FLOATZ, CODE_TEXTURE_RESOLVED_POST_SUN, CODE_TEXTURE_SHADOWMAP_SPOT,
     CODE_TEXTURE_SHADOWMAP_SUN, ExactColourPipelineKey, ExtractedStaticGeometry,
     FocusedOwnerSubmitState, InstalledRenderWorld, PublishedRenderFrame, RenderFrameData,
-    RenderWorldData, bake_colour_pipeline_keys, bind_group_layout_from_entries,
+    RenderWorldData, bake_build_colour_pipelines, bake_colour_pipeline_keys, bind_group_layout_from_entries,
     cached_lighting_port_variant, colour_ports_static, colour_world_smodel_static,
     dump_shader_program_names, dump_sorted_material_names, emit_focused_owner_submit,
     vertex_layouts_from_contract,

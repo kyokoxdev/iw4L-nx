@@ -1,7 +1,8 @@
 //! B3: per zone, the material programs and exact colour pipelines the Switch
 //! build can create, from the same load and compile path as a match.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use asset_transport::{GamesRoot, LoadProgress, NamespaceTrees};
@@ -12,6 +13,7 @@ pub struct ZoneSet {
     pub zone: String,
     pub modules: usize,
     pub keys: Vec<render_gpu::ExactColourPipelineKey>,
+    pub stages: crate::record::Stages,
 }
 
 /// Forces the Switch shader ABI; must run before anything reads it (the
@@ -44,6 +46,7 @@ const VIEW_SIG: [(bevy::render::render_resource::TextureFormat, u32); 1] =
     [render_gpu::LENS_VIEW_SIGNATURE];
 
 pub fn bake_zone(
+    device: &bevy::render::renderer::RenderDevice,
     games: &GamesRoot,
     families: frame::AssetFamilies,
     zone: &str,
@@ -76,28 +79,91 @@ pub fn bake_zone(
         })
         .collect();
     let (modules, keys) = render_gpu::bake_colour_pipeline_keys(&table, &ports, &VIEW_SIG);
+    render_gpu::bake_build_colour_pipelines(device, &ports, &keys);
+    let mut stages = crate::record::Stages::default();
+    stages.drain();
     Ok(ZoneSet {
         zone: found.zone_name,
         modules,
         keys,
+        stages,
     })
 }
 
-/// Prints each zone's counts and the union over all of them.
-pub fn run(games: &GamesRoot, zones: &[String]) -> Result<(), String> {
+/// Prints each zone's counts and the union over all of them; with `out`,
+/// compiles each zone's GLSL and writes `<out>/switch/iw4l/shaders/dksh/<zone>.dkpk`.
+pub fn run(
+    games: &GamesRoot,
+    zones: &[String],
+    out: Option<&Path>,
+    dump: Option<u64>,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
     let families = families(games)?;
+    let device = crate::record::noop_device()?;
     let mut union = HashSet::new();
+    let mut glsl = HashSet::new();
+    // Identical GLSL across zones compiles once.
+    let mut compiled: HashMap<u64, Result<Vec<u8>, i32>> = HashMap::new();
+    let (mut compile_failed, mut pack_bytes) = (0, 0);
     let mut failed = 0;
     for zone in zones {
-        match bake_zone(games, families, zone) {
+        match bake_zone(&device, games, families, zone) {
             Ok(set) => {
                 println!(
-                    "{}: {} modules, {} pipelines",
+                    "{}: {} modules, {} pipelines, recorded {} ({} failed), {} distinct GLSL",
                     set.zone,
                     set.modules,
-                    set.keys.len()
+                    set.keys.len(),
+                    set.stages.pipelines,
+                    set.stages.failed.len(),
+                    set.stages.glsl.len()
                 );
+                for (label, error) in set.stages.failed.iter().take(5) {
+                    eprintln!("  {}: {error}", label.as_deref().unwrap_or("?"));
+                }
+                if let Some(out) = out {
+                    let jobs: Vec<_> = set
+                        .stages
+                        .glsl
+                        .iter()
+                        .filter(|(key, _)| !compiled.contains_key(key))
+                        .map(|(&key, (stage, text))| (key, *stage, text.as_str()))
+                        .collect();
+                    for (key, result) in crate::uam::compile_many(&jobs) {
+                        if let Err(rc) = result {
+                            compile_failed += 1;
+                            eprintln!("  uam rc {rc} for {key:016x}");
+                        }
+                        compiled.insert(key, result);
+                    }
+                    if let Some((key, (_, text))) =
+                        dump.and_then(|key| set.stages.glsl.get_key_value(&key))
+                    {
+                        let dir = out.join("dump");
+                        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                        let _ = std::fs::write(dir.join(format!("{key:016x}.glsl")), text);
+                        if let Some(Ok(dksh)) = compiled.get(key) {
+                            let _ = std::fs::write(dir.join(format!("{key:016x}.dksh")), dksh);
+                        }
+                    }
+                    let mut entries = BTreeMap::new();
+                    for (&key, (stage, text)) in &set.stages.glsl {
+                        if let Some(Ok(dksh)) = compiled.get(&key) {
+                            entries.insert(key, crate::pack::Entry {
+                                glsl_len: text.len() as u32,
+                                stage: *stage as u8,
+                                dksh: dksh.clone(),
+                            });
+                        }
+                    }
+                    let bytes = crate::pack::encode(&entries);
+                    pack_bytes += bytes.len();
+                    let path = out.join(format!("switch/iw4l/shaders/dksh/{}.dkpk", set.zone));
+                    crate::pack::write(&path, &bytes)?;
+                }
                 union.extend(set.keys);
+                glsl.extend(set.stages.glsl.into_keys());
             }
             Err(error) => {
                 failed += 1;
@@ -106,9 +172,18 @@ pub fn run(games: &GamesRoot, zones: &[String]) -> Result<(), String> {
         }
     }
     println!(
-        "{} zones ({failed} failed), {} distinct pipelines",
+        "{} zones ({failed} failed), {} distinct pipelines, {} distinct GLSL",
         zones.len(),
-        union.len()
+        union.len(),
+        glsl.len()
     );
+    if out.is_some() {
+        println!(
+            "compiled {} ({compile_failed} failed), packs {:.1} MiB",
+            compiled.len(),
+            pack_bytes as f64 / (1 << 20) as f64
+        );
+    }
+    println!("{:.1} s", started.elapsed().as_secs_f64());
     Ok(())
 }

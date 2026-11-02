@@ -582,6 +582,9 @@ void Instruction::init()
    ipa = 0;
    mask = 0;
    precise = 0;
+   // iw4l: SchedDataCalculatorGM107::setDelay reads the next block's sched
+   // before that block is visited; zero is what a fresh process reads.
+   sched = 0;
 
    lanes = 0xf;
 

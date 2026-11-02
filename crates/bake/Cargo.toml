@@ -19,6 +19,8 @@ frame.workspace = true
 master_protocol.workspace = true
 render_frontend.workspace = true
 render_gpu.workspace = true
+wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
+wgpu-hal = { version = "30", features = ["deko3d-bake"] }
 
 [build-dependencies]
 cc = "1.4"
