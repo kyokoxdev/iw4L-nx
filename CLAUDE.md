@@ -11,7 +11,7 @@ Read first: `AGENT.md` → `CONTEXT.md` → `docs/INDEX.md`.
 ## Commands
 - Desktop: `make map mp_boneyard`, `make menu`, `make bench <demo>` (`make help` lists the rest). Needs `.env` (copy `.env.example`, set `IW4L_GAMES`).
 - Switch: `switch/build.sh build --profile play -p launcher`, then `elf2nro` (see `docs/SWITCH.md`). Needs devkitPro in `~/devkitpro` and nightly Rust.
-- Build outputs (`.nro`, `iw4l.sym.elf`, `iw4l-bake`, test packs) go in `switch/out/` (gitignored), never `~/iw4l-nx`. Run `cargo clean` after each build or bake once outputs are copied: `target/` reaches 30 GB+.
+- Build outputs (`.nro`, `iw4l.sym.elf`, `iw4l-bake`, test packs) go in `switch/out/` (gitignored), never `~/iw4l-nx`. Copy outputs there after each build. Keep `target/` for incremental rebuilds; run `cargo clean` once it passes 20 GB (it reaches 30 GB+). Rebuild `iw4l-bake` and re-bake only when engine shader or pipeline code changes.
 - Before a public push: `make publish-check` and the "Making a public push" pass in `CONTEXT.md`.
 
 ## Gotchas
