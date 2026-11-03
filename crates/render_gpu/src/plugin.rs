@@ -4,7 +4,8 @@ pub struct RenderGpuPlugin;
 
 impl Plugin for RenderGpuPlugin {
     fn build(&self, app: &mut App) {
-        assets::install_shader_pack("common", "common");
+        // A failure is logged; the boot check in `session` refuses on the misses.
+        let _ = assets::install_shader_pack("common", "common");
         let skin = crate::SkinSupport::default();
         app.insert_resource(skin.clone());
         app.add_plugins(bevy::render::extract_component::ExtractComponentPlugin::<

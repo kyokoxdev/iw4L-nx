@@ -190,7 +190,14 @@ fn start_match_load(
     let games = identity.map(|identity| asset_transport::GamesRoot(identity.games_root.clone()));
     let shader_zone = zone.clone();
     let task = crate::session_load::load_pool().spawn(async move {
-        crate::install_shader_pack(&shader_zone, "zone");
+        if let Err(error) = crate::install_shader_pack(&shader_zone, "zone") {
+            return Err(MapLoadFailed {
+                request_id,
+                load_key,
+                zone,
+                error: format!("Shaders missing. Re-run iw4l-bake.\n{error}"),
+            });
+        }
         let sound_path = zone_ff.clone();
         match load_prepared_match(zone_ff, common_mp, progress.clone(), families).await {
             MatchLoadOutcome::Ready(mut prepared) => {

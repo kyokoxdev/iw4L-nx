@@ -8,6 +8,32 @@ Vulkan is not an option on Horizon homebrew. Nintendo's Vulkan driver exists onl
 
 Goal: a deko3d backend for wgpu-hal in the wgpu-nx fork, so that all game and Bevy rendering code runs on it unchanged. Shaders are never compiled on the device. Players bake DKSH packs on their PC from their own game files and copy them to the SD card. The result has to be fast and complete enough to ship as an NSP.
 
+## Status (2026-11-03)
+
+Written and compiling through Phase 2, but no rendering has run on hardware. The only hardware result is the S4 smoke test (`switch/boot.txt`, 2026-11-01: device up, swapchain clear). Fork rev: `6726ecb78`.
+
+| Step | State |
+|---|---|
+| S1–S4 | Done; S4 ran on hardware |
+| S5 | Code done; 10-minute heap check not recorded |
+| B1, B2, B4 | Done |
+| B3 | All 26 MP maps done. Open: SP maps, Switch view signature, device-learned key check |
+| B5 | Done for MP: 26 maps, 148.1 MiB, two bakes byte-identical |
+| K1–K3 | Written and compiling, never run |
+| K4 | Pack loading done (`assets::install_shader_pack`). `IW4L_DEKO3D_SPIKE` not implemented; add it only if UI or postfx blocks getting the world on screen |
+| K5 | Not measured; this is the D11 go/no-go |
+| F1 | Partial: queries and compute are no-ops, MSAA is refused |
+| F2 | Partial: format caps are a blanket answer per format class |
+| F3 | Partial: GL-only compile and tech-5 rules are gated by `render_frame::deko3d_backend()` |
+| F4 | Written and compiling, never run: `session::refuse_missing_shaders` refuses a load (menu error) or exits at boot (system dialog); a missing zone pack refuses the load |
+| P1–P4, R1, R2 | Not started; R2's default switch is already done (D8) |
+
+**Next:**
+1. Hardware run: put `switch/out/iw4l.nro` and `common.dkpk` + `mp_rust.dkpk` on the SD card, boot to the menu, load `mp_rust`, check postfx and damage blood, and collect `boot.txt`.
+2. Fix what that run breaks. A `missing dksh <key>` line is a bake gap; trace it with `iw4l-bake --dump`.
+3. K5 gate against `IW4L_BACKEND=gl`. Nothing later is worth building before this result.
+4. After a Go: F4, the rest of F1 and F2, SP in B3, then the P2 sweep.
+
 ## Locked decisions (from user)
 
 | # | Decision |
@@ -112,7 +138,7 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
 - Windows is cross-built from Linux as `x86_64-pc-windows-gnu`.
 - *Done when:* `iw4l-bake selftest` compiles B1's sample GLSL to DKSH on Linux and on Windows (Wine or a real PC), and the output is byte-identical to the devkitPro `uam` CLI.
 
-**B3. Headless zone enumeration.** Partly done 2026-11-01: mp_rust gives 5041 modules (ports plus probe twins) and 6633 pipelines in 27 s. The bake loads zones with `load_prepared_match`, and its keys come from the runtime's `for_each_scheduled_key`. Still to do: SP maps; the Switch view signature (the lens default is used for now); and a check that every device-learned key (`exact-demand-v2`) is in the bake set.
+**B3. Headless zone enumeration.** Partly done 2026-11-01: mp_rust gives 5041 modules (ports plus probe twins) and 6633 pipelines in 27 s. The bake loads zones with `load_prepared_match`, and its keys come from the runtime's `for_each_scheduled_key`. All 26 MP maps baked 2026-11-02 with 0 failures: 16375 distinct pipelines, 2651 distinct GLSL. Still to do: SP maps; the Switch view signature (the lens default is used for now); and a check that every device-learned key (`exact-demand-v2`) is in the bake set.
 - A new crate, `crates/bake`, with the bin `iw4l-bake`.
 - For each zone from `asset_transport::list_mp_maps` (`discover.rs:785`) and `list_sp_maps` (`:851`), plus the common zones, it runs the real catalog and `MaterialProgramCompile` path. The entry is `material_compile.rs:529`, across every technique × vertex type (`technique_compile_vertex_types`, `:16`).
 - The Switch ABI is forced: `bound_slots=true`, `shader_srgb_write=true`, and the instancing prologue on. Add an explicit `gpu_contract` override so these don't depend on `cfg!(horizon)`.
@@ -143,7 +169,7 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
   - mp_rust: common 20 pipelines, 24 GLSL; the zone adds 16 pipelines. Hardware P2 still has to confirm no misses.
   - A headless run can't find these keys: without a surface, bevy skips window views.
 
-**B5. Pack writer and CLI.** Mostly done 2026-11-02. mp_rust bakes twice to identical bytes, after a uam fix: `Instruction::init` now zeroes `sched` (see `third_party/uam/IW4L.md`). Compiles run in one persistent `iw4l-bake uam` worker process per core, since Mesa's context is global; mp_rust takes 55–62 s, down from about 100 s. `--dump` writes the GLSL and DKSH; for TGSI, run devkitPro `uam -t` on the dumped GLSL. Still to do: the all-zone double bake.
+**B5. Pack writer and CLI.** Mostly done 2026-11-02. mp_rust bakes twice to identical bytes, after a uam fix: `Instruction::init` now zeroes `sched` (see `third_party/uam/IW4L.md`). Compiles run in one persistent `iw4l-bake uam` worker process per core, since Mesa's context is global; mp_rust takes 55–62 s, down from about 100 s. `--dump` writes the GLSL and DKSH; for TGSI, run devkitPro `uam -t` on the dumped GLSL. The all-zone double bake passed for the 26 MP maps on 2026-11-02: byte-identical packs, 148.1 MiB, about 9 minutes per bake. Rerun it once B3 adds SP maps.
 - Format: header `DKPK | format u32 | uam_version | count`, then entries sorted by key `{key u64, glsl_len u32, stage u8, dksh_len u32, dksh bytes, 0x100-aligned}`.
 - Packs are written atomically (`.tmp` then rename), the same pattern as `artifact_cache.rs:34-76`.
 - Compiles run in parallel across cores. Identical GLSL is compiled once.
@@ -238,7 +264,7 @@ An earlier draft of this file conflicted with the decisions above. Kept here so 
 
 ## Phase 6: Cut-over and M6 hooks
 
-**R2.** Make deko3d the default. Remove the GL backend from Switch builds: the `gles` feature for horizon, the Mesa/EGL link, `srgb_present.frag` if S4 showed it is unneeded, `learned.rs` if it has no remaining user, and the GL-only scheduling branches. Add `--layout nsp` to `iw4l-bake`, which writes `<out>/atmosphere/contents/<NSP_TITLE_ID>/romfs/shaders/dksh/`. The device reads from `romfs:/shaders/dksh/` when it runs as an NSP. Note: the NSP must contain a romfs, even a stub one, for LayeredFS to apply. Docs to update: `docs/SWITCH.md` (bake step, SD layout, `IW4L_BACKEND`) and a new `docs/DEKO3D.md` covering the backend and pack format.
+**R2.** Remove the GL backend from Switch builds: the `gles` feature for horizon, the Mesa/EGL link, `srgb_present.frag` if S4 showed it is unneeded, `learned.rs` if it has no remaining user, and the GL-only scheduling branches. Add `--layout nsp` to `iw4l-bake`, which writes `<out>/atmosphere/contents/<NSP_TITLE_ID>/romfs/shaders/dksh/`. The device reads from `romfs:/shaders/dksh/` when it runs as an NSP. Note: the NSP must contain a romfs, even a stub one, for LayeredFS to apply. Docs to update: `docs/SWITCH.md` (bake step, SD layout, `IW4L_BACKEND`) and a new `docs/DEKO3D.md` covering the backend and pack format.
 
 ---
 

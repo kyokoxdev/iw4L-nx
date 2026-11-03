@@ -2,9 +2,10 @@
 //! the recording device draws what the game's 2D cameras draw (image, UI node,
 //! sprite) into an image target. Format and blend don't reach the GLSL, so an
 //! image target gives the same keys as the window the Switch presents to. The
+//! compositing space does reach it, so both spaces get a camera. The
 //! render_gpu plugin queues the engine pipelines and each zone's films.
 
-use bevy::camera::RenderTarget;
+use bevy::camera::{CompositingSpace, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
@@ -33,6 +34,17 @@ fn scene(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             DebandDither::Disabled,
         ))
         .id();
+    // `frame::DisplayEncodedCamera` views resolve to sRGB in the game: this is
+    // their blit, which every frame ends with.
+    let display_encoded = images.add(Image::new_target_texture(64, 64, TextureFormat::Rgba8Unorm, None));
+    commands.spawn((
+        Camera2d,
+        RenderTarget::Image(display_encoded.into()),
+        CompositingSpace::Srgb,
+        Msaa::Off,
+        Tonemapping::None,
+        DebandDither::Disabled,
+    ));
     commands.spawn((
         Node {
             width: Val::Percent(100.0),

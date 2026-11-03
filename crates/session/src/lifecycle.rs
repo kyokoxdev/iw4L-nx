@@ -787,6 +787,49 @@ fn follow_master_match(
     }
 }
 
+/// A `missing dksh` is never a silent black screen. Off deko3d the count
+/// stays 0. A load's misses land while its process runs, since the world spawn
+/// waits for every scheduled pipeline. Misses after that are only logged: the
+/// hal logged the key and label, and those draws do nothing.
+fn refuse_missing_shaders(
+    mut seen: Local<usize>,
+    mut match_started: Local<bool>,
+    scope: Option<Res<State<frame::MatchScope>>>,
+    load: Option<Res<assets::MapLoadProcess>>,
+    mut swap: ResMut<SessionSwapRequest>,
+    mut dvars: ResMut<frame::UiMenuDvars>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let loading = load.as_deref().filter(|process| !process.is_complete());
+    *match_started |= loading.is_some()
+        || scope.is_some_and(|scope| *scope.get() != frame::MatchScope::Absent);
+    let missing = assets::shader_packs_missing();
+    if missing == *seen {
+        return;
+    }
+    let new = missing - std::mem::replace(&mut *seen, missing);
+    if std::env::var("IW4L_DKSH_STRICT").is_ok_and(|v| v == "1") {
+        panic!("{new} pipelines missing dksh; see the deko3d lines in boot.txt");
+    }
+    if !*match_started {
+        // Nothing can draw, this message included: the system has to show it.
+        let message = format!("Shaders missing ({new}). Re-run iw4l-bake.");
+        diag::error!(World, "{message}");
+        assets::shader_error_dialog(&message);
+        exit.write(AppExit::error());
+    } else if let Some(load) = loading {
+        let reason = format!("Shaders missing for {} ({new}). Re-run iw4l-bake.", load.zone);
+        diag::warn!(World, "{reason}");
+        dvars.set("ui_map_error_reason", reason);
+        dvars.set("ui_map_error", "1");
+        if let Err(error) = swap.request_menu() {
+            diag::warn!(World, "shader refusal: {error}");
+        }
+    } else {
+        diag::warn!(World, "{new} pipelines missing dksh after load; their draws are skipped");
+    }
+}
+
 pub fn register_lifecycle(app: &mut App) {
     app.init_resource::<TeardownRequest>()
         .init_resource::<frame::UiMenuDvars>()
@@ -819,7 +862,8 @@ pub fn register_lifecycle(app: &mut App) {
             OnExit(frame::MatchScope::Live),
             release_match.in_set(frame::ScopeSet::Release),
         )
-        .add_systems(Update, retire_handed_over.in_set(ClientSet::Diag));
+        .add_systems(Update, retire_handed_over.in_set(ClientSet::Diag))
+        .add_systems(Update, refuse_missing_shaders.in_set(ClientSet::Diag));
 }
 
 fn request_teardown(mut request: ResMut<TeardownRequest>, mut scope: ResMut<crate::ScopeControl>) {

@@ -766,6 +766,44 @@ pub fn breadcrumb(line: &str) {
     }
 }
 
+/// `sizeof(ErrorApplicationConfig)` is 0x1014; rounded up, as `swkbd.rs` does.
+#[repr(C, align(8))]
+struct ErrorApplicationConfig([u8; 0x1100]);
+
+unsafe extern "C" {
+    fn errorApplicationCreate(
+        config: *mut ErrorApplicationConfig,
+        dialog: *const c_char,
+        fullscreen: *const c_char,
+    ) -> u32;
+    fn errorApplicationShow(config: *mut ErrorApplicationConfig) -> u32;
+}
+
+/// Blocking system error dialog, for when the game can't draw its own. Note it
+/// also files a system error report. Under an applet this applet is a fatal
+/// error ([10.0.0+]), so there it only logs.
+pub fn error_dialog(message: &str) {
+    const APPLET_TYPE_APPLICATION: u32 = 0;
+    breadcrumb(message);
+    let Ok(text) = std::ffi::CString::new(message) else {
+        return;
+    };
+    let mut config = ErrorApplicationConfig([0; 0x1100]);
+    // SAFETY: `config` is large enough and aligned; libnx copies the string.
+    let rc = unsafe {
+        if appletGetAppletType() != APPLET_TYPE_APPLICATION {
+            return;
+        }
+        match errorApplicationCreate(&mut config, text.as_ptr(), core::ptr::null()) {
+            0 => errorApplicationShow(&mut config),
+            rc => rc,
+        }
+    };
+    if rc != 0 {
+        breadcrumb(&format!("error dialog: rc={rc:#x}"));
+    }
+}
+
 /// `io::Write` into `boot.txt`, for Bevy's log layer: stderr reaches nothing.
 pub struct BootLog;
 

@@ -57,24 +57,48 @@ pub use script_sources::{ScriptSourceOrigin, ScriptSources, ScriptTable};
 /// Installs a baked shader pack from the SD card for the deko3d backend
 /// (`docs/deko3d_implementation_plan.md`): `common` once at boot, the map's
 /// zone under one slot that each load replaces. No-op off Switch and on GL.
-pub fn install_shader_pack(name: &str, slot: &str) {
+pub fn install_shader_pack(name: &str, slot: &str) -> Result<(), String> {
     #[cfg(target_os = "horizon")]
     {
         if std::env::var("IW4L_BACKEND").is_ok_and(|v| v == "gl") {
-            return;
+            return Ok(());
         }
         let path = format!("sdmc:/switch/iw4l/shaders/dksh/{name}.dkpk");
         let result = std::fs::read(&path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| wgpu_hal::deko3d_shader::packs::install(slot, bytes));
         match result {
-            Ok(count) => diag::info!(World, "shader pack {name}: {count} shaders"),
+            Ok(count) => {
+                diag::info!(World, "shader pack {name}: {count} shaders");
+                Ok(())
+            }
             Err(error) => {
                 wgpu_hal::deko3d_shader::packs::remove(slot);
                 diag::warn!(World, "shader pack {path}: {error}");
+                Err(format!("{path}: {error}"))
             }
         }
     }
     #[cfg(not(target_os = "horizon"))]
-    let _ = (name, slot);
+    {
+        let _ = (name, slot);
+        Ok(())
+    }
+}
+
+/// Pipelines created so far whose DKSH no installed pack has. Always 0 off the
+/// deko3d backend.
+pub fn shader_packs_missing() -> usize {
+    #[cfg(target_os = "horizon")]
+    return wgpu_hal::deko3d_shader::packs::missing();
+    #[cfg(not(target_os = "horizon"))]
+    0
+}
+
+/// The system error dialog: with no shaders the game can't draw its own.
+pub fn shader_error_dialog(message: &str) {
+    #[cfg(target_os = "horizon")]
+    platform_nx::error_dialog(message);
+    #[cfg(not(target_os = "horizon"))]
+    let _ = message;
 }
